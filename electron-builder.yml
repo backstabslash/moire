@@ -1,0 +1,38 @@
+appId: io.github.backstabslash.moire
+productName: moire
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**
+extraResources:
+  - from: build/icons/512x512.png
+    to: icon.png
+  - from: node_modules/@fontsource/commit-mono/LICENSE
+    to: licenses/commit-mono.txt
+  - from: node_modules/@fontsource/ibm-plex-sans-condensed/LICENSE
+    to: licenses/ibm-plex-sans-condensed.txt
+linux:
+  target: [AppImage, deb, rpm]
+  category: Development
+  executableName: moire
+  icon: build/icons
+  synopsis: Review code changes in a git repo
+  desktop:
+    entry:
+      StartupWMClass: moire
+mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  category: public.app-category.developer-tools
+  identity: null
+publish:
+  provider: github
+  releaseType: draft
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true

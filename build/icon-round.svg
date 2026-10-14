@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="disc"><circle cx="512" cy="512" r="455"/></clipPath>
+    <path id="grating" stroke-width="114" d="M-1024 -360h3072M-1024 -128h3072M-1024 104h3072M-1024 336h3072M-1024 568h3072M-1024 800h3072M-1024 1032h3072M-1024 1264h3072"/>
+  </defs>
+  <circle cx="512" cy="512" r="455" fill="#0c1210"/>
+  <g clip-path="url(#disc)">
+    <use href="#grating" stroke="#c8d563"/>
+    <use href="#grating" stroke="#4fa3ff" transform="rotate(18 512 512)" style="mix-blend-mode:screen"/>
+  </g>
+</svg>

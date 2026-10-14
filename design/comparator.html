@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-layout="split" data-scope="changed">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>moire / Comparator</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/commit-mono/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/commit-mono/500.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/commit-mono/700.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/commit-mono/400-italic.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans-condensed/400.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans-condensed/500.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans-condensed/600.css">
+<style>
+/* Comparator: a blink comparator for code. Plate A (red) vs plate B (cyan), anaglyph colours,
+   near-monochrome syntax so the change colours carry the signal. Moire lives in the logo,
+   the empty state and the live indicator, never behind code. */
+:root {
+  --plate: #f4f5f2;
+  --frame: #e6e9e6;
+  --frame-2: #dadfdc;
+  --rule: #c5cccb;
+  --ink: #17202a;
+  --graphite: #56606b;
+  --faint: #8b949b;
+  --a: #cc2250;  --a-line: #f7e3e6; --a-word: #f0b6c3; --a-ink: #b01a44;
+  --b: #0a8ca0;  --b-line: #ddeff0; --b-word: #a9dde3; --b-ink: #077384;
+  --focus: #2f49d1;
+  --t-kw: #17202a; --t-str: #3346b8; --t-fn: #17202a; --t-ty: #4f5a66; --t-const: #9a5a12;
+  --t-num: #9a5a12; --t-com: #8b949b; --t-pun: #6e7882; --t-prop: #17202a; --t-id: #17202a;
+  --code: 'Commit Mono', ui-monospace, monospace;
+  --ui: 'IBM Plex Sans Condensed', 'Arial Narrow', sans-serif;
+}
+[data-theme="dark"] {
+  --plate: #171c22; --frame: #1f252c; --frame-2: #2a3139; --rule: #36404a;
+  --ink: #dfe5ea; --graphite: #9aa5af; --faint: #67727d;
+  --a: #ff5577; --a-line: #3a1f28; --a-word: #6c2a3d; --a-ink: #ff8099;
+  --b: #33cfe0; --b-line: #14323a; --b-word: #1d5a66; --b-ink: #6fe0ec;
+  --focus: #8ea0ff;
+  --t-kw: #f2f5f7; --t-str: #9db0ff; --t-fn: #dfe5ea; --t-ty: #aab5bf; --t-const: #e6b06a;
+  --t-num: #e6b06a; --t-com: #6f7b86; --t-pun: #88939d; --t-prop: #dfe5ea; --t-id: #dfe5ea;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--plate); color: var(--ink); font: 400 14px/1.4 var(--ui); -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+kbd { font: 400 11px/1 var(--code); color: var(--faint); margin-left: 6px; }
+
+.app { display: grid; grid-template-columns: 240px 1fr; grid-template-rows: 52px 1fr 30px; height: 100vh; }
+
+/* toolbar */
+.toolbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; padding: 0 16px; background: var(--frame); border-bottom: 1px solid var(--rule); }
+.brand { display: flex; align-items: center; gap: 10px; width: 208px; font: 500 17px/1 var(--ui); letter-spacing: .01em; }
+.brand svg { width: 26px; height: 26px; }
+.picker { position: relative; display: flex; align-items: stretch; height: 32px; border: 1px solid var(--rule); background: var(--plate); border-radius: 3px; }
+.picker-btn { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-right: 1px solid var(--rule); font-weight: 500; }
+.picker-btn svg { width: 9px; color: var(--graphite); }
+.slot { display: flex; align-items: center; gap: 8px; padding: 0 12px; font: 400 12.5px var(--code); color: var(--graphite); }
+.slot + .slot { border-left: 1px solid var(--rule); }
+.plate-tag { display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; font: 600 11px/1 var(--ui); color: var(--plate); }
+.tag-a { background: var(--a); } .tag-b { background: var(--b); }
+.picker-pop { position: absolute; top: 38px; left: -1px; width: 340px; background: var(--plate); border: 1px solid var(--rule); box-shadow: 0 18px 40px -20px rgb(23 32 42 / .45); display: none; z-index: 20; padding: 6px 0; }
+.picker.open .picker-pop { display: block; }
+.picker-pop [role=option] { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; width: 100%; padding: 7px 14px; text-align: left; }
+.picker-pop [role=option] small { grid-column: 1; font: 400 12px var(--code); color: var(--faint); }
+.picker-pop [role=option]:hover { background: var(--frame); }
+.picker-pop [aria-selected=true] { box-shadow: inset 3px 0 0 var(--ink); background: var(--frame); }
+.picker-pop .sep { height: 1px; background: var(--rule); margin: 6px 0; }
+.spacer { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+.seg button { height: 30px; padding: 0 12px; color: var(--graphite); font-weight: 500; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed=true] { background: var(--ink); color: var(--plate); }
+.icon-btn { width: 32px; height: 32px; display: grid; place-items: center; color: var(--graphite); border-radius: 3px; }
+.icon-btn:hover { background: var(--frame-2); }
+
+/* sidebar */
+.sidebar { background: var(--frame); border-right: 1px solid var(--rule); overflow: auto; padding: 14px 0; }
+.side-head { display: flex; justify-content: space-between; align-items: baseline; padding: 0 16px 12px; font-weight: 500; }
+.side-head span:last-child { font: 400 12px var(--code); color: var(--graphite); }
+.files .group { margin-bottom: 10px; }
+.files .dir { padding: 4px 16px; color: var(--faint); font: 400 12px var(--code); }
+.file { display: grid; grid-template-columns: 10px minmax(0,1fr) auto auto; align-items: center; gap: 9px; padding: 5px 16px; color: var(--ink); text-decoration: none; font: 400 12.5px var(--code); position: relative; }
+.file .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file:hover { background: var(--frame-2); }
+.file.is-active { background: var(--plate); box-shadow: inset 3px 0 0 var(--ink); }
+.file .kind { font-size: 11px; color: var(--faint); }
+.file .nums { display: flex; gap: 6px; font-size: 11.5px; min-width: 50px; justify-content: flex-end; }
+.s-add { color: var(--b-ink); } .s-del { color: var(--a-ink); }
+.st { width: 8px; height: 8px; border: 1.25px solid var(--graphite); transform: rotate(45deg); }
+.st-full { background: var(--ink); border-color: var(--ink); }
+.st-part { background: linear-gradient(135deg, var(--ink) 50%, transparent 50%); border-color: var(--ink); }
+.file.is-live .name { color: var(--b-ink); }
+
+/* main */
+.main { display: grid; grid-template-rows: auto 1fr; min-width: 0; min-height: 0; position: relative; }
+.panes-head { display: grid; grid-template-columns: 1fr 1fr 72px; border-bottom: 1px solid var(--rule); background: var(--plate); }
+.pane-h { position: relative; display: flex; align-items: center; gap: 10px; padding: 12px 18px 11px; min-width: 0; }
+.pane-h + .pane-h { border-left: 1px solid var(--rule); }
+.pane-h b { font: 500 15px var(--code); }
+.pane-h span { color: var(--faint); font: 400 12.5px var(--code); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-h .actions { margin-left: auto; display: flex; gap: 2px; }
+.pane-h .actions button { padding: 4px 8px; color: var(--graphite); font-weight: 500; }
+.pane-h .actions button:hover { color: var(--ink); }
+.mini-h { border-left: 1px solid var(--rule); display: grid; grid-template-columns: 1fr 1fr; align-items: center; justify-items: center; }
+[data-layout="unified"] .panes-head { grid-template-columns: 1fr 72px; }
+[data-layout="unified"] .pane-h.b { display: none; }
+[data-layout="unified"] .pane-h.a b::after { content: " + B"; }
+.scroller { overflow: auto; min-height: 0; display: grid; grid-template-columns: 1fr 72px; }
+
+/* diff */
+#diff { font: 500 15px/1.4 var(--code); font-variant-ligatures: none; padding: 0 0 120px; min-width: 0; }
+.row { display: grid; }
+.row.split { grid-template-columns: 3.4em 1fr 3.4em 1fr; }
+.row.uni { grid-template-columns: 3em 3em 1fr; }
+.ln { text-align: right; padding-right: 12px; color: var(--faint); font-weight: 400; font-size: 12.5px; line-height: 21px; user-select: none; position: relative; }
+.row.split .ln.n { border-left: 1px solid var(--rule); }
+.cell { padding: 0 18px 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 21px; min-width: 0; }
+.cell.add, .ln.add { background: var(--b-line); } .ln.add { color: var(--b-ink); box-shadow: inset 2px 0 0 var(--b); }
+.cell.del, .ln.del { background: var(--a-line); } .ln.del { color: var(--a-ink); box-shadow: inset 2px 0 0 var(--a); }
+.cell.empty { background: repeating-linear-gradient(135deg, transparent 0 4px, color-mix(in srgb, var(--rule) 60%, transparent) 4px 5px); }
+.w-add { background: var(--b-word); box-shadow: 0 1px 0 var(--b); }
+.w-del { background: var(--a-word); box-shadow: 0 1px 0 var(--a); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--a) 60%, transparent); }
+.ln.sel { background: color-mix(in srgb, var(--focus) 16%, var(--b-line)); color: var(--focus); box-shadow: inset 4px 0 0 var(--focus); }
+.cell.sel { background: color-mix(in srgb, var(--focus) 10%, var(--b-line)); }
+.t-kw { color: var(--t-kw); font-weight: 700; } .t-str { color: var(--t-str); } .t-fn { color: var(--t-fn); } .t-ty { color: var(--t-ty); }
+.t-const { color: var(--t-const); } .t-num { color: var(--t-num); } .t-com { color: var(--t-com); font-style: italic; font-weight: 400; }
+.t-pun { color: var(--t-pun); font-weight: 400; } .t-prop { color: var(--t-prop); } .t-id { color: var(--t-id); }
+
+.hunk { position: relative; }
+.hunk-head { font: 400 13.5px var(--ui); display: flex; align-items: center; gap: 14px; height: 36px; padding: 0 12px 0 18px; border-top: 1px solid var(--rule); color: var(--graphite); background: var(--plate); }
+.hh-range { font: 400 12px var(--code); color: var(--faint); }
+.hh-ctx { font: 400 13px var(--code); color: var(--graphite); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hh-stat { font: 400 12px var(--code); }
+.hh-badge { font-weight: 600; font-size: 12.5px; color: var(--ink); display: flex; align-items: center; gap: 6px; }
+.hh-badge::before { content: ""; width: 7px; height: 7px; background: var(--ink); transform: rotate(45deg); }
+.hh-actions { margin-left: auto; display: flex; gap: 6px; }
+.hh-btn { height: 26px; padding: 0 10px; border: 1px solid var(--rule); border-radius: 3px; font-weight: 500; color: var(--graphite); background: var(--plate); }
+.hh-btn:hover { color: var(--ink); border-color: var(--graphite); }
+.hh-discard:hover { color: var(--a-ink); border-color: var(--a); }
+.hunk.is-focus .hunk-head { color: var(--ink); }
+.hunk.is-focus .hunk-head::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--focus); z-index: 3; }
+.hunk.is-focus .hh-stage { background: var(--ink); color: var(--plate); border-color: var(--ink); }
+.hunk.is-focus .hh-stage kbd { color: color-mix(in srgb, var(--plate) 70%, transparent); }
+.hunk.is-staged .hunk-rows { filter: saturate(.25); opacity: .7; }
+
+/* collapsed context, drawn like a section break on a technical drawing */
+.fold { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 28px; color: var(--graphite); font: 500 12.5px var(--ui); border-top: 1px solid var(--rule);
+  background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--rule) 55%, transparent) 5px 6px); }
+.fold span { background: var(--plate); padding: 2px 10px; }
+.fold:hover span { color: var(--ink); }
+.fold-rows { display: none; }
+[data-scope="full"] .fold { display: none; }
+[data-scope="full"] .fold-rows { display: block; }
+
+/* two-channel minimap: A on the left, B on the right */
+.minimap { position: sticky; top: 0; height: calc(100vh - 52px - 30px - 50px); border-left: 1px solid var(--rule); background: var(--plate); }
+.minimap svg { width: 100%; height: 100%; display: block; }
+
+/* status */
+.status { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; padding: 0 16px; border-top: 1px solid var(--rule); background: var(--frame); color: var(--graphite); font-size: 12.5px; }
+.status .live { display: flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 500; }
+.status .live svg { width: 16px; height: 16px; }
+.status kbd { margin: 0 3px 0 0; color: var(--ink); }
+.status .keys { margin-left: auto; display: flex; gap: 16px; }
+.status .link { text-decoration: underline; text-underline-offset: 3px; color: var(--graphite); }
+
+/* empty state */
+.empty-state { position: absolute; inset: 0; background: var(--plate); display: none; place-items: center; z-index: 5; }
+[data-empty="on"] .empty-state { display: grid; }
+.empty-inner { display: grid; grid-template-columns: 320px 340px; gap: 48px; align-items: center; }
+.empty-inner svg { width: 320px; height: 320px; color: var(--ink); }
+.empty-inner h2 { margin: 0 0 10px; font: 500 28px/1.15 var(--ui); letter-spacing: -.005em; }
+.empty-inner p { margin: 0 0 20px; color: var(--graphite); font-size: 15px; line-height: 1.5; }
+.empty-inner .btn { height: 34px; padding: 0 14px; background: var(--ink); color: var(--plate); border-radius: 3px; font-weight: 500; }
+.rings-a, .rings-b { mix-blend-mode: multiply; }
+[data-theme="dark"] .rings-a, [data-theme="dark"] .rings-b { mix-blend-mode: screen; }
+[data-empty="on"] .files, [data-empty="on"] .side-head span:last-child { display: none; }
+.rings-b { animation: drift 3.2s cubic-bezier(.3,.7,.2,1) both; }
+@keyframes drift { from { transform: translate(-28px, 0); } to { transform: translate(0, 0); } }
+
+.toast { position: fixed; right: 92px; bottom: 46px; transform: translateY(10px); opacity: 0; display: flex; align-items: center; gap: 14px; padding: 8px 8px 8px 14px; background: var(--ink); color: var(--plate); border-radius: 3px; transition: .18s ease-out; pointer-events: none; font-weight: 500; }
+.toast.show { opacity: 1; transform: none; pointer-events: auto; }
+.toast button { padding: 4px 8px; border: 1px solid color-mix(in srgb, var(--plate) 35%, transparent); border-radius: 3px; }
+.toast kbd { color: inherit; opacity: .7; }
+
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar, .slot, .status .keys { display: none; }
+  .brand { width: auto; }
+  .empty-inner { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+  .empty-inner svg { width: 200px; height: 200px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <clipPath id="disc"><circle cx="12" cy="12" r="11"/></clipPath>
+    <!-- two gratings, the second rotated 9 degrees: the interference bands are the mark -->
+    <symbol id="mark" viewBox="0 0 24 24">
+      <g clip-path="url(#disc)" stroke-width="1.1">
+        <g stroke="var(--a)"><path id="grating" d="M-6 1.5h36M-6 4.5h36M-6 7.5h36M-6 10.5h36M-6 13.5h36M-6 16.5h36M-6 19.5h36M-6 22.5h36"/></g>
+        <g stroke="var(--b)" style="mix-blend-mode:multiply"><use href="#grating" transform="rotate(11 12 12)"/></g>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+<div class="app">
+  <header class="toolbar">
+    <div class="brand"><svg aria-hidden="true"><use href="#mark"/></svg>moire</div>
+    <div class="picker" data-picker>
+      <button class="picker-btn" data-picker-btn aria-haspopup="listbox"><span data-picker-label>All since last commit</span><svg viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="currentColor" fill="none" stroke-width="1.4"/></svg></button>
+      <span class="slot"><span class="plate-tag tag-a">A</span>HEAD 4be91f0</span>
+      <span class="slot"><span class="plate-tag tag-b">B</span>Working tree</span>
+      <div class="picker-pop" role="listbox">
+        <button role="option" data-picker-opt="Unstaged">Unstaged<kbd>1</kbd><small>A index, B working tree</small></button>
+        <button role="option" data-picker-opt="Staged">Staged<kbd>2</kbd><small>A HEAD, B index</small></button>
+        <button role="option" data-picker-opt="All since last commit" aria-selected="true">All since last commit<kbd>3</kbd><small>A HEAD, B working tree</small></button>
+        <div class="sep"></div>
+        <button role="option" data-picker-opt="Commit">Commit<kbd>4</kbd><small>A 4be91f0^, B 4be91f0</small></button>
+        <button role="option" data-picker-opt="Branch vs branch">Branch vs branch<kbd>5</kbd><small>A main, B agent/live-refresh</small></button>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div class="seg" role="group" aria-label="Scope">
+      <button data-set="scope:changed" aria-pressed="true">Changes only</button>
+      <button data-set="scope:full" aria-pressed="false">Full file</button>
+    </div>
+    <div class="seg" role="group" aria-label="Layout">
+      <button data-set="layout:split" aria-pressed="true">Split</button>
+      <button data-set="layout:unified" aria-pressed="false">Unified</button>
+    </div>
+    <button class="icon-btn" data-theme-toggle aria-label="Toggle dark theme"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.8a6.2 6.2 0 0 1 0 12.4z" fill="currentColor"/></svg></button>
+  </header>
+
+  <aside class="sidebar">
+    <div class="side-head"><span>agent/live-refresh</span><span>7 files</span></div>
+    <nav class="files" aria-label="Changed files">
+  <div class="group">
+    <div class="dir">src/sync</div>
+    <a class="file is-active" href="#" aria-current="true"><span class="st st-part" title="Partly staged"></span><span class="name">watcher.ts</span><span class="kind k-m">M</span><span class="nums"><span class="s-add">+19</span><span class="s-del">−5</span></span></a>
+    <a class="file" href="#"><span class="st"></span><span class="name">git.ts</span><span class="kind k-m">M</span><span class="nums"><span class="s-add">+31</span><span class="s-del">−9</span></span></a>
+    <a class="file" href="#"><span class="st st-full" title="Staged"></span><span class="name">git.test.ts</span><span class="kind k-a">A</span><span class="nums"><span class="s-add">+64</span></span></a>
+  </div>
+  <div class="group">
+    <div class="dir">src/ui</div>
+    <a class="file" href="#"><span class="st"></span><span class="name">DiffPane.tsx</span><span class="kind k-m">M</span><span class="nums"><span class="s-add">+7</span><span class="s-del">−7</span></span></a>
+    <a class="file is-live" href="#"><span class="st"></span><span class="name">useLiveRefresh.ts</span><span class="kind k-a">A</span><span class="nums"><span class="s-add">+42</span></span></a>
+  </div>
+  <div class="group">
+    <div class="dir">src/legacy</div>
+    <a class="file" href="#"><span class="st"></span><span class="name">poll.ts</span><span class="kind k-d">D</span><span class="nums"><span class="s-del">−58</span></span></a>
+  </div>
+  <div class="group">
+    <a class="file" href="#"><span class="st st-full" title="Staged"></span><span class="name">package.json</span><span class="kind k-m">M</span><span class="nums"><span class="s-add">+1</span><span class="s-del">−1</span></span></a>
+  </div>
+</nav>
+
+  </aside>
+
+  <main class="main">
+    <div class="panes-head">
+      <div class="pane-h a"><span class="plate-tag tag-a">A</span><b>watcher.ts</b><span>HEAD 4be91f0</span></div>
+      <div class="pane-h b"><span class="plate-tag tag-b">B</span><b>watcher.ts</b><span>src/sync, working tree</span>
+        <span class="actions"><button>Stage file</button></span></div>
+      <div class="mini-h"><span class="plate-tag tag-a">A</span><span class="plate-tag tag-b">B</span></div>
+    </div>
+    <div class="scroller">
+      <div id="diff"></div>
+      <div class="minimap" aria-hidden="true"><svg id="mini" preserveAspectRatio="none"></svg></div>
+    </div>
+    <div class="empty-state">
+      <div class="empty-inner">
+        <svg viewBox="-160 -160 320 320" aria-hidden="true" id="rings"></svg>
+        <div>
+          <h2>Working tree matches HEAD.</h2>
+          <p>moire is watching agent/live-refresh. When an agent saves a file, its changes show up here.</p>
+          <button class="btn">Compare with a branch<kbd style="color:inherit;opacity:.6">5</kbd></button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="status">
+    <span class="live"><svg aria-hidden="true"><use href="#mark"/></svg>Live, updated 2s ago</span>
+    <button class="link" data-empty-toggle>Preview empty state</button>
+    <span class="keys"><span><kbd>j k</kbd>hunk</span><span><kbd>s</kbd>stage</span><span><kbd>x</kbd>discard</span><span><kbd>u</kbd>undo</span><span><kbd>f</kbd>full file</span><span><kbd>v</kbd>layout</span></span>
+  </footer>
+</div>
+<div class="toast" data-toast role="status"><span data-toast-msg></span><button data-undo>Undo<kbd>u</kbd></button></div>
+
+<script>
+window.MOIRE = {
+  hunkLabel: p => `−${p.oStart},${p.oLen}  +${p.nStart},${p.nLen}`,
+  foldLabel: n => `${n} lines unchanged`,
+  afterRender() {
+    const svg = document.getElementById('mini'); if (!svg) return;
+    const L = miniLines(), cs = getComputedStyle(document.documentElement);
+    const v = k => cs.getPropertyValue(k);
+    svg.setAttribute('viewBox', `0 0 72 ${L.length * 3}`);
+    let s = `<line x1="36" y1="0" x2="36" y2="${L.length * 3}" stroke="${v('--rule')}" stroke-width=".6"/>`;
+    L.forEach((l, i) => {
+      if (!l.len) return;
+      const w = Math.min(28, (l.len - l.ind) * .5), y = i * 3;
+      if (l.t !== 'add') s += `<rect x="${4 + l.ind * .6}" y="${y}" width="${w}" height="1.8" fill="${l.t === 'del' ? v('--a') : v('--faint')}" opacity="${l.t === 'ctx' ? .35 : 1}"/>`;
+      if (l.t !== 'del') s += `<rect x="${40 + l.ind * .6}" y="${y}" width="${w}" height="1.8" fill="${l.t === 'add' ? v('--b') : v('--faint')}" opacity="${l.t === 'ctx' ? .35 : 1}"/>`;
+    });
+    s += `<rect x=".5" y=".5" width="71" height="${22 * 3}" fill="none" stroke="${v('--ink')}" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+    svg.innerHTML = s;
+  }
+};
+// Fake diff of src/sync/watcher.ts plus a tiny renderer shared by all three mockups.
+const SRC = [
+['=', 'import { watch, type FSWatcher } from "node:fs";'],
+['=', 'import { relative } from "node:path";'],
+['=', 'import { EventEmitter } from "node:events";'],
+['-', 'import { readStatus } from "./git";'],
+['+', 'import { readStatus{+, type FileStatus+} } from "./git";'],
+['=', ''],
+['=', 'export type WatchEvent = "change" | "error";'],
+['=', ''],
+['=', '/** Options accepted by {@link RepoWatcher}. */'],
+['=', 'export interface WatchOptions {'],
+['=', '  /** Absolute path to the repository root. */'],
+['=', '  root: string;'],
+['=', '  /** Path prefixes to skip, relative to root. */'],
+['=', '  ignore?: string[];'],
+['+', '  /** Coalesce bursts of agent writes into one refresh. */'],
+['+', '  debounceMs?: number;'],
+['=', '}'],
+['=', ''],
+['+', 'const DEFAULT_DEBOUNCE_MS = 120;'],
+['+', ''],
+['=', 'export class RepoWatcher extends EventEmitter {'],
+['=', '  private watcher?: FSWatcher;'],
+['=', '  private pending = new Set<string>();'],
+['+', '  private timer?: NodeJS.Timeout;'],
+['=', ''],
+['=', '  constructor(private readonly opts: WatchOptions) {'],
+['=', '    super();'],
+['=', '  }'],
+['=', ''],
+['=', '  /** Number of paths waiting for the next flush. */'],
+['=', '  get backlog(): number {'],
+['=', '    return this.pending.size;'],
+['=', '  }'],
+['=', ''],
+['=', '  isRunning(): boolean {'],
+['=', '    return this.watcher !== undefined;'],
+['=', '  }'],
+['=', ''],
+['=', '  start(): void {'],
+['=', '    const { root } = this.opts;'],
+['=', '    const opts = { recursive: true };'],
+['=', '    this.watcher = watch(root, opts, (_, file) => {'],
+['=', '      if (!file || this.isIgnored(file)) return;'],
+['-', '      this.pending.add(file);'],
+['-', '      this.[-flush-]();'],
+['+', '      this.pending.add({+relative(root, +}file{+)+});'],
+['+', '      this.{+schedule+}();'],
+['=', '    });'],
+['=', '  }'],
+['=', ''],
+['+', '  private schedule(): void {'],
+['+', '    clearTimeout(this.timer);'],
+['+', '    const ms = this.opts.debounceMs ?? DEFAULT_DEBOUNCE_MS;'],
+['+', '    this.timer = setTimeout(() => this.flush(), ms);'],
+['+', '  }'],
+['+', ''],
+['-', '  private flush(): [-void-] {'],
+['+', '  private {+async +}flush(): {+Promise<void>+} {'],
+['=', '    const files = [...this.pending];'],
+['=', '    this.pending.clear();'],
+['+', '    const status = await readStatus(this.opts.root, files);'],
+['-', '    this.emit("change", [-files-]);'],
+['+', '    this.emit("change", {+status+});'],
+['=', '  }'],
+['=', ''],
+['=', '  private onError(err: Error): void {'],
+['=', '    if (this.listenerCount("error") === 0) {'],
+['=', '      console.warn("watcher stopped:", err.message);'],
+['=', '    }'],
+['=', '    this.emit("error", err);'],
+['=', '    this.stop();'],
+['=', '  }'],
+['=', ''],
+['=', '  private isIgnored(file: string): boolean {'],
+['+', '    if (file.startsWith(".git/")) return true;'],
+['=', '    const ignore = this.opts.ignore ?? [];'],
+['=', '    return ignore.some((p) => file.startsWith(p));'],
+['=', '  }'],
+['=', ''],
+['=', '  stop(): void {'],
+['+', '    clearTimeout(this.timer);'],
+['=', '    this.watcher?.close();'],
+['=', '  }'],
+['=', '}'],
+];
+
+const KW = new Set('import from export interface class extends private readonly constructor super const let return if new void async await type this true false get of in undefined'.split(' '));
+const PRIM = new Set('string number boolean'.split(' '));
+
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function parseMarks(s) {
+  let out = '', ranges = [], last = 0, m;
+  const re = /\[-(.*?)-\]|\{\+(.*?)\+\}/g;
+  while ((m = re.exec(s))) {
+    out += s.slice(last, m.index);
+    const t = m[1] != null ? m[1] : m[2];
+    ranges.push([out.length, out.length + t.length, m[1] != null ? 'w-del' : 'w-add']);
+    out += t; last = re.lastIndex;
+  }
+  return { text: out + s.slice(last), ranges };
+}
+
+function tokenize(t) {
+  const cls = new Array(t.length).fill('');
+  const re = /(\/\/.*$|\/\*.*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b\d+\b)|([A-Za-z_$][\w$]*)|([{}()\[\];,.<>:=?!&|+\-*\/]+)/g;
+  let m;
+  while ((m = re.exec(t))) {
+    let c;
+    if (m[1]) c = 't-com';
+    else if (m[2]) c = 't-str';
+    else if (m[3]) c = 't-num';
+    else if (m[4]) {
+      const w = m[4], prev = t.slice(0, m.index).trimEnd(), next = t.slice(m.index + w.length);
+      if (KW.has(w)) c = 't-kw';
+      else if (/^[A-Z][A-Z_0-9]+$/.test(w)) c = 't-const';
+      else if (PRIM.has(w) || /^[A-Z]/.test(w)) c = 't-ty';
+      else if (/^\s*\(/.test(next)) c = 't-fn';
+      else if (prev.endsWith('.')) c = 't-prop';
+      else c = 't-id';
+    } else c = 't-pun';
+    for (let i = m.index; i < m.index + m[0].length; i++) cls[i] = c;
+  }
+  return cls;
+}
+
+function codeHTML(raw) {
+  const { text, ranges } = parseMarks(raw);
+  if (!text.length) return '';
+  const cls = tokenize(text);
+  const w = new Array(text.length).fill('');
+  for (const [a, b, k] of ranges) for (let i = a; i < b; i++) w[i] = k;
+  let html = '', i = 0;
+  while (i < text.length) {
+    // group word-change runs as an outer span so the highlight is one continuous shape
+    if (w[i]) {
+      const k = w[i]; let j = i; while (j < text.length && w[j] === k) j++;
+      html += `<span class="${k}">${inner(i, j)}</span>`; i = j;
+    } else {
+      let j = i; while (j < text.length && !w[j]) j++;
+      html += inner(i, j); i = j;
+    }
+  }
+  return html;
+  function inner(a, b) {
+    let s = '', k = a;
+    while (k < b) { const c = cls[k]; let j = k; while (j < b && cls[j] === c) j++; s += c ? `<span class="${c}">${esc(text.slice(k, j))}</span>` : esc(text.slice(k, j)); k = j; }
+    return s;
+  }
+}
+
+// rows: {type:'ctx'|'chg', o:{num,text}|null, n:{num,text}|null}
+function buildRows() {
+  const rows = []; let o = 0, n = 0, i = 0;
+  while (i < SRC.length) {
+    if (SRC[i][0] === '=') { o++; n++; rows.push({ type: 'ctx', o: { num: o, text: SRC[i][1] }, n: { num: n, text: SRC[i][1] } }); i++; continue; }
+    const q = [], block = [];
+    while (i < SRC.length && SRC[i][0] !== '=') {
+      const [k, t] = SRC[i];
+      if (k === '-') { o++; q.push({ num: o, text: t }); }
+      else { n++; block.push({ type: 'chg', o: q.length ? q.shift() : null, n: { num: n, text: t } }); }
+      i++;
+    }
+    for (const d of q) block.push({ type: 'chg', o: d, n: null });
+    rows.push(...block);
+  }
+  return rows;
+}
+
+const ROWS = buildRows();
+const CONTEXT = 3;
+
+function buildHunks() {
+  const vis = ROWS.map(() => false);
+  ROWS.forEach((r, i) => { if (r.type === 'chg') for (let k = Math.max(0, i - CONTEXT); k <= Math.min(ROWS.length - 1, i + CONTEXT); k++) vis[k] = true; });
+  const parts = []; let i = 0;
+  while (i < ROWS.length) {
+    let j = i; while (j < ROWS.length && vis[j] === vis[i]) j++;
+    parts.push({ kind: vis[i] ? 'hunk' : 'fold', rows: ROWS.slice(i, j), start: i }); i = j;
+  }
+  let h = 0;
+  for (const p of parts) if (p.kind === 'hunk') {
+    p.index = h++;
+    const os = p.rows.filter(r => r.o), ns = p.rows.filter(r => r.n);
+    p.oStart = os[0].o.num; p.oLen = os.length; p.nStart = ns[0].n.num; p.nLen = ns.length;
+    p.adds = p.rows.filter(r => r.type === 'chg' && r.n).length;
+    p.dels = p.rows.filter(r => r.type === 'chg' && r.o).length;
+    let ctx = '';
+    for (let k = p.start - 1; k >= 0; k--) { const t = ROWS[k].o ? ROWS[k].o.text : ROWS[k].n.text; if (/^\S.*\{$/.test(t)) { ctx = t.replace(/\s*\{$/, ''); break; } }
+    p.ctx = ctx;
+  }
+  return parts;
+}
+const PARTS = buildHunks();
+const HUNKS = PARTS.filter(p => p.kind === 'hunk');
+
+// Per-direction hooks may override these.
+const MOIRE = window.MOIRE || {};
+const STATE = { staged: new Set(MOIRE.staged || [1]), focus: MOIRE.focus ?? 2, selected: new Set(MOIRE.selected || ['h3:n70']) };
+
+function hunkHead(p) {
+  const staged = STATE.staged.has(p.index);
+  const sel = [...STATE.selected].filter(s => s.startsWith('h' + p.index + ':')).length;
+  const label = MOIRE.hunkLabel ? MOIRE.hunkLabel(p) : `@@ −${p.oStart},${p.oLen} +${p.nStart},${p.nLen} @@`;
+  const stageText = sel ? `Stage ${sel} line${sel > 1 ? 's' : ''}` : (staged ? 'Unstage' : 'Stage');
+  return `<div class="hunk-head${staged ? ' is-staged' : ''}${STATE.focus === p.index ? ' is-focus' : ''}" data-hunk="${p.index}">
+    <span class="hh-range">${label}</span><span class="hh-ctx">${esc(p.ctx)}</span>
+    <span class="hh-stat"><span class="s-add">+${p.adds}</span> <span class="s-del">−${p.dels}</span></span>
+    ${staged ? `<span class="hh-badge">${MOIRE.stagedBadge || 'Staged'}</span>` : ''}
+    <span class="hh-actions">
+      <button class="hh-btn hh-stage" data-act="stage">${stageText}<kbd>s</kbd></button>
+      <button class="hh-btn hh-discard" data-act="discard">Discard<kbd>x</kbd></button>
+    </span></div>`;
+}
+
+function cell(side, line, type, hi, key) {
+  if (!line) return `<div class="ln ${side} empty"></div><div class="cell ${side} empty"></div>`;
+  const k = type === 'ctx' ? 'ctx' : (side === 'o' ? 'del' : 'add');
+  const sel = STATE.selected.has(key + ':' + side + line.num) ? ' sel' : '';
+  return `<div class="ln ${side} ${k}${sel}" data-sign="${k === 'add' ? '+' : k === 'del' ? '−' : ''}">${line.num}</div><div class="cell ${side} ${k}${sel}">${codeHTML(line.text) || '&#8203;'}</div>`;
+}
+
+function splitRows(rows, key) {
+  return rows.map(r => `<div class="row split ${r.type}">${cell('o', r.o, r.type, 0, key)}${cell('n', r.n, r.type, 0, key)}</div>`).join('');
+}
+
+function uniRows(rows, key) {
+  const out = [];
+  let i = 0;
+  while (i < rows.length) {
+    if (rows[i].type === 'ctx') { const r = rows[i++]; out.push(`<div class="row uni ctx"><div class="ln o">${r.o.num}</div><div class="ln n">${r.n.num}</div><div class="cell ctx">${codeHTML(r.o.text) || '&#8203;'}</div></div>`); continue; }
+    const blk = []; while (i < rows.length && rows[i].type === 'chg') blk.push(rows[i++]);
+    for (const r of blk) if (r.o) out.push(`<div class="row uni"><div class="ln o del" data-sign="−">${r.o.num}</div><div class="ln n del"></div><div class="cell del">${codeHTML(r.o.text) || '&#8203;'}</div></div>`);
+    for (const r of blk) if (r.n) { const sel = STATE.selected.has(key + ':n' + r.n.num) ? ' sel' : ''; out.push(`<div class="row uni"><div class="ln o add${sel}"></div><div class="ln n add${sel}" data-sign="+">${r.n.num}</div><div class="cell add${sel}">${codeHTML(r.n.text) || '&#8203;'}</div></div>`); }
+  }
+  return out.join('');
+}
+
+function renderDiff(root) {
+  const layout = document.documentElement.dataset.layout || 'split';
+  const rowsFn = layout === 'split' ? splitRows : uniRows;
+  let html = '';
+  for (const p of PARTS) {
+    if (p.kind === 'fold') {
+      const label = MOIRE.foldLabel ? MOIRE.foldLabel(p.rows.length) : `${p.rows.length} unchanged lines`;
+      html += `<button class="fold" data-fold>${MOIRE.foldIcon || ''}<span>${label}</span></button><div class="fold-rows">${rowsFn(p.rows, 'f')}</div>`;
+    } else {
+      html += `<section class="hunk${STATE.staged.has(p.index) ? ' is-staged' : ''}${STATE.focus === p.index ? ' is-focus' : ''}" data-hunk="${p.index}">${hunkHead(p)}<div class="hunk-rows">${rowsFn(p.rows, 'h' + p.index)}</div></section>`;
+    }
+  }
+  root.innerHTML = html;
+  if (MOIRE.afterRender) MOIRE.afterRender();
+}
+
+// Full-file line model for minimaps: one entry per unified line.
+function miniLines() {
+  const out = [];
+  for (const p of PARTS) for (const r of p.rows) {
+    const inHunk = p.kind === 'hunk';
+    if (r.type === 'ctx') out.push({ t: 'ctx', len: r.n.text.length, ind: r.n.text.search(/\S|$/), hunk: inHunk ? p.index : -1 });
+    else { if (r.o) out.push({ t: 'del', len: parseMarks(r.o.text).text.length, ind: r.o.text.search(/\S|$/), hunk: p.index }); if (r.n) out.push({ t: 'add', len: parseMarks(r.n.text).text.length, ind: r.n.text.search(/\S|$/), hunk: p.index }); }
+  }
+  return out;
+}
+
+let undoStack = [];
+function toast(msg) {
+  const t = document.querySelector('[data-toast]'); if (!t) return;
+  t.querySelector('[data-toast-msg]').textContent = msg;
+  t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+function setOpt(k, v) {
+  document.documentElement.dataset[k] = v;
+  document.querySelectorAll(`[data-set^="${k}:"]`).forEach(b => b.setAttribute('aria-pressed', b.dataset.set === `${k}:${v}`));
+  if (k === 'layout') renderDiff(document.getElementById('diff'));
+}
+
+function act(kind, idx) {
+  const fname = 'watcher.ts';
+  if (kind === 'stage') {
+    const was = STATE.staged.has(idx);
+    undoStack.push(() => { was ? STATE.staged.add(idx) : STATE.staged.delete(idx); });
+    was ? STATE.staged.delete(idx) : STATE.staged.add(idx);
+    toast(`${was ? 'Unstaged' : 'Staged'} hunk ${idx + 1} in ${fname}`);
+  } else if (kind === 'discard') {
+    toast(`Discarded hunk ${idx + 1} in ${fname}`);
+  }
+  renderDiff(document.getElementById('diff'));
+}
+
+document.addEventListener('click', e => {
+  const s = e.target.closest('[data-set]'); if (s) { const [k, v] = s.dataset.set.split(':'); setOpt(k, v); return; }
+  if (e.target.closest('[data-theme-toggle]')) { const d = document.documentElement; d.dataset.theme = d.dataset.theme === 'dark' ? 'light' : 'dark'; if (MOIRE.afterRender) MOIRE.afterRender(); return; }
+  const pk = e.target.closest('[data-picker-btn]'); if (pk) { pk.closest('[data-picker]').classList.toggle('open'); return; }
+  const opt = e.target.closest('[data-picker-opt]');
+  if (opt) { const p = opt.closest('[data-picker]'); p.querySelectorAll('[data-picker-opt]').forEach(o => o.setAttribute('aria-selected', o === opt)); const lbl = p.querySelector('[data-picker-label]'); if (lbl) lbl.textContent = opt.dataset.pickerOpt; p.classList.remove('open'); return; }
+  if (!e.target.closest('[data-picker]')) document.querySelectorAll('[data-picker].open').forEach(p => p.classList.remove('open'));
+  const a = e.target.closest('[data-act]'); if (a) { act(a.dataset.act, +a.closest('[data-hunk]').dataset.hunk); return; }
+  if (e.target.closest('[data-fold]')) { setOpt('scope', 'full'); return; }
+  if (e.target.closest('[data-undo]')) { const f = undoStack.pop(); if (f) { f(); renderDiff(document.getElementById('diff')); toast('Undone'); } return; }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const n = HUNKS.length;
+  if (e.key === 'j' || e.key === 'k') {
+    STATE.focus = (STATE.focus + (e.key === 'j' ? 1 : n - 1)) % n; renderDiff(document.getElementById('diff'));
+    document.querySelector(`.hunk[data-hunk="${STATE.focus}"]`).scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  } else if (e.key === 's') act('stage', STATE.focus);
+  else if (e.key === 'x') act('discard', STATE.focus);
+  else if (e.key === 'u') document.querySelector('[data-undo]')?.click();
+  else if (e.key === 'f') setOpt('scope', document.documentElement.dataset.scope === 'full' ? 'changed' : 'full');
+  else if (e.key === 'v') setOpt('layout', document.documentElement.dataset.layout === 'split' ? 'unified' : 'split');
+});
+
+window.addEventListener('DOMContentLoaded', () => {
+  const d = document.documentElement;
+  d.dataset.layout ||= 'split'; d.dataset.scope ||= 'changed'; d.dataset.theme ||= 'light';
+  setOpt('layout', d.dataset.layout); setOpt('scope', d.dataset.scope);
+});
+
+(function rings() {
+  const svg = document.getElementById('rings');
+  const ring = (cx) => Array.from({ length: 34 }, (_, i) => `<circle cx="${cx}" cy="0" r="${5 + i * 6.2}"/>`).join('');
+  svg.innerHTML = `<defs><clipPath id="rc"><circle r="156"/></clipPath></defs><g clip-path="url(#rc)" fill="none" stroke-width="2.6">
+    <g stroke="var(--a)" class="rings-a">${ring(-14)}</g><g stroke="var(--b)" class="rings-b">${ring(14)}</g></g>`;
+})();
+document.addEventListener('click', e => {
+  if (e.target.closest('[data-empty-toggle]')) {
+    const d = document.documentElement, on = d.dataset.empty !== 'on';
+    d.dataset.empty = on ? 'on' : 'off';
+    e.target.textContent = on ? 'Back to the diff' : 'Preview empty state';
+    if (on) { const g = document.querySelector('.rings-b'); g.style.animation = 'none'; g.getBoundingClientRect(); g.style.animation = ''; }
+  }
+});
+</script>
+</body>
+</html>
