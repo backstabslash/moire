@@ -1,6 +1,5 @@
 const GRATING = "M-6 1.5h36M-6 4.5h36M-6 7.5h36M-6 10.5h36M-6 13.5h36M-6 16.5h36M-6 19.5h36M-6 22.5h36";
 
-// Two gratings, the second rotated 11 degrees: the interference bands are the mark.
 export function Mark() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">

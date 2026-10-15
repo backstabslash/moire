@@ -4,7 +4,6 @@ export type Range = [start: number, end: number];
 
 const MAX_LINE_PAIR = 1000;
 
-// Word marks only help when most of the line survived; otherwise the whole line is the change.
 const MIN_SHARED = 0.4;
 
 export function wordRanges(a: string, b: string): [Range[], Range[]] | null {

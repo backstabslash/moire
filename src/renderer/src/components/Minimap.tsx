@@ -18,7 +18,15 @@ function marksFor(rows: Row[], hits: ReadonlyMap<string, Range[]> | null): Mark[
   const found = (...keys: (string | undefined)[]) => !!hits && keys.some((k) => k && hits.has(k));
   return rows.map((r): Mark => {
     if (r.t === "split") {
-      return { a: r.a ? r.kind : null, b: r.b ? r.kind : null, aText: r.a?.text ?? "", bText: r.b?.text ?? "", sep: false, hit: found(r.a?.sel, r.b?.sel), faded: !!(r.faded || r.a?.staged || r.b?.staged) };
+      return {
+        a: r.a ? r.kind : null,
+        b: r.b ? r.kind : null,
+        aText: r.a?.text ?? "",
+        bText: r.b?.text ?? "",
+        sep: false,
+        hit: found(r.a?.sel, r.b?.sel),
+        faded: !!(r.faded || r.a?.staged || r.b?.staged),
+      };
     }
     if (r.t === "uni") {
       const ctx = r.kind === "ctx";
@@ -70,7 +78,6 @@ export function Minimap({ rows, hits, scrollRef }: Props) {
       marks.forEach((m, i) => {
         const y = i * rowPx;
         if (m.sep) return;
-        // search hits tick both edges, so they never cover a change
         if (m.hit) {
           ctx.fillStyle = v("--hit-now");
           ctx.fillRect(0, y - 0.5, 3, Math.max(2, rowPx));

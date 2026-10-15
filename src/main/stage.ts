@@ -21,7 +21,6 @@ interface UndoEntry {
   root: string;
   label: string;
   steps: Step[];
-  // HEAD when an index change was made; a commit since then means undoing it would revert that commit
   head?: string | null;
 }
 
@@ -30,7 +29,6 @@ const VERB: Record<StageAction, string> = { stage: "Staged", unstage: "Unstaged"
 
 let queue: Promise<unknown> = Promise.resolve();
 
-// One action at a time, so two quick keypresses can't race on the index.
 function serial<T>(fn: () => Promise<T>): Promise<T> {
   const run = queue.then(fn, fn);
   queue = run.catch(() => {});
@@ -52,8 +50,10 @@ export function commit(root: string, message: string, logPath: string): Promise<
     } catch (e) {
       throw new Error(gitError(e));
     }
-    // Undoing a stage after the commit would unstage against the new HEAD, so those entries go; discard backups stay.
-    writeLog(logPath, readLog(logPath).filter((e) => e.root !== root || e.steps.some((s) => s.worktree)));
+    writeLog(
+      logPath,
+      readLog(logPath).filter((e) => e.root !== root || e.steps.some((s) => s.worktree)),
+    );
     return (await git(root, ["log", "-1", "--format=%h %s"])).trim();
   });
 }
@@ -65,7 +65,6 @@ async function runAct(root: string, req: StageRequest, logPath: string): Promise
   const stale = new Error(`${name} changed since you looked. Refreshed.`);
   const paths = file.oldPath ? [file.path, file.oldPath] : [file.path];
   const current = (await diff(root, { kind: mode }, paths)).files.find((f) => f.path === file.path);
-  // An unread file is a placeholder with no content to compare, and re-diffing it alone reads it in full.
   const same = file.unread ? current?.status === file.status : JSON.stringify(current) === JSON.stringify(file);
   if (!same) throw stale;
   await Promise.all(paths.map((p) => indexEntry(root, p)));
@@ -106,6 +105,10 @@ async function actWhole(root: string, action: StageAction, file: FileDiff, paths
     await locked(() => git(root, born ? ["reset", "-q", "--", ...spec] : ["rm", "--cached", "-q", "--ignore-unmatch", "--", ...spec]));
   } else if (file.status === "untracked") {
     await rm(join(root, file.path), { force: true });
+  } else if (file.status === "added") {
+    // git add -N: checkout would leave an empty file, and the bare entry would show as deleted.
+    await rm(join(root, file.path), { force: true });
+    await setIndex(root, file.path, null);
   } else {
     await locked(() => git(root, ["checkout", "-q", "--", ...spec]));
   }
@@ -114,7 +117,6 @@ async function actWhole(root: string, action: StageAction, file: FileDiff, paths
 async function actLines(root: string, action: StageAction, file: FileDiff, selected: (hunk: number, line: number) => boolean) {
   const name = basename(file.path);
   if (file.binary || file.tooLarge) throw new Error(`${name} can only be ${VERB[action].toLowerCase()} whole`);
-  // The diff arrives decoded as UTF-8, so bytes that aren't valid UTF-8 already read as U+FFFD and would be written back that way.
   if (file.hunks.some((h) => h.lines.some((l) => l.text.includes("\uFFFD")))) throw new Error(`${name} isn't UTF-8 text, so it can only be changed whole`);
   if (action === "discard") {
     const full = join(root, file.path);
@@ -147,9 +149,14 @@ async function runUndo(root: string, logPath: string): Promise<string | null> {
     if (!same(now, (step.index ?? step.worktree)![1])) {
       throw new Error(`Can't undo "${entry.label}": ${basename(step.path)} changed since. Dropped it from undo history.`);
     }
-    // Backups are unreferenced objects, so git gc may have pruned them; check before touching anything.
     const backup = (step.index ?? step.worktree)![0];
-    if (backup && !(await git(root, ["cat-file", "-e", backup.sha]).then(() => true, () => false))) {
+    if (
+      backup &&
+      !(await git(root, ["cat-file", "-e", backup.sha]).then(
+        () => true,
+        () => false,
+      ))
+    ) {
       throw new Error(`Can't undo "${entry.label}": git has since cleaned up its backup of ${basename(step.path)}. Dropped it from undo history.`);
     }
   }
@@ -170,16 +177,15 @@ async function indexEntry(root: string, path: string): Promise<Blob | null> {
     .split("\0")
     .filter(Boolean)
     .map((rec) => {
-      const [meta, p] = rec.split("\t");
-      const [mode, sha, stage] = meta.split(" ");
-      return { mode, sha, stage, p };
+      const tab = rec.indexOf("\t");
+      const [mode, sha, stage] = rec.slice(0, tab).split(" ");
+      return { mode, sha, stage, p: rec.slice(tab + 1) };
     })
     .filter((e) => e.p === path);
   if (entries.some((e) => e.stage !== "0")) throw new Error(`${basename(path)} has merge conflicts. Resolve them first.`);
   return entries[0] ? { mode: entries[0].mode, sha: entries[0].sha } : null;
 }
 
-// With keep, the content is written to git's object store so undo can bring it back.
 async function worktreeEntry(root: string, path: string, keep: boolean): Promise<Blob | null> {
   const full = join(root, path);
   const st = await lstat(full).catch(() => null);
@@ -208,7 +214,6 @@ async function setWorktree(root: string, path: string, blob: Blob | null) {
   else await writeFile(full, content, { mode: blob.mode === "100755" ? 0o755 : 0o644 });
 }
 
-// Another git process (an agent, an editor) may hold the index briefly.
 async function locked<T>(fn: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {

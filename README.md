@@ -37,6 +37,7 @@ On macOS: `open -na moire --args "$PWD"`. Inside the app, `o` lists recent repos
 | `Ctrl+C` / `c` | Copy selected lines as code / as Markdown for an agent |
 | `/` or `Ctrl+F` | Search |
 | `p` or `Ctrl+P` | Filter the file list |
+| `a` | Changed files or all files, gitignored ones included |
 | `e` | Open the file in your editor at that line (set `MOIRE_EDITOR`, e.g. `code -g {file}:{line}`, to choose) |
 | `o` | Recent repos |
 | `f` | Show full files |

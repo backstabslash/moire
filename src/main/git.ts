@@ -1,8 +1,8 @@
 import { execFile, spawn } from "node:child_process";
-import { lstat, open, readFile, readlink } from "node:fs/promises";
+import { lstat, open, readdir, readFile, readlink } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
-import type { CommitInfo, CompareMode, DiffResult, FileContents, FileDiff, Hunk, RepoInfo, SideInfo } from "../shared/types";
+import type { CommitInfo, CompareMode, DiffResult, FileContents, FileDiff, FileTree, Hunk, RepoInfo, SideInfo } from "../shared/types";
 import { parseDiff, sortFiles } from "./parse";
 
 const exec = promisify(execFile);
@@ -14,9 +14,7 @@ const EMPTY_TREE: Record<string, string> = {
 };
 
 // Inherited GIT_DIR/GIT_INDEX_FILE (e.g. when launched from a git hook) would point git at another repo.
-const env = Object.fromEntries(
-  Object.entries(process.env).filter(([k]) => !["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"].includes(k)),
-);
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"].includes(k)));
 
 function gitArgs(root: string, args: string[]): string[] {
   // A repo's own config could otherwise make every refresh run a command.
@@ -122,7 +120,6 @@ function treeish(side: SideInfo, empty: string): string {
   return side.kind === "commit" ? side.rev! : empty;
 }
 
-// Past this many, untracked files are listed without reading them: an agent's npm install before there's a .gitignore would otherwise be read in full on every refresh.
 export const UNTRACKED_READ_LIMIT = 1000;
 
 async function untracked(root: string, pathspec: string[]): Promise<FileDiff[]> {
@@ -207,7 +204,6 @@ const LOCKFILES = new Set([
   "gradle.lockfile",
 ]);
 
-// Lockfiles, snapshots and files .gitattributes marks linguist-generated, which the view folds by default.
 async function markNoise(root: string, files: FileDiff[]) {
   if (!files.length) return;
   const out = await gitInput(root, ["check-attr", "-z", "--stdin", "linguist-generated"], files.map((f) => `${f.path}\0`).join(""));
@@ -230,7 +226,6 @@ async function markNoise(root: string, files: FileDiff[]) {
   }
 }
 
-// Marks which lines of a HEAD→worktree diff are already in the index, from the HEAD→index and index→worktree diffs.
 async function markStaged(root: string, files: FileDiff[], head: string, pathspec: string[]) {
   const [staged, unstaged] = await Promise.all([
     git(root, [...DIFF, "-U0", "--cached", head, "--", ...pathspec]),
@@ -251,7 +246,6 @@ async function markStaged(root: string, files: FileDiff[], head: string, pathspe
   }
 }
 
-// Maps a line number on a diff's new side to its old side, or null for an added line.
 export function newToOld(hunks: Hunk[]): (n: number) => number | null {
   return (n) => {
     let delta = 0;
@@ -275,7 +269,6 @@ async function readWorktree(root: string, path: string, limit = SIZE_LIMIT): Pro
     if (st.isSymbolicLink()) return Buffer.from(await readlink(full), "utf8");
     if (!st.isFile()) return null;
     if (st.size <= limit) return await readFile(full);
-    // One byte past the limit is enough for callers to see it's too large.
     const fh = await open(full);
     try {
       const buf = Buffer.alloc(limit + 1);
@@ -299,19 +292,20 @@ async function readSide(root: string, side: SideInfo, path: string, limit = SIZE
   }
 }
 
-// One side of a file for the preview protocol; null when it doesn't exist or is over the limit.
 export async function readBlob(root: string, side: SideInfo, path: string, limit: number): Promise<Buffer | null> {
   if (!path || isAbsolute(path) || path.split("/").includes("..")) return null;
   const buf = await readSide(root, side, path, limit);
   return buf && buf.length <= limit ? buf : null;
 }
 
-// Byte size of each side, for the image preview.
 export async function blobSizes(root: string, mode: CompareMode, file: FileRef): Promise<[number | null, number | null]> {
   const { a, b } = await sides(root, mode);
   const size = async (side: SideInfo, path: string | null) => {
     if (path === null || side.kind === "empty") return null;
-    if (side.kind === "worktree") return lstat(join(root, path)).then((st) => st.size).catch(() => null);
+    if (side.kind === "worktree")
+      return lstat(join(root, path))
+        .then((st) => st.size)
+        .catch(() => null);
     return tryGit(root, ["cat-file", "-s", side.kind === "index" ? `:${path}` : `${side.rev}:${path}`]).then((out) => (out ? Number(out) : null));
   };
   const [pathA, pathB] = sidePaths(file);
@@ -331,9 +325,8 @@ function toContents(bufA: Buffer | null, bufB: Buffer | null): FileContents {
   return { a: bufA?.toString("utf8") ?? null, b: bufB?.toString("utf8") ?? null, tooLarge: false };
 }
 
-// Which path to read on each side, or null where the file doesn't exist.
 function sidePaths(file: FileRef): [string | null, string | null] {
-  const isNew = file.status === "added" || file.status === "untracked";
+  const isNew = file.status === "added" || file.status === "untracked" || file.status === "unchanged";
   return [isNew ? null : (file.oldPath ?? file.path), file.status === "deleted" ? null : file.path];
 }
 
@@ -344,23 +337,28 @@ export async function fileContents(root: string, mode: CompareMode, file: FileRe
   return toContents(bufA, bufB);
 }
 
-// Both sides of many files at once; index and commit blobs come from one cat-file process instead of one per file.
 export async function manyContents(root: string, mode: CompareMode, files: FileRef[]): Promise<FileContents[]> {
   const { a, b } = await sides(root, mode);
   const spec = (side: SideInfo, path: string | null) =>
-    path === null || path.includes("\n") || side.kind === "worktree" || side.kind === "empty" ? null : side.kind === "index" ? `:${path}` : `${side.rev}:${path}`;
+    path === null || path.includes("\n") || side.kind === "worktree" || side.kind === "empty"
+      ? null
+      : side.kind === "index"
+        ? `:${path}`
+        : `${side.rev}:${path}`;
   const wanted = files.flatMap((f) => {
     const [pathA, pathB] = sidePaths(f);
     return [spec(a, pathA), spec(b, pathB)];
   });
-  const blobs = await readBlobs(root, wanted.filter((w): w is string => w !== null));
+  const blobs = await readBlobs(
+    root,
+    wanted.filter((w): w is string => w !== null),
+  );
   let next = 0;
   const fromGit = wanted.map((w) => (w === null ? null : blobs[next++]));
   return Promise.all(
     files.map(async (f, i) => {
       const [pathA, pathB] = sidePaths(f);
-      const read = (side: SideInfo, path: string | null, blob: Buffer | null) =>
-        path !== null && side.kind === "worktree" ? readWorktree(root, path) : blob;
+      const read = (side: SideInfo, path: string | null, blob: Buffer | null) => (path !== null && side.kind === "worktree" ? readWorktree(root, path) : blob);
       return toContents(await read(a, pathA, fromGit[2 * i]), await read(b, pathB, fromGit[2 * i + 1]));
     }),
   );
@@ -396,6 +394,24 @@ function readBlobs(root: string, specs: string[]): Promise<(Buffer | null)[]> {
     });
     child.stdin.end(specs.map((s) => `${s}\n`).join(""));
   });
+}
+
+export async function tree(root: string, mode: CompareMode): Promise<FileTree> {
+  const { b } = await sides(root, mode);
+  const list = async (args: string[]) => (await git(root, args)).split("\0").filter(Boolean);
+  if (b.kind === "commit") return { files: await list(["ls-tree", "-r", "-z", "--name-only", "--full-tree", b.rev!]), ignored: [] };
+  if (b.kind === "index") return { files: [...new Set(await list(["ls-files", "--cached", "-z"]))], ignored: [] };
+  const [files, ignored] = await Promise.all([
+    list(["ls-files", "--cached", "--others", "--exclude-standard", "-z"]),
+    list(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "--no-empty-directory", "-z"]),
+  ]);
+  return { files: [...new Set(files.filter((p) => !p.endsWith("/")))], ignored };
+}
+
+export async function listDir(root: string, dir: string): Promise<string[]> {
+  if (!dir.endsWith("/") || isAbsolute(dir) || dir.split("/").includes("..")) return [];
+  const entries = await readdir(join(root, dir), { withFileTypes: true });
+  return entries.map((e) => `${dir}${e.name}${e.isDirectory() ? "/" : ""}`);
 }
 
 export async function commits(root: string, limit: number): Promise<CommitInfo[]> {

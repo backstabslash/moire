@@ -15,7 +15,10 @@ export function RepoPicker({ current, onOpen, onBrowse, onClose }: Props) {
   const popRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    window.moire.recentRepos().then((list) => setRecent(list.filter((r) => r !== current)), () => setRecent([]));
+    window.moire.recentRepos().then(
+      (list) => setRecent(list.filter((r) => r !== current)),
+      () => setRecent([]),
+    );
   }, [current]);
 
   useEffect(() => {
@@ -59,7 +62,13 @@ export function RepoPicker({ current, onOpen, onBrowse, onClose }: Props) {
           </button>
         ))}
         <div className="sep" />
-        <button role="option" aria-selected={false} className={hot === shown.length ? "is-hot" : ""} onMouseEnter={() => setHot(shown.length)} onClick={onBrowse}>
+        <button
+          role="option"
+          aria-selected={false}
+          className={hot === shown.length ? "is-hot" : ""}
+          onMouseEnter={() => setHot(shown.length)}
+          onClick={onBrowse}
+        >
           Browse…
           <small>Pick a folder</small>
         </button>

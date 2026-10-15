@@ -6,16 +6,21 @@ import type { Range } from "./model/words";
 
 const sameHit = (x: Hit | null, y: Hit | null) => !!x && !!y && x.path === y.path && x.sel === y.sel && x.start === y.start;
 
-// Whole files are fetched once per search, so hits in folded context count too.
-export function useSearch(repo: RepoInfo | null, mode: CompareMode, modeKey: string, allFiles: FileDiff[], active: string | null) {
-  // Lockfiles and generated files are folded away, and their hits would bury the real ones.
+export function useSearch(
+  repo: RepoInfo | null,
+  mode: CompareMode,
+  modeKey: string,
+  allFiles: FileDiff[],
+  active: string | null,
+  onError: (e: unknown) => void,
+) {
   const files = useMemo(() => allFiles.filter((f) => !f.noise), [allFiles]);
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<SearchOptions>({ query: "", matchCase: false, regex: false, side: "both" });
   const deferred = useDeferredValue(options);
   const [contents, setContents] = useState<ReadonlyMap<string, FileContents>>(new Map());
   const [current, setCurrent] = useState<Hit | null>(null);
-  // Bumped whenever the view should scroll to the current hit.
+  const [failed, setFailed] = useState(false);
   const [revealTick, setRevealTick] = useState(0);
   const loaded = useRef(contents);
   loaded.current = contents;
@@ -26,23 +31,30 @@ export function useSearch(repo: RepoInfo | null, mode: CompareMode, modeKey: str
     const missing = files.filter((f) => !f.binary && !f.tooLarge && !loaded.current.has(fileKey(modeKey, f)));
     if (!missing.length) return;
     let stale = false;
-    window.moire.manyContents(repo.root, mode, missing).then((data) => {
-      if (stale) return;
-      setContents((cur) => {
-        const next = new Map<string, FileContents>();
-        for (const f of files) {
-          const key = fileKey(modeKey, f);
-          const have = cur.get(key);
-          if (have) next.set(key, have);
-        }
-        missing.forEach((f, i) => next.set(fileKey(modeKey, f), data[i]));
-        return next;
-      });
-    });
+    setFailed(false);
+    window.moire.manyContents(repo.root, mode, missing).then(
+      (data) => {
+        if (stale) return;
+        setContents((cur) => {
+          const next = new Map<string, FileContents>();
+          for (const f of files) {
+            const key = fileKey(modeKey, f);
+            const have = cur.get(key);
+            if (have) next.set(key, have);
+          }
+          missing.forEach((f, i) => next.set(fileKey(modeKey, f), data[i]));
+          return next;
+        });
+      },
+      (e) => {
+        if (stale) return;
+        setFailed(true);
+        onError(e);
+      },
+    );
     return () => {
       stale = true;
     };
-    // modeKey stands in for mode
   }, [searching, repo, modeKey, files]);
 
   const pattern = useMemo(() => (open ? compile(deferred) : null), [open, deferred]);
@@ -58,7 +70,6 @@ export function useSearch(repo: RepoInfo | null, mode: CompareMode, modeKey: str
 
   const ready = files.every((f) => f.binary || f.tooLarge || contents.has(fileKey(modeKey, f)));
 
-  // A new search starts at the first hit in the open file, once every file's contents are in so it doesn't jump early.
   const picked = useRef<typeof pattern>(null);
   useEffect(() => {
     if (!ready) return;
@@ -105,7 +116,7 @@ export function useSearch(repo: RepoInfo | null, mode: CompareMode, modeKey: str
     options,
     setOptions,
     invalid: pattern === "invalid",
-    loading: !ready,
+    loading: !ready && !failed,
     total: hits.length,
     index,
     current: open ? current : null,

@@ -32,17 +32,13 @@ interface Props {
   selection: ReadonlySet<string>;
   hits: ReadonlyMap<string, Range[]> | null;
   currentHit: Hit | null;
-  // which actions this view offers, null when it's read-only
   actions: "unstaged" | "staged" | null;
   onExpand(key: string): void;
   onFocusHunk(hunk: number): void;
   onSelect(key: string, col: Col, how: SelectHow): void;
   onAct(action: StageAction, target: number | "file"): void;
-  // shown instead of the diff when set
   preview: Preview | null;
-  // set when the file can switch between preview and diff
   onTogglePreview: (() => void) | null;
-  // the hunk shown one plate at a time, and which plate is up
   blink: Blink | null;
   onBlink(hunk: number): void;
 }
@@ -61,9 +57,28 @@ export interface Preview {
 }
 
 export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(props, ref) {
-  const { file, rows, a, b, tokens, focusHunk, selection, hits, currentHit, actions, onExpand, onFocusHunk, onSelect, onAct, preview, onTogglePreview, blink, onBlink } = props;
-  // Images sit side by side and Markdown renders one version, whatever the diff layout.
-  const layout = preview?.kind === "image" ? "split" : preview ? "unified" : props.layout;
+  const {
+    file,
+    rows,
+    a,
+    b,
+    tokens,
+    focusHunk,
+    selection,
+    hits,
+    currentHit,
+    actions,
+    onExpand,
+    onFocusHunk,
+    onSelect,
+    onAct,
+    preview,
+    onTogglePreview,
+    blink,
+    onBlink,
+  } = props;
+  const layout = preview?.kind === "image" ? "split" : preview || file.status === "unchanged" ? "unified" : props.layout;
+  const onlyB = file.status === "added" || file.status === "untracked" || file.status === "unchanged";
   const scrollRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<DiffViewHandle>(null);
   const virtualizer = useVirtualizer({
@@ -74,7 +89,6 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     overscan: 24,
   });
 
-  // The line at the top of the view, so a refresh that adds or removes lines above it doesn't move what you're reading.
   const anchor = useRef<(Anchor & { offset: number }) | null>(null);
   const shownRows = useRef(rows);
   const record = () => {
@@ -114,7 +128,6 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     scroller: () => scrollRef.current,
   }));
 
-  // Hunk buttons count only the lines staging will act on.
   const selCount = useMemo(() => {
     const counts = new Map<number, number>();
     for (const { hunk } of changedRefs(file, selection)) counts.set(hunk, (counts.get(hunk) ?? 0) + 1);
@@ -138,13 +151,18 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
           Preview<kbd>m</kbd>
         </button>
       )}
-      {actions && <button onClick={() => onAct(actions === "staged" ? "unstage" : "stage", "file")}>{actions === "staged" ? "Unstage file" : "Stage file"}</button>}
+      {actions && (
+        <button onClick={() => onAct(actions === "staged" ? "unstage" : "stage", "file")}>{actions === "staged" ? "Unstage file" : "Stage file"}</button>
+      )}
     </span>
   );
   const shown = file.status === "deleted" ? a : b;
   const oldName = file.oldPath ?? file.path;
   return (
-    <main className={`main${preview ? ` is-preview preview-${preview.kind}` : ""}`} data-plate={blink && !preview ? blink.plate : undefined}>
+    <main
+      className={`main${preview ? ` is-preview preview-${preview.kind}` : file.status === "unchanged" ? " is-whole" : ""}`}
+      data-plate={blink && !preview ? blink.plate : undefined}
+    >
       <div className="panes-head">
         {layout === "split" ? (
           <>
@@ -155,16 +173,16 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
           </>
         ) : (
           <div className="pane-h">
-            <span className="plate-tag tag-a">A</span>
+            {file.status !== "unchanged" && <span className="plate-tag tag-a">A</span>}
             <span className="plate-tag tag-b">B</span>
             <b>{file.path.split("/").pop()}</b>
-            <span>{file.path}</span>
+            <span>{file.status === "unchanged" ? `${b.label}, ${file.path}, unchanged` : file.path}</span>
             {fileAction}
           </div>
         )}
         {!preview && (
           <div className="mini-h">
-            <span className="plate-tag tag-a">A</span>
+            {file.status !== "unchanged" && <span className="plate-tag tag-a">A</span>}
             <span className="plate-tag tag-b">B</span>
           </div>
         )}
@@ -184,10 +202,9 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
         />
       )}
       {!preview && (
-        <div className="scroller" ref={scrollRef} onScroll={record}>
+        <div className="scroller diff-scroller" ref={scrollRef} onScroll={record}>
           <div
-            // A file that exists on one side only has nothing to show in the other side's number column.
-            className={`diff${file.status === "added" || file.status === "untracked" ? " only-b" : file.status === "deleted" ? " only-a" : ""}`}
+            className={`diff${onlyB ? " only-b" : file.status === "deleted" ? " only-a" : ""}`}
             style={{ height: virtualizer.getTotalSize() }}
             onMouseDown={(e) => gutter(e, e.shiftKey ? "shift" : "click")}
             onMouseOver={(e) => e.buttons === 1 && gutter(e, "drag")}
@@ -195,7 +212,13 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
             {virtualizer.getVirtualItems().map((item) => {
               const row = rows[item.index];
               return (
-                <div key={item.key} className="vrow" data-index={item.index} ref={virtualizer.measureElement} style={{ transform: `translateY(${item.start}px)` }}>
+                <div
+                  key={item.key}
+                  className={`vrow${inFocus(row, focusHunk) ? " in-focus" : ""}`}
+                  data-index={item.index}
+                  ref={virtualizer.measureElement}
+                  style={{ transform: `translateY(${item.start}px)` }}
+                >
                   <RowView
                     row={row}
                     tokens={tokens}
@@ -220,7 +243,6 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
   );
 });
 
-// Search hits for a row's A side (or its unified line) and B side, plus where the current hit starts.
 interface Found {
   a?: Range[];
   b?: Range[];
@@ -258,7 +280,10 @@ function isFocused(row: Row, focusHunk: number) {
   return row.t === "hunk" && row.hunk === focusHunk;
 }
 
-// Hunk rows get their selected-line count; line rows a bitmask, 1 for A (or the unified line) and 2 for B.
+function inFocus(row: Row, focusHunk: number) {
+  return row.t !== "hunk" && "hunk" in row && row.hunk === focusHunk;
+}
+
 function selected(row: Row, selection: ReadonlySet<string>, counts: Map<number, number>): number {
   if (row.t === "hunk") return counts.get(row.hunk) ?? 0;
   if (!selection.size || (row.t !== "split" && row.t !== "uni")) return 0;
@@ -284,7 +309,6 @@ interface RowProps {
   sel: number;
   found: Found;
   actions: "unstaged" | "staged" | null;
-  // the row belongs to the blinking hunk
   blinking: boolean;
   onExpand(key: string): void;
   onFocusHunk(hunk: number): void;
@@ -292,11 +316,17 @@ interface RowProps {
   onBlink(hunk: number): void;
 }
 
-const BREAK_LINE = (
-  <svg viewBox="0 0 20 22" aria-hidden="true">
-    <path d="M0 11h6l2.5-7 3 14 2.5-7h6" />
-  </svg>
-);
+const A_LINES = [1.5, 4.5, 7.5].map((y) => `M0 ${y}H1200`).join("");
+const B_LINES = Array.from({ length: 9 }, (_, i) => `M0 ${3 * i - 16.5}L1200 ${3 * i + 1.5}`).join("");
+
+function Grating({ shifted }: { shifted: boolean }) {
+  return (
+    <svg className="grating" viewBox="0 0 1200 9" preserveAspectRatio="none" aria-hidden="true">
+      <path className="ga" d={A_LINES} />
+      {shifted && <path className="gb" d={B_LINES} />}
+    </svg>
+  );
+}
 
 const RowView = memo(function RowView({ row, tokens, focused, sel, found, actions, blinking, onExpand, onFocusHunk, onAct, onBlink }: RowProps) {
   switch (row.t) {
@@ -305,6 +335,7 @@ const RowView = memo(function RowView({ row, tokens, focused, sel, found, action
       const button = (action: StageAction, label: string, key: string) => (
         <button
           className={`hh-btn hh-${action}`}
+          title={`${label} ${sel ? "the selected lines" : "this hunk"} (${key}). Click or drag line numbers to pick single lines.`}
           onClick={(e) => {
             e.stopPropagation();
             onAct(action, row.hunk);
@@ -315,6 +346,29 @@ const RowView = memo(function RowView({ row, tokens, focused, sel, found, action
           <kbd>{key}</kbd>
         </button>
       );
+      const stage = actions && (actions === "staged" ? button("unstage", "Unstage", "s") : button("stage", "Stage", "s"));
+      const discard = actions === "unstaged" && button("discard", "Discard", "x");
+      if (row.folded) {
+        const { keys, count } = row.folded;
+        return (
+          <div className={`hunk-head is-folded${focused ? " is-focus" : ""}`} onClick={() => onFocusHunk(row.hunk)}>
+            <Grating shifted />
+            <button
+              className="fold-label"
+              onClick={(e) => {
+                e.stopPropagation();
+                keys.forEach(onExpand);
+              }}
+            >
+              {count ? `${count} ${count === 1 ? "line" : "lines"} unchanged · ` : ""}whitespace-only change
+            </button>
+            <span className="hh-actions">
+              {stage}
+              {discard}
+            </span>
+          </div>
+        );
+      }
       return (
         <div className={`hunk-head${focused ? " is-focus" : ""}${sel ? " has-sel" : ""}`} onClick={() => onFocusHunk(row.hunk)}>
           <span className="hh-range">{row.label}</span>
@@ -345,8 +399,8 @@ const RowView = memo(function RowView({ row, tokens, focused, sel, found, action
               {blinking ? "Stop blink" : "Blink"}
               <kbd>{blinking ? "esc" : "shift b"}</kbd>
             </button>
-            {actions && (actions === "staged" ? button("unstage", "Unstage", "s") : button("stage", "Stage", "s"))}
-            {actions === "unstaged" && button("discard", "Discard", "x")}
+            {stage}
+            {discard}
           </span>
         </div>
       );
@@ -354,8 +408,8 @@ const RowView = memo(function RowView({ row, tokens, focused, sel, found, action
     case "fold":
       return (
         <button className="fold" disabled={!row.expandable} onClick={() => onExpand(row.key)}>
-          {BREAK_LINE}
-          <span>{row.label ?? `${row.count} ${row.count === 1 ? "line" : "lines"} unchanged`}</span>
+          <Grating shifted={false} />
+          <span>{`${row.count} ${row.count === 1 ? "line" : "lines"} unchanged`}</span>
         </button>
       );
     case "note":
@@ -444,7 +498,6 @@ function SplitCell({ side, line, kind, tokens, sel, hits, current }: CellProps) 
   );
 }
 
-// One plate's line in a blinking hunk. Both plates share the row so it keeps its height and only changes move.
 function PlateSide({ side, line, kind, tokens, hits, current }: Omit<CellProps, "sel">) {
   if (!line) return <div className={`p${side}`} />;
   const cls = kind === "ctx" ? "" : side === "a" ? "del" : "add";

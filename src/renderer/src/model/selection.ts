@@ -1,10 +1,8 @@
 import type { FileDiff, LineRef } from "../../../shared/types";
 import type { Row } from "./rows";
 
-// A gutter column: A or B in split view, the single column in unified view.
 export type Col = "a" | "b" | "u";
 
-// Lines inside a hunk are keyed by position in hunk.lines, unchanged lines between hunks by new-side number.
 export const lineKey = (hunk: number, idx: number) => `${hunk}:${idx}`;
 export const gapKey = (newNo: number) => `g${newNo}`;
 
@@ -26,7 +24,6 @@ export function keysBetween(rows: Row[], col: Col, from: string, to: string): st
   return keys.slice(Math.min(i, j), Math.max(i, j) + 1);
 }
 
-// The selected lines that staging can act on.
 export function changedRefs(file: FileDiff, keys: Iterable<string>): LineRef[] {
   return [...keys].flatMap((k) => {
     if (k.startsWith("g")) return [];

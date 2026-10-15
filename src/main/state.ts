@@ -4,11 +4,8 @@ import { app } from "electron";
 
 interface State {
   lastRepo?: string;
-  // most recent first
   recent?: string[];
-  // command template for opening files, like "code -g {file}:{line}"
   editor?: string;
-  // window zoom factor, 1 is 100%
   zoom?: number;
 }
 

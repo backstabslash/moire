@@ -1,7 +1,5 @@
 import type { ThemeRegistration } from "shiki";
 
-// Tokens carry CSS variables, so switching themes recolours code without highlighting it again; the palettes live in styles.css.
-// Near-monochrome on purpose: the A/B change colours should be the loudest thing on screen.
 const ink = "var(--tok-ink)";
 
 export const moireTheme: ThemeRegistration = {
@@ -18,7 +16,10 @@ export const moireTheme: ThemeRegistration = {
       settings: { foreground: "var(--tok-kw)", fontStyle: "bold" },
     },
     { scope: ["keyword.operator", "punctuation", "meta.brace"], settings: { foreground: "var(--tok-pun)", fontStyle: "" } },
-    { scope: ["entity.name.type", "entity.name.class", "support.type", "support.class", "entity.other.inherited-class"], settings: { foreground: "var(--tok-ty)" } },
+    {
+      scope: ["entity.name.type", "entity.name.class", "support.type", "support.class", "entity.other.inherited-class"],
+      settings: { foreground: "var(--tok-ty)" },
+    },
     { scope: ["entity.name.tag", "support.type.property-name"], settings: { foreground: "var(--tok-ty)" } },
   ],
 };

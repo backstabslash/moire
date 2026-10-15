@@ -29,7 +29,6 @@ export function compile(o: SearchOptions): RegExp | "invalid" | null {
   }
 }
 
-// Hits in file order as unified view shows it; an unchanged line counts once although split view draws it twice.
 export function searchFile(file: FileDiff, contents: FileContents | null, re: RegExp, side: SearchSide, limit: number): Hit[] {
   const hits: Hit[] = [];
   for (const row of buildRows(file, contents, { layout: "unified", scope: "full", expanded: NONE, showAll: true })) {

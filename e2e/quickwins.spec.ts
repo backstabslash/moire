@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
@@ -11,6 +11,7 @@ let bin: string;
 let app: ElectronApplication;
 let page: Page;
 const errors: string[] = [];
+const shot = (name: string) => process.env.MOIRE_SHOTS && page.screenshot({ path: join(process.env.MOIRE_SHOTS, `${name}.png`) });
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
 const body = Array.from({ length: 40 }, (_, i) => `export const v${i} = ${i};`);
@@ -41,7 +42,6 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "ws.ts"), "if (a) {\n    b();\n}\n");
   writeFileSync(join(repo, "pnpm-lock.yaml"), "lock: 2\n");
 
-  // remembered repos, and a fake editor that records what it was asked to open
   writeFileSync(join(userData, "state.json"), JSON.stringify({ lastRepo: repo, recent: [repo, other] }));
   writeFileSync(join(bin, "fake-editor"), `#!/bin/sh\necho "$@" > "${join(bin, "opened")}"\n`);
   chmodSync(join(bin, "fake-editor"), 0o755);
@@ -71,8 +71,13 @@ test("lockfiles and whitespace-only hunks fold away until asked", async () => {
   await expect(page.locator(".hunk-head")).toHaveCount(1);
 
   await page.locator(".file", { hasText: "ws.ts" }).click();
-  await expect(page.locator(".fold", { hasText: "Whitespace-only changes" })).toBeVisible();
-  await page.locator(".fold", { hasText: "Whitespace-only changes" }).click();
+  const folded = page.locator(".hunk-head.is-folded");
+  await expect(folded).toHaveText(/whitespace-only change/);
+  await shot("whitespace-light");
+  await page.keyboard.press("t");
+  await shot("whitespace-dark");
+  await page.keyboard.press("t");
+  await folded.locator(".fold-label").click();
   await expect(page.locator(".cell.add")).toHaveText("    b();");
 });
 

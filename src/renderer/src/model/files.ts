@@ -1,13 +1,17 @@
 import type { FileDiff } from "../../../shared/types";
 
 const dirOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
+const collator = new Intl.Collator();
+const byFolder = (x: string, y: string) => collator.compare(dirOf(x), dirOf(y)) || collator.compare(x, y);
 
-// Folder first, then name: the order the sidebar shows, so [ ] and j k walk files the way they're listed.
 export function orderFiles(files: FileDiff[]): FileDiff[] {
-  return [...files].sort((x, y) => dirOf(x.path).localeCompare(dirOf(y.path)) || x.path.localeCompare(y.path));
+  return [...files].sort((x, y) => byFolder(x.path, y.path));
 }
 
-// Keyed by what the file's diff contains, so a refresh that changed nothing keeps contents and colours.
+export function orderPaths(paths: string[]): string[] {
+  return [...paths].sort(byFolder);
+}
+
 export function fileKey(modeKey: string, file: FileDiff): string {
   return `${modeKey}:${file.path}:${hashString(JSON.stringify(file))}`;
 }
@@ -18,7 +22,6 @@ export function hashString(text: string) {
   return (h >>> 0).toString(36);
 }
 
-// Every character of the query, ignoring spaces and case, appears in the path in order.
 export function fuzzyMatch(query: string, path: string): boolean {
   const q = query.toLowerCase().replace(/\s+/g, "");
   let i = 0;

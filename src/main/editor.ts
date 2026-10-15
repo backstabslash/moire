@@ -3,7 +3,6 @@ import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, isAbsolute, join } from "node:path";
 
-// Editors tried in order when none is configured, with how each takes a file and line.
 const KNOWN: [string, string][] = [
   ["cursor", "-g {file}:{line}"],
   ["code", "-g {file}:{line}"],
@@ -34,10 +33,15 @@ function executable(path: string) {
 }
 
 // Apps started from a desktop launcher often get a shorter PATH than a terminal, so common install folders are searched too.
-// Passing a path searches only that, for tests.
 export function findExecutable(name: string, path?: string): string | null {
   if (isAbsolute(name)) return executable(name) ? name : null;
-  const dirs = path?.split(delimiter) ?? [...(process.env.PATH ?? "").split(delimiter), join(homedir(), ".local", "bin"), "/usr/local/bin", "/opt/homebrew/bin", "/snap/bin"];
+  const dirs = path?.split(delimiter) ?? [
+    ...(process.env.PATH ?? "").split(delimiter),
+    join(homedir(), ".local", "bin"),
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/snap/bin",
+  ];
   for (const dir of dirs.filter(Boolean)) {
     if (executable(join(dir, name))) return join(dir, name);
   }
@@ -45,7 +49,6 @@ export function findExecutable(name: string, path?: string): string | null {
   return app && executable(app) ? app : null;
 }
 
-// A template like "code -g {file}:{line}" from MOIRE_EDITOR or the saved setting, else the first known editor installed.
 export function resolveEditor(saved: string | undefined, path?: string): { exe: string; args: string[] } | null {
   const template = process.env.MOIRE_EDITOR || saved;
   if (template) {

@@ -1,48 +1,81 @@
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef } from "react";
-import type { FileDiff, FileStatus, RepoInfo } from "../../../shared/types";
+import type { FileDiff, FileTree as Listing, RepoInfo } from "../../../shared/types";
+import { fuzzyMatch, orderPaths } from "../model/files";
+import { fileRow, FileTree, type ListState } from "./FileTree";
 
-const KIND: Record<FileStatus, string> = { added: "A", modified: "M", deleted: "D", renamed: "R", untracked: "U", conflicted: "C" };
-const STAGED = { full: "Staged", partial: "Partly staged", none: "Not staged" };
+const MATCH_LIMIT = 500;
+
+export type FilesView = "changed" | "all";
 
 interface Group {
   dir: string;
-  files: FileDiff[];
+  paths: string[];
 }
 
 interface Props {
   repo: RepoInfo;
-  // the files the filter lets through
+  view: FilesView;
+  onView(view: FilesView): void;
   files: FileDiff[];
-  total: number;
+  changed: FileDiff[];
+  tree: Listing | null;
   active: string | null;
-  // search hits per file while searching
   hitCounts: ReadonlyMap<string, number> | null;
   fresh: { paths: ReadonlySet<string>; at: number } | null;
   filter: string;
   filterRef: RefObject<HTMLInputElement | null>;
   onFilter(filter: string): void;
-  // shown under the file list, like the commit box
   children?: ReactNode;
   onSelect(path: string): void;
   onSwitchRepo(): void;
 }
 
-export function Sidebar({ repo, files, total, active, hitCounts, fresh, filter, filterRef, onFilter, children, onSelect, onSwitchRepo }: Props) {
+export function Sidebar({
+  repo,
+  view,
+  onView,
+  files,
+  changed,
+  tree,
+  active,
+  hitCounts,
+  fresh,
+  filter,
+  filterRef,
+  onFilter,
+  children,
+  onSelect,
+  onSwitchRepo,
+}: Props) {
+  const byPath = useMemo(() => new Map(changed.map((f) => [f.path, f])), [changed]);
+  const ignored = useMemo(() => new Set(tree?.ignored), [tree]);
+  const allPaths = useMemo(() => {
+    if (!tree) return [];
+    const paths = new Set([...changed.map((f) => f.path), ...tree.files, ...tree.ignored.filter((p) => !p.endsWith("/"))]);
+    return orderPaths([...paths]);
+  }, [tree, changed]);
+  const matches = useMemo(() => (view === "all" && filter ? allPaths.filter((p) => fuzzyMatch(filter, p)) : null), [view, filter, allPaths]);
+  const listed = useMemo(() => (view === "changed" ? files.map((f) => f.path) : (matches ?? [])), [view, files, matches]);
+
   const groups = useMemo(() => {
     const out: Group[] = [];
-    for (const f of files) {
-      const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "";
+    for (const path of view === "all" ? listed.slice(0, MATCH_LIMIT) : listed) {
+      const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
       const last = out[out.length - 1];
-      if (last && last.dir === dir) last.files.push(f);
-      else out.push({ dir, files: [f] });
+      if (last && last.dir === dir) last.paths.push(path);
+      else out.push({ dir, paths: [path] });
     }
     return out;
-  }, [files]);
+  }, [view, listed]);
 
   const activeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
-  }, [active]);
+  }, [active, view]);
+
+  const list: ListState = { active, hitCounts, fresh, activeRef, onSelect };
+  const total = view === "changed" ? changed.length : allPaths.length;
+  const count = view === "all" && !tree ? "" : filter ? `${listed.length} of ${total}` : `${total} ${total === 1 ? "file" : "files"}`;
 
   return (
     <aside className="sidebar">
@@ -51,9 +84,15 @@ export function Sidebar({ repo, files, total, active, hitCounts, fresh, filter, 
           {repo.name}
           <small>{repo.branch ?? repo.head ?? "no commits"}</small>
         </button>
-        <span className="count">
-          {filter ? `${files.length} of ${total}` : `${total} ${total === 1 ? "file" : "files"}`}
-        </span>
+        <span className="count">{count}</span>
+      </div>
+      <div className="seg side-view" role="group" aria-label="Files shown">
+        <button aria-pressed={view === "changed"} onClick={() => onView("changed")}>
+          Changed
+        </button>
+        <button aria-pressed={view === "all"} onClick={() => onView("all")}>
+          All files<kbd>a</kbd>
+        </button>
       </div>
       <input
         ref={filterRef}
@@ -68,51 +107,26 @@ export function Sidebar({ repo, files, total, active, hitCounts, fresh, filter, 
             onFilter("");
             e.currentTarget.blur();
           } else if (e.key === "Enter") {
-            if (files[0]) onSelect(files[0].path);
+            if (listed[0]) onSelect(listed[0]);
             e.currentTarget.blur();
           }
         }}
       />
-      <nav className="files" aria-label="Changed files">
-        {groups.map((g) => (
-          <div className="group" key={g.dir}>
-            {g.dir && (
-              <div className="dir" title={g.dir}>
-                <bdi>{g.dir}</bdi>
+      <nav className="files" aria-label={view === "changed" ? "Changed files" : "All files"}>
+        {view === "all" && !filter
+          ? tree && <FileTree root={repo.root} listing={tree} changed={changed} list={list} />
+          : groups.map((g) => (
+              <div className="group" key={g.dir}>
+                {g.dir && (
+                  <div className="dir" title={g.dir}>
+                    <bdi>{g.dir}</bdi>
+                  </div>
+                )}
+                {g.paths.map((path) => fileRow(list, path, byPath.get(path), { ignored: ignored.has(path) }))}
               </div>
-            )}
-            {g.files.map((f) => {
-              const isFresh = !!fresh?.paths.has(f.path);
-              return (
-                <button
-                  // a new key restarts the flash when the same file changes again
-                  key={isFresh ? `${f.path}:${fresh!.at}` : f.path}
-                  ref={f.path === active ? activeRef : undefined}
-                  className={`file${f.path === active ? " is-active" : ""}${f.status === "deleted" ? " is-deleted" : ""}${hitCounts && !hitCounts.has(f.path) ? " no-hits" : ""}${isFresh ? " is-fresh" : ""}${f.noise ? " is-noise" : ""}`}
-                  aria-current={f.path === active}
-                  title={`${f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}${f.noise ? `\n${f.noise}, folded` : ""}`}
-                  onClick={() => onSelect(f.path)}
-                >
-                  {f.staged && <span className={`st st-${f.staged}`} title={STAGED[f.staged]} />}
-                  <span className="name">{f.path.split("/").pop()}</span>
-                  <span className="kind">{KIND[f.status]}</span>
-                  <span className="nums">
-                    {hitCounts?.has(f.path) && <span className="hit-count" title="Search hits">{hitCounts.get(f.path)}</span>}
-                    {f.binary ? (
-                      <span>bin</span>
-                    ) : (
-                      <>
-                        {f.additions > 0 && <span className="s-add">+{f.additions}</span>}
-                        {f.deletions > 0 && <span className="s-del">−{f.deletions}</span>}
-                      </>
-                    )}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        ))}
-        {filter && !files.length && <div className="no-match">No files match.</div>}
+            ))}
+        {view === "all" && listed.length > MATCH_LIMIT && <div className="no-match">{listed.length - MATCH_LIMIT} more. Narrow the filter to see them.</div>}
+        {filter && !listed.length && <div className="no-match">No files match.</div>}
       </nav>
       {children}
     </aside>

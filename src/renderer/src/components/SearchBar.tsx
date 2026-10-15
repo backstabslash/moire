@@ -27,8 +27,8 @@ export const SearchBar = forwardRef<HTMLInputElement, Props>(function SearchBar(
       : loading
         ? "Searching…"
         : total === 0
-        ? "No results"
-        : `${index + 1} of ${total}${total >= MAX_HITS ? "+" : ""}`;
+          ? "No results"
+          : `${index + 1} of ${total}${total >= MAX_HITS ? "+" : ""}`;
   return (
     <div className="search" role="search">
       <input

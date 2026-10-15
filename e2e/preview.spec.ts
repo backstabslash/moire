@@ -15,7 +15,6 @@ const errors: string[] = [];
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
 const shot = (name: string) => process.env.MOIRE_SHOTS && page.screenshot({ path: join(process.env.MOIRE_SHOTS, `${name}.png`) });
 
-// A solid-colour RGB PNG.
 function png(width: number, height: number, [r, g, b]: number[]) {
   const chunk = (type: string, data: Buffer) => {
     const out = Buffer.alloc(data.length + 12);
@@ -34,7 +33,8 @@ function png(width: number, height: number, [r, g, b]: number[]) {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header), chunk("IDAT", pixels), chunk("IEND", Buffer.alloc(0))]);
 }
 
-const svg = (fill: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="${fill}"/><script>alert(1)</script></svg>\n`;
+const svg = (fill: string) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="${fill}"/><script>alert(1)</script></svg>\n`;
 const planted = () => `moire://blob/?root=${outside}&side=worktree&path=x.png`;
 const plan = (step: string, tail: string) =>
   `# Plan\n\nIntro paragraph that stays.\n\n## Steps\n\n- read the code\n- ${step}\n- ship it\n\n![logo](img/logo.png) ![planted](${planted()})\n\n\`\`\`ts\nconst x = 1;\n\`\`\`\n\nOne.\n\nTwo.\n\nThree.\n${tail}`;
@@ -59,7 +59,10 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "plan.md"), plan("write the **e2e** test", ""));
   writeFileSync(join(repo, "a.ts"), "export const a = 2;\n");
 
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_PREFS: '{"theme":"dark"}' } });
+  app = await electron.launch({
+    args: [resolve("."), `--user-data-dir=${userData}`, repo],
+    env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_PREFS: '{"theme":"dark"}' },
+  });
   page = await app.firstWindow();
   page.on("pageerror", (e) => errors.push(e.message));
   await expect(page.locator(".file")).toHaveCount(4);
@@ -76,7 +79,8 @@ test.afterEach(() => {
   expect(errors).toEqual([]);
 });
 
-const loaded = (img: ReturnType<Page["locator"]>) => expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBeGreaterThan(0);
+const loaded = (img: ReturnType<Page["locator"]>) =>
+  expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth)).toBeGreaterThan(0);
 
 test("a changed PNG shows both versions with their size", async () => {
   await page.locator(".file", { hasText: "logo.png" }).click();
@@ -85,7 +89,6 @@ test("a changed PNG shows both versions with their size", async () => {
   await expect(page.locator(".img-side.a figcaption")).toHaveText(/^40 × 20, \d+ B$/);
   await expect(page.locator(".img-side.b figcaption")).toHaveText(/^60 × 30, \d+ B$/);
   await shot("preview-image-dark");
-  // rewritten again while open, it shows the new version rather than the cached one
   writeFileSync(join(repo, "img/logo.png"), png(80, 40, [10, 140, 160]));
   await expect(page.locator(".img-side.b figcaption")).toHaveText(/^80 × 40, \d+ B$/);
 });
@@ -128,7 +131,6 @@ test("Markdown renders with changed and removed blocks marked, and j walks to th
   await expect(page.locator(".md-bar.cut")).toHaveCount(1);
   await expect(page.locator(".md strong")).toHaveText("e2e");
   await loaded(page.locator(".md img"));
-  // an image link pointing outside the repo shows as its alt text, not an image
   await expect(page.locator(".md img")).toHaveCount(1);
   await expect(page.locator(".md .md-img-off")).toHaveText("planted");
   await shot("preview-markdown-dark");
@@ -137,7 +139,6 @@ test("Markdown renders with changed and removed blocks marked, and j walks to th
   await page.keyboard.press("t");
   await shot("preview-markdown-light");
   await page.keyboard.press("t");
-  // the preference sticks for the next Markdown file, and m returns to the diff
   await page.keyboard.press("m");
   await expect(page.locator(".md")).toHaveCount(0);
   await expect(page.locator(".cell.add")).toHaveCount(1);

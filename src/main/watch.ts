@@ -5,10 +5,9 @@ import { git, gitInput } from "./git";
 const QUIET_MS = 150;
 const MAX_WAIT_MS = 1000;
 const GIT_STATE = new Set(["index", "HEAD", "packed-refs"]);
-// macOS and Windows have cheap native recursive watching; Linux would add a watch for every directory, ignored ones included.
+// Linux has no cheap recursive watch: it would add a watch per directory, ignored ones included.
 const RECURSIVE = process.platform === "darwin" || process.platform === "win32";
 
-// Calls onChange once per burst of edits in the repo, skipping bursts that only touch gitignored files.
 export class RepoWatcher {
   private watchers = new Map<string, FSWatcher>();
   private gitDirs = new Set<string>();
@@ -24,10 +23,7 @@ export class RepoWatcher {
   ) {}
 
   async start(): Promise<void> {
-    const [gitDir, commonDir] = await Promise.all([
-      git(this.root, ["rev-parse", "--absolute-git-dir"]),
-      git(this.root, ["rev-parse", "--git-common-dir"]),
-    ]);
+    const [gitDir, commonDir] = await Promise.all([git(this.root, ["rev-parse", "--absolute-git-dir"]), git(this.root, ["rev-parse", "--git-common-dir"])]);
     const common = resolve(this.root, commonDir.trim());
     this.gitDirs = new Set([gitDir.trim(), common, join(common, "refs", "heads")]);
     await this.sync();
@@ -41,7 +37,6 @@ export class RepoWatcher {
     if (this.maxWait) clearTimeout(this.maxWait);
   }
 
-  // Re-run after every change so directories the agent created get watched too.
   private async sync() {
     const dirs = new Set(this.gitDirs);
     if (RECURSIVE) {
@@ -90,8 +85,8 @@ export class RepoWatcher {
       this.pending.add(relative(this.root, full));
     }
     if (this.quiet) clearTimeout(this.quiet);
-    this.quiet = setTimeout(() => this.flush(), QUIET_MS);
-    this.maxWait ??= setTimeout(() => this.flush(), MAX_WAIT_MS);
+    this.quiet = setTimeout(() => void this.flush(), QUIET_MS);
+    this.maxWait ??= setTimeout(() => void this.flush(), MAX_WAIT_MS);
   }
 
   private async flush() {

@@ -24,7 +24,7 @@ export function CommitBox({ message, busy, onMessage, onCommit }: Props) {
       />
       <button className="btn" disabled={!ready} onClick={onCommit}>
         Commit
-        <kbd>Ctrl+Enter</kbd>
+        <kbd>{window.moire.platform === "darwin" ? "⌘↵" : "Ctrl+Enter"}</kbd>
       </button>
     </div>
   );

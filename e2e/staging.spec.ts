@@ -52,7 +52,6 @@ test("selecting one line stages only that line, and u undoes it", async () => {
   await page.keyboard.press("s");
   await expect(page.locator(".toast.show")).toContainText("Staged 1 line in a.ts");
   await expect(page.locator(".ln.sel")).toHaveCount(0);
-  // the addition went in without its deletion, as git add -p would do it
   expect(git("show", ":a.ts")).toContain("export const v3 = 3;\nexport const v3 = 1 + 3;\n");
   await page.keyboard.press("u");
   await expect(page.locator(".toast.show")).toContainText("Undid: Staged 1 line in a.ts");
@@ -89,7 +88,15 @@ test("staging a whole file moves on to the next one, and the All view marks what
   await expect(page.locator(".file", { hasText: "a.ts" })).toBeVisible();
   await page.keyboard.press("s");
   await expect(page.locator(".toast.show")).toContainText("Unstaged 2 lines in a.ts");
+  const message = page.locator(".commit-box textarea");
+  await message.fill(Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n"));
+  await message.blur();
   await shot("staged-view");
+  await page.keyboard.press("t");
+  await shot("staged-view-dark");
+  await page.keyboard.press("t");
+  await message.fill("");
+  await message.blur();
 });
 
 test("Ctrl+C copies selected code, c copies it for an agent, and context alone can't be staged", async () => {

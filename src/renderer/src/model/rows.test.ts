@@ -11,7 +11,6 @@ function file(hunks: Hunk[], extra: Partial<FileDiff> = {}): FileDiff {
   return { path: "src/a.ts", status: "modified", binary: false, additions: 0, deletions: 0, hunks, ...extra };
 }
 
-// a 10-line file where line 5 changed
 const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`);
 const hunk: Hunk = {
   oldStart: 2,
@@ -67,7 +66,17 @@ describe("buildRows", () => {
   });
 
   it("handles a pure deletion at the end of a file", () => {
-    const del: Hunk = { oldStart: 9, oldLines: 2, newStart: 8, newLines: 0, header: "", lines: [{ kind: "del", text: "line 9", oldNo: 9 }, { kind: "del", text: "line 10", oldNo: 10 }] };
+    const del: Hunk = {
+      oldStart: 9,
+      oldLines: 2,
+      newStart: 8,
+      newLines: 0,
+      header: "",
+      lines: [
+        { kind: "del", text: "line 9", oldNo: 9 },
+        { kind: "del", text: "line 10", oldNo: 10 },
+      ],
+    };
     const rows = buildRows(file([del]), { a: oldText, b: lines.slice(0, 8).join("\n") + "\n", tooLarge: false }, opts);
     expect(kinds(rows)).toEqual(["fold8", "hunk", "split", "split"]);
   });
@@ -94,7 +103,10 @@ describe("align", () => {
   const side = (no: number, text: string) => ({ no, text });
 
   it("pairs a changed line with its edit, not with a comment inserted above it", () => {
-    const pairs = align([side(27, "max: get('MAX').default('600000'),")], [side(27, "// explain the new limit"), side(28, "max: get('MAX').default('86400000'),")]);
+    const pairs = align(
+      [side(27, "max: get('MAX').default('600000'),")],
+      [side(27, "// explain the new limit"), side(28, "max: get('MAX').default('86400000'),")],
+    );
     expect(pairs.map(([a, b]) => [a?.no, b?.no])).toEqual([
       [undefined, 27],
       [27, 28],
@@ -179,14 +191,86 @@ describe("noise folding", () => {
 
   it("folds whitespace-only hunks but not real changes", () => {
     const rows = buildRows(file([ws, hunk]), null, opts);
-    expect(rows.filter((r) => r.t === "fold" && r.label)).toEqual([expect.objectContaining({ key: "ws0", hunk: 0, label: "Whitespace-only changes" })]);
+    expect(rows.filter((r) => r.t === "hunk").map((r) => r.t === "hunk" && !!r.folded)).toEqual([true, false]);
     expect(buildRows(file([ws]), null, { ...opts, expanded: new Set(["ws0"]) }).some((r) => r.t === "split" && r.kind === "chg")).toBe(true);
     expect(buildRows(file([ws]), null, { ...opts, showAll: true }).some((r) => r.t === "split" && r.kind === "chg")).toBe(true);
+  });
+
+  it("doesn't fold spaces that join words, or reindents where indentation matters", () => {
+    const change = (del: string[], add: string[]): Hunk => ({
+      oldStart: 1,
+      oldLines: del.length,
+      newStart: 1,
+      newLines: add.length,
+      header: "",
+      lines: [...del.map((text, i) => ({ kind: "del" as const, text, oldNo: i + 1 })), ...add.map((text, i) => ({ kind: "add" as const, text, newNo: i + 1 }))],
+    });
+    const folded = (path: string, h: Hunk) => buildRows(file([h], { path }), null, opts).some((r) => r.t === "hunk" && !!r.folded);
+    const dedent = change(["if admin:", "    grant(user)"], ["if admin:", "grant(user)"]);
+    expect(folded("a.ts", change(['msg = "a b"'], ['msg = "ab"']))).toBe(false);
+    expect(folded("a.ts", change(["f(a,b)"], ["f(a, b)"]))).toBe(true);
+    expect(folded("a.ts", change(["f(a,", "  b)"], ["f(a, b)"]))).toBe(true);
+    expect(folded("a.ts", dedent)).toBe(true);
+    expect(folded("a.py", dedent)).toBe(false);
+    expect(folded("a.py", change(["x = 1  ", "y = 2"], ["x = 1", "", "y = 2"]))).toBe(true);
+  });
+
+  it("folds a whitespace-only hunk into one row with the unchanged lines around it", () => {
+    const text = { a: lines.join("\n") + "\n", b: lines.join("\n") + "\n", tooLarge: false };
+    const real: Hunk = {
+      oldStart: 6,
+      oldLines: 1,
+      newStart: 6,
+      newLines: 1,
+      header: "",
+      lines: [
+        { kind: "del", text: "line 6", oldNo: 6 },
+        { kind: "add", text: "line six", newNo: 6 },
+      ],
+    };
+    const rows = buildRows(file([ws, real]), text, opts);
+    expect(kinds(rows)).toEqual(["hunk", "hunk", "split", "fold4"]);
+    expect(rows[0]).toMatchObject({
+      hunk: 0,
+      folded: {
+        keys: ["gap0", "ws0", "gap1"],
+        count: 4,
+        gaps: [
+          [1, 1],
+          [3, 3],
+        ],
+      },
+    });
+    const open = buildRows(file([ws, real]), text, { ...opts, expanded: new Set(["gap0", "ws0", "gap1"]) });
+    expect(open.filter((r) => r.t === "hunk").map((r) => r.t === "hunk" && !!r.folded)).toEqual([false, false]);
   });
 
   it("fuzzy-matches paths", () => {
     expect(fuzzyMatch("stts", "src/main/stage.test.ts")).toBe(true);
     expect(fuzzyMatch("main stage", "src/main/stage.ts")).toBe(true);
     expect(fuzzyMatch("zz", "src/main/stage.ts")).toBe(false);
+  });
+});
+
+describe("unchanged files from the tree", () => {
+  const unchanged = file([], { status: "unchanged" });
+  const sides = { a: { kind: "index" as const, label: "Index" }, b: { kind: "worktree" as const, label: "Working tree" } };
+
+  it("shows every line unified, numbered on B, whatever the scope and layout", () => {
+    const rows = buildRows(unchanged, { a: null, b: newText, tooLarge: false }, opts);
+    expect(rows).toHaveLength(10);
+    expect(rows[4]).toMatchObject({ t: "uni", kind: "ctx", b: 5, line: { text: "line five", sel: "g5" } });
+  });
+
+  it("explains files it can't show", () => {
+    const note = (contents: { a: null; b: string | null; tooLarge: boolean }) => buildRows(unchanged, contents, opts).map((r) => r.t === "note" && r.text);
+    expect(note({ a: null, b: null, tooLarge: true })).toEqual(["Binary file or over 2 MB, contents not shown."]);
+    expect(note({ a: null, b: null, tooLarge: false })).toEqual(["Can't read this file."]);
+    expect(note({ a: null, b: "", tooLarge: false })).toEqual(["Empty file."]);
+  });
+
+  it("copies selected lines as plain code from the working tree", () => {
+    const text = copyMarkdown(unchanged, { a: null, b: newText, tooLarge: false }, new Set(), new Set(["g4", "g5"]), sides).text;
+    expect(text).toBe("src/a.ts lines 4–5 (working tree)\n```typescript\nline 4\nline five\n```\n");
   });
 });

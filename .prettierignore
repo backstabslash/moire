@@ -1,0 +1,7 @@
+out
+dist
+test-results
+playwright-report
+pnpm-lock.yaml
+design
+*.md

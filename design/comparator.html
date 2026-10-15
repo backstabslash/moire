@@ -12,9 +12,6 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans-condensed/500.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans-condensed/600.css">
 <style>
-/* Comparator: a blink comparator for code. Plate A (red) vs plate B (cyan), anaglyph colours,
-   near-monochrome syntax so the change colours carry the signal. Moire lives in the logo,
-   the empty state and the live indicator, never behind code. */
 :root {
   --plate: #f4f5f2;
   --frame: #e6e9e6;
@@ -49,7 +46,6 @@ kbd { font: 400 11px/1 var(--code); color: var(--faint); margin-left: 6px; }
 
 .app { display: grid; grid-template-columns: 240px 1fr; grid-template-rows: 52px 1fr 30px; height: 100vh; }
 
-/* toolbar */
 .toolbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; padding: 0 16px; background: var(--frame); border-bottom: 1px solid var(--rule); }
 .brand { display: flex; align-items: center; gap: 10px; width: 208px; font: 500 17px/1 var(--ui); letter-spacing: .01em; }
 .brand svg { width: 26px; height: 26px; }
@@ -75,7 +71,6 @@ kbd { font: 400 11px/1 var(--code); color: var(--faint); margin-left: 6px; }
 .icon-btn { width: 32px; height: 32px; display: grid; place-items: center; color: var(--graphite); border-radius: 3px; }
 .icon-btn:hover { background: var(--frame-2); }
 
-/* sidebar */
 .sidebar { background: var(--frame); border-right: 1px solid var(--rule); overflow: auto; padding: 14px 0; }
 .side-head { display: flex; justify-content: space-between; align-items: baseline; padding: 0 16px 12px; font-weight: 500; }
 .side-head span:last-child { font: 400 12px var(--code); color: var(--graphite); }
@@ -93,7 +88,6 @@ kbd { font: 400 11px/1 var(--code); color: var(--faint); margin-left: 6px; }
 .st-part { background: linear-gradient(135deg, var(--ink) 50%, transparent 50%); border-color: var(--ink); }
 .file.is-live .name { color: var(--b-ink); }
 
-/* main */
 .main { display: grid; grid-template-rows: auto 1fr; min-width: 0; min-height: 0; position: relative; }
 .panes-head { display: grid; grid-template-columns: 1fr 1fr 72px; border-bottom: 1px solid var(--rule); background: var(--plate); }
 .pane-h { position: relative; display: flex; align-items: center; gap: 10px; padding: 12px 18px 11px; min-width: 0; }
@@ -109,7 +103,6 @@ kbd { font: 400 11px/1 var(--code); color: var(--faint); margin-left: 6px; }
 [data-layout="unified"] .pane-h.a b::after { content: " + B"; }
 .scroller { overflow: auto; min-height: 0; display: grid; grid-template-columns: 1fr 72px; }
 
-/* diff */
 #diff { font: 500 15px/1.4 var(--code); font-variant-ligatures: none; padding: 0 0 120px; min-width: 0; }
 .row { display: grid; }
 .row.split { grid-template-columns: 3.4em 1fr 3.4em 1fr; }
@@ -145,7 +138,6 @@ kbd { font: 400 11px/1 var(--code); color: var(--faint); margin-left: 6px; }
 .hunk.is-focus .hh-stage kbd { color: color-mix(in srgb, var(--plate) 70%, transparent); }
 .hunk.is-staged .hunk-rows { filter: saturate(.25); opacity: .7; }
 
-/* collapsed context, drawn like a section break on a technical drawing */
 .fold { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 28px; color: var(--graphite); font: 500 12.5px var(--ui); border-top: 1px solid var(--rule);
   background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--rule) 55%, transparent) 5px 6px); }
 .fold span { background: var(--plate); padding: 2px 10px; }
@@ -154,11 +146,9 @@ kbd { font: 400 11px/1 var(--code); color: var(--faint); margin-left: 6px; }
 [data-scope="full"] .fold { display: none; }
 [data-scope="full"] .fold-rows { display: block; }
 
-/* two-channel minimap: A on the left, B on the right */
 .minimap { position: sticky; top: 0; height: calc(100vh - 52px - 30px - 50px); border-left: 1px solid var(--rule); background: var(--plate); }
 .minimap svg { width: 100%; height: 100%; display: block; }
 
-/* status */
 .status { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; padding: 0 16px; border-top: 1px solid var(--rule); background: var(--frame); color: var(--graphite); font-size: 12.5px; }
 .status .live { display: flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 500; }
 .status .live svg { width: 16px; height: 16px; }
@@ -166,7 +156,6 @@ kbd { font: 400 11px/1 var(--code); color: var(--faint); margin-left: 6px; }
 .status .keys { margin-left: auto; display: flex; gap: 16px; }
 .status .link { text-decoration: underline; text-underline-offset: 3px; color: var(--graphite); }
 
-/* empty state */
 .empty-state { position: absolute; inset: 0; background: var(--plate); display: none; place-items: center; z-index: 5; }
 [data-empty="on"] .empty-state { display: grid; }
 .empty-inner { display: grid; grid-template-columns: 320px 340px; gap: 48px; align-items: center; }
@@ -199,7 +188,6 @@ kbd { font: 400 11px/1 var(--code); color: var(--faint); margin-left: 6px; }
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
     <clipPath id="disc"><circle cx="12" cy="12" r="11"/></clipPath>
-    <!-- two gratings, the second rotated 9 degrees: the interference bands are the mark -->
     <symbol id="mark" viewBox="0 0 24 24">
       <g clip-path="url(#disc)" stroke-width="1.1">
         <g stroke="var(--a)"><path id="grating" d="M-6 1.5h36M-6 4.5h36M-6 7.5h36M-6 10.5h36M-6 13.5h36M-6 16.5h36M-6 19.5h36M-6 22.5h36"/></g>
@@ -312,7 +300,6 @@ window.MOIRE = {
     svg.innerHTML = s;
   }
 };
-// Fake diff of src/sync/watcher.ts plus a tiny renderer shared by all three mockups.
 const SRC = [
 ['=', 'import { watch, type FSWatcher } from "node:fs";'],
 ['=', 'import { relative } from "node:path";'],
@@ -448,7 +435,6 @@ function codeHTML(raw) {
   for (const [a, b, k] of ranges) for (let i = a; i < b; i++) w[i] = k;
   let html = '', i = 0;
   while (i < text.length) {
-    // group word-change runs as an outer span so the highlight is one continuous shape
     if (w[i]) {
       const k = w[i]; let j = i; while (j < text.length && w[j] === k) j++;
       html += `<span class="${k}">${inner(i, j)}</span>`; i = j;
@@ -465,7 +451,6 @@ function codeHTML(raw) {
   }
 }
 
-// rows: {type:'ctx'|'chg', o:{num,text}|null, n:{num,text}|null}
 function buildRows() {
   const rows = []; let o = 0, n = 0, i = 0;
   while (i < SRC.length) {
@@ -510,7 +495,6 @@ function buildHunks() {
 const PARTS = buildHunks();
 const HUNKS = PARTS.filter(p => p.kind === 'hunk');
 
-// Per-direction hooks may override these.
 const MOIRE = window.MOIRE || {};
 const STATE = { staged: new Set(MOIRE.staged || [1]), focus: MOIRE.focus ?? 2, selected: new Set(MOIRE.selected || ['h3:n70']) };
 
@@ -568,7 +552,6 @@ function renderDiff(root) {
   if (MOIRE.afterRender) MOIRE.afterRender();
 }
 
-// Full-file line model for minimaps: one entry per unified line.
 function miniLines() {
   const out = [];
   for (const p of PARTS) for (const r of p.rows) {

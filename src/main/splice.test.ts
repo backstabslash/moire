@@ -5,7 +5,6 @@ import { splice, StaleError } from "./splice";
 const all = () => true;
 const none = () => false;
 
-// a\nb\nc\n → a\nB\nc\nd\n
 const hunk: Hunk = {
   oldStart: 1,
   oldLines: 3,

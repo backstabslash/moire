@@ -1,9 +1,5 @@
 export type CompareMode =
-  | { kind: "unstaged" }
-  | { kind: "staged" }
-  | { kind: "all" }
-  | { kind: "commit"; sha: string }
-  | { kind: "branches"; base: string; head: string };
+  { kind: "unstaged" } | { kind: "staged" } | { kind: "all" } | { kind: "commit"; sha: string } | { kind: "branches"; base: string; head: string };
 
 export interface SideInfo {
   kind: "commit" | "index" | "worktree" | "empty";
@@ -18,7 +14,7 @@ export interface RepoInfo {
   head: string | null;
 }
 
-export type FileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted";
+export type FileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted" | "unchanged";
 
 export interface DiffLine {
   kind: "ctx" | "add" | "del";
@@ -43,13 +39,10 @@ export interface FileDiff {
   oldPath?: string;
   status: FileStatus;
   binary: boolean;
-  // for binary files, the blob ids or file stamp of each side, so a rewrite changes the file's key
   blobs?: string;
   tooLarge?: boolean;
-  // an untracked file past the read limit, so its contents weren't loaded (tooLarge is set too)
   unread?: boolean;
   staged?: "full" | "partial" | "none";
-  // why the file is folded away by default: "Lockfile", "Snapshot" or "Generated file"
   noise?: string;
   additions: number;
   deletions: number;
@@ -61,6 +54,11 @@ export interface DiffResult {
   a: SideInfo;
   b: SideInfo;
   files: FileDiff[];
+}
+
+export interface FileTree {
+  files: string[];
+  ignored: string[];
 }
 
 export interface FileContents {
@@ -79,7 +77,6 @@ export interface CommitInfo {
 
 export type StageAction = "stage" | "unstage" | "discard";
 
-// A changed line, by its index in hunk.lines.
 export interface LineRef {
   hunk: number;
   line: number;
@@ -88,7 +85,6 @@ export interface LineRef {
 export interface StageRequest {
   mode: "unstaged" | "staged";
   action: StageAction;
-  // The file's diff as the user saw it; the action is refused if it no longer matches.
   file: FileDiff;
   lines: LineRef[] | null;
 }

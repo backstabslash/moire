@@ -40,7 +40,6 @@ describe("resolveRelative", () => {
   });
 });
 
-// old: "# Title\n\nkeep\n\ngone\n\nedit me\n"  new: "# Title\n\nkeep\n\nedited\n\n- one\n- two\n"
 const hunk: Hunk = {
   oldStart: 3,
   oldLines: 4,
@@ -70,18 +69,24 @@ describe("renderMarkdown", () => {
     expect(html).toContain('<h1 data-from="1" data-to="1">Title</h1>');
     expect(html).toContain('<p data-from="3" data-to="3">keep</p>');
     expect(html).toContain('<p data-from="5" data-to="5" class="md-chg" data-hunks="0">edited</p>');
-    // tight list paragraphs are kept so each item can be marked
     expect(html).toContain('<li>\n<p class="tight md-chg" data-from="7" data-to="7" data-hunks="0">one</p>\n</li>');
   });
 
   it("marks a removed block on the block that follows it", () => {
-    const cut: Hunk = { oldStart: 1, oldLines: 5, newStart: 1, newLines: 3, header: "", lines: [
-      { kind: "ctx", text: "a", oldNo: 1, newNo: 1 },
-      { kind: "ctx", text: "", oldNo: 2, newNo: 2 },
-      { kind: "del", text: "gone", oldNo: 3 },
-      { kind: "del", text: "", oldNo: 4 },
-      { kind: "ctx", text: "b", oldNo: 5, newNo: 3 },
-    ] };
+    const cut: Hunk = {
+      oldStart: 1,
+      oldLines: 5,
+      newStart: 1,
+      newLines: 3,
+      header: "",
+      lines: [
+        { kind: "ctx", text: "a", oldNo: 1, newNo: 1 },
+        { kind: "ctx", text: "", oldNo: 2, newNo: 2 },
+        { kind: "del", text: "gone", oldNo: 3 },
+        { kind: "del", text: "", oldNo: 4 },
+        { kind: "ctx", text: "b", oldNo: 5, newNo: 3 },
+      ],
+    };
     const html = renderMarkdown("a\n\nb\n", changeMarks(file("x.md", { hunks: [cut] })), () => null);
     expect(html).toContain('<p data-from="1" data-to="1">a</p>');
     expect(html).toContain('<p data-from="3" data-to="3" class="md-cut" data-hunks="0">b</p>');
@@ -105,7 +110,6 @@ describe("renderMarkdown", () => {
   });
 
   it("marks an edited line no block renders on the block before it", () => {
-    // a link definition: markdown-it consumes it without a block
     const ref: Hunk = {
       oldStart: 1,
       oldLines: 3,

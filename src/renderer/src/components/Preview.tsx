@@ -69,7 +69,6 @@ interface MarkdownProps {
   root: string;
   file: FileDiff;
   rows: Row[];
-  // the side being shown, B unless the file was deleted
   side: SideInfo;
   text: string | null;
   version: string;
@@ -86,14 +85,13 @@ interface Bar {
 
 const CUT_GAP = 6;
 
-// The file rendered, with a bar beside each block the diff touched. A new or deleted file has no bars.
 export const MarkdownPreview = forwardRef<DiffViewHandle, MarkdownProps>(function MarkdownPreview(props, ref) {
   const { root, file, rows, side, text, version, focusHunk, onFocusHunk } = props;
   const scrollRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLElement>(null);
   const [bars, setBars] = useState<Bar[]>([]);
   const path = file.status === "deleted" ? (file.oldPath ?? file.path) : file.path;
-  const whole = file.status === "added" || file.status === "untracked" || file.status === "deleted";
+  const whole = file.status === "added" || file.status === "untracked" || file.status === "deleted" || file.status === "unchanged";
   const html = useMemo(() => {
     if (text === null) return "";
     return renderMarkdown(text, whole ? null : changeMarks(file), (src) => {
@@ -102,7 +100,6 @@ export const MarkdownPreview = forwardRef<DiffViewHandle, MarkdownProps>(functio
     });
   }, [text, file, root, side.kind, side.rev, version]);
 
-  // Bars sit in one gutter, measured from the blocks, so nested lists and quotes don't push them into the text.
   useLayoutEffect(() => {
     const article = articleRef.current;
     if (!article) return;
@@ -132,7 +129,8 @@ export const MarkdownPreview = forwardRef<DiffViewHandle, MarkdownProps>(functio
       if (!box || !row) return;
       let el = row.t === "hunk" ? box.querySelector(`[data-hunks~="${row.hunk}"]`) : null;
       if (!el) {
-        const line = row.t === "hunk" ? file.hunks[row.hunk]?.newStart : row.t === "split" ? (row.b?.no ?? row.a?.no) : row.t === "uni" ? (row.b ?? row.a) : undefined;
+        const line =
+          row.t === "hunk" ? file.hunks[row.hunk]?.newStart : row.t === "split" ? (row.b?.no ?? row.a?.no) : row.t === "uni" ? (row.b ?? row.a) : undefined;
         if (line === undefined) return;
         el = [...box.querySelectorAll<HTMLElement>("[data-from]")].find((e) => Number(e.dataset.to) >= line) ?? null;
       }
@@ -153,7 +151,11 @@ export const MarkdownPreview = forwardRef<DiffViewHandle, MarkdownProps>(functio
     <div className="scroller md-scroller" ref={scrollRef}>
       <div className="md-page">
         {bars.map((bar, i) => (
-          <i key={i} className={`md-bar ${bar.kind}${bar.hunks.includes(focusHunk) ? " is-focus" : ""}`} style={{ top: bar.top, height: bar.height || undefined }} />
+          <i
+            key={i}
+            className={`md-bar ${bar.kind}${bar.hunks.includes(focusHunk) ? " is-focus" : ""}`}
+            style={{ top: bar.top, height: bar.height || undefined }}
+          />
         ))}
         <article className="md" ref={articleRef} onClick={click} dangerouslySetInnerHTML={{ __html: html }} />
       </div>

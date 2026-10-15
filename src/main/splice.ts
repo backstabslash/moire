@@ -6,18 +6,15 @@ export class StaleError extends Error {
   }
 }
 
-// Lines keep their "\n" so a missing newline at end of file survives the round trip.
 function splitKeep(text: string): string[] {
   return text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 }
 
-// Applies the selected changes of an A→B diff to A (toward "b"), or reverts them from B (toward "a").
 export function splice(base: string, hunks: Hunk[], selected: (hunk: number, line: number) => boolean, toward: "a" | "b"): string {
   const src = splitKeep(base);
   const own = toward === "b" ? "del" : "add";
   const out: string[] = [];
   const push = (line: string) => {
-    // A line that lost its place at end of file needs its newline back.
     if (out.length && !out[out.length - 1].endsWith("\n")) out[out.length - 1] += "\n";
     out.push(line);
   };

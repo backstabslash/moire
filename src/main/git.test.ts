@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CompareMode, FileDiff } from "../shared/types";
-import { branches, commits, diff, fileContents, manyContents, repoInfo, UNTRACKED_READ_LIMIT } from "./git";
+import { branches, commits, diff, fileContents, listDir, manyContents, repoInfo, tree, UNTRACKED_READ_LIMIT } from "./git";
 import { dirs, makeRepo } from "./test-repo";
 
 const paths = (files: FileDiff[]) => files.map((f) => `${f.status}:${f.path}`);
@@ -265,9 +265,7 @@ describe("conflicts and limits", () => {
     r.commit("m");
     try {
       r.git("merge", "-q", "f");
-    } catch {
-      // the conflict is the point
-    }
+    } catch {}
     r.write("other.txt", "y\n");
     expect(paths((await diff(r.root, { kind: "unstaged" })).files).sort()).toEqual(["conflicted:z.txt", "modified:other.txt"]);
     expect(paths((await diff(r.root, { kind: "staged" })).files)).toEqual(["conflicted:z.txt"]);
@@ -329,5 +327,46 @@ describe("binary rewrites", () => {
     expect(first.binary).toBe(true);
     expect(first.blobs).toMatch(/^[0-9a-f]+\.\.[0-9a-f]+$/);
     expect(second.blobs).not.toBe(first.blobs);
+  });
+});
+
+describe("file tree", () => {
+  const r = makeRepo();
+  r.write(".gitignore", "IDEAS.md\nout/\n");
+  r.write("src/a.ts", "a\n");
+  r.write("gone.txt", "bye\n");
+  const first = r.commit("init");
+  r.write("src/b.ts", "b\n");
+  r.git("add", "src/b.ts");
+  r.write("new.txt", "new\n");
+  r.write("IDEAS.md", "# ideas\n");
+  r.write("out/deep/x.js", "x\n");
+  unlinkSync(join(r.root, "gone.txt"));
+
+  it("lists the working tree with ignored files, and an ignored folder as one entry", async () => {
+    const t = await tree(r.root, { kind: "unstaged" });
+    expect(t.files.sort()).toEqual([".gitignore", "gone.txt", "new.txt", "src/a.ts", "src/b.ts"]);
+    expect(t.ignored.sort()).toEqual(["IDEAS.md", "out/"]);
+  });
+
+  it("lists the index in the staged view and the commit in the commit view", async () => {
+    expect((await tree(r.root, { kind: "staged" })).files.sort()).toEqual([".gitignore", "gone.txt", "src/a.ts", "src/b.ts"]);
+    expect(await tree(r.root, { kind: "commit", sha: first })).toEqual({ files: [".gitignore", "gone.txt", "src/a.ts"], ignored: [] });
+  });
+
+  it("reads an unchanged file from side B only", async () => {
+    expect(await fileContents(r.root, { kind: "unstaged" }, { path: "IDEAS.md", status: "unchanged" })).toEqual({ a: null, b: "# ideas\n", tooLarge: false });
+    expect(await fileContents(r.root, { kind: "commit", sha: first }, { path: "src/a.ts", status: "unchanged" })).toEqual({
+      a: null,
+      b: "a\n",
+      tooLarge: false,
+    });
+  });
+
+  it("lists an ignored folder's entries, and nothing outside the repo", async () => {
+    expect(await listDir(r.root, "out/")).toEqual(["out/deep/"]);
+    expect(await listDir(r.root, "out/deep/")).toEqual(["out/deep/x.js"]);
+    expect(await listDir(r.root, "../")).toEqual([]);
+    expect(await listDir(r.root, "/etc/")).toEqual([]);
   });
 });

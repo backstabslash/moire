@@ -10,12 +10,16 @@
   "license": "MIT",
   "homepage": "https://github.com/backstabslash/moire",
   "main": "out/main/index.js",
+  "packageManager": "pnpm@12.11.2",
   "desktopName": "moire.desktop",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.e2e.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "vitest run src",
     "test:e2e": "electron-vite build && playwright test",
     "dist": "electron-vite build && electron-builder"
@@ -34,11 +38,15 @@
     "electron": "^44.7.1",
     "electron-builder": "^26.15.3",
     "electron-vite": "^6.0.0",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "markdown-it": "^15.0.2",
+    "prettier": "^3.9.10",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "shiki": "^4.5.0",
     "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.2",
     "vite": "^8.0.16",
     "vitest": "^5.0.4"
   }

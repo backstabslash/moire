@@ -1,6 +1,6 @@
 import type { FileContents, FileDiff, SideInfo } from "../../../shared/types";
 import { langFor } from "./lang";
-import { buildRows } from "./rows";
+import { buildRows, type Row } from "./rows";
 
 interface Picked {
   kind: "ctx" | "add" | "del";
@@ -9,7 +9,8 @@ interface Picked {
   text: string;
 }
 
-// Selected lines in file order, split into runs at unselected unchanged lines; deletions come before their replacements, as in unified view.
+const unselectedChange = (row: Row) => row.t === "uni" && row.kind !== "ctx";
+
 function runs(file: FileDiff, contents: FileContents | null, expanded: ReadonlySet<string>, selection: ReadonlySet<string>): Picked[][] {
   const out: Picked[][] = [];
   let run: Picked[] | null = null;
@@ -17,8 +18,7 @@ function runs(file: FileDiff, contents: FileContents | null, expanded: ReadonlyS
     if (row.t === "uni" && row.line.sel && selection.has(row.line.sel)) {
       if (!run) out.push((run = []));
       run.push({ kind: row.kind, a: row.a, b: row.b, text: row.line.text });
-    } else if (row.t !== "hunk" && !(row.t === "uni" && row.kind !== "ctx")) {
-      // An unselected change is a line from the other side, so it doesn't split a run.
+    } else if (row.t !== "hunk" && !unselectedChange(row)) {
       run = null;
     }
   }

@@ -24,11 +24,20 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
   git("add", "-A");
   git("commit", "-qm", "init");
-  // a two-line change with one line added, so the plates differ in length, then a second hunk further down
-  const changed = [...body.slice(0, 5), "export const v5 = 50; // value 5", "export const extra = true;", ...body.slice(6, 30), "export const v30 = 300;", ...body.slice(31)];
+  const changed = [
+    ...body.slice(0, 5),
+    "export const v5 = 50; // value 5",
+    "export const extra = true;",
+    ...body.slice(6, 30),
+    "export const v30 = 300;",
+    ...body.slice(31),
+  ];
   writeFileSync(join(repo, "a.ts"), changed.join("\n") + "\n");
 
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_PREFS: '{"theme":"light"}' } });
+  app = await electron.launch({
+    args: [resolve("."), `--user-data-dir=${userData}`, repo],
+    env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_PREFS: '{"theme":"light"}' },
+  });
   page = await app.firstWindow();
   page.on("pageerror", (e) => errors.push(e.message));
   await expect(page.locator(".hunk-head")).toHaveCount(2);
@@ -73,7 +82,14 @@ test("t swaps between the last light and the last dark theme", async () => {
   await expect(html()).toHaveAttribute("data-theme", "safelight");
   await page.keyboard.press("t");
   await expect(html()).toHaveAttribute("data-theme", "pad");
-  for (const [name, id] of [[/^Plate Glass/, "light"], [/^Plate dark/, "dark"], [/Engineering/, "pad"], [/P7/, "p7"], [/Safelight/, "safelight"], [/Cyanotype/, "cyanotype"]] as const) {
+  for (const [name, id] of [
+    [/^Plate Glass/, "light"],
+    [/^Plate dark/, "dark"],
+    [/Engineering/, "pad"],
+    [/P7/, "p7"],
+    [/Safelight/, "safelight"],
+    [/Cyanotype/, "cyanotype"],
+  ] as const) {
     await pick(name);
     await expect(html()).toHaveAttribute("data-theme", id);
     await shot(`theme-${id}`);
@@ -92,7 +108,6 @@ test("holding b shows plate A in place, and letting go shows plate B", async () 
   await page.keyboard.up("b");
   await expect(page.locator(".main")).toHaveAttribute("data-plate", "b");
   await shot("blink-b");
-  // both plates share each row, so nothing below the hunk moves when they flip
   expect((await next.boundingBox())!.y).toBe(held);
   expect(held).toBeGreaterThanOrEqual(before);
   await page.keyboard.press("Escape");
@@ -108,7 +123,6 @@ test("the Blink button flips the plates on its own until stopped", async () => {
   await expect(page.locator(".main")).toHaveAttribute("data-plate", "b", { timeout: 2000 });
   await page.locator(".hunk-head").first().getByRole("button", { name: "Stop blink" }).click();
   await expect(page.locator(".row.plate")).toHaveCount(0);
-  // a clicked button hands focus back, so shortcuts don't press it again
   expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("BODY");
   await page.keyboard.press("Shift+B");
   await expect(page.locator(".row.plate").first()).toBeVisible();

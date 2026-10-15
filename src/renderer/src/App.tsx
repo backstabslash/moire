@@ -5,7 +5,7 @@ import { type Blink, DiffView, type DiffViewHandle, type Preview } from "./compo
 import { NoChanges, NoRepo } from "./components/EmptyState";
 import { RepoPicker } from "./components/RepoPicker";
 import { SearchBar } from "./components/SearchBar";
-import { Sidebar } from "./components/Sidebar";
+import { type FilesView, Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { DARK_IDS, LIGHT_IDS, THEME_IDS, type ThemeId, toneOf } from "./components/ThemePicker";
 import { Toast, type ToastMsg } from "./components/Toast";
@@ -22,11 +22,11 @@ import type { Hit } from "./model/search";
 import { useSearch } from "./useSearch";
 import { useSelection } from "./useSelection";
 import { useStored } from "./useStored";
+import { useTree } from "./useTree";
 
 type SimpleMode = "unstaged" | "staged" | "all";
 
 const CACHE_LIMIT = 24;
-// one plate every 0.65 s stays well under three flashes a second
 const BLINK_MS = 650;
 
 function message(err: unknown) {
@@ -39,12 +39,11 @@ export function App() {
   const [booting, setBooting] = useState(true);
   const [simpleMode, setSimpleMode] = useStored<SimpleMode>("mode", "unstaged", ["unstaged", "staged", "all"]);
   const [special, setSpecial] = useState<CompareMode | null>(null);
-  const mode: CompareMode = special ?? { kind: simpleMode };
+  const mode = useMemo<CompareMode>(() => special ?? { kind: simpleMode }, [special, simpleMode]);
   const [layout, setLayout] = useStored<Layout>("layout", "split", ["split", "unified"]);
   const [scope, setScope] = useStored<Scope>("scope", "changed", ["changed", "full"]);
   const [previewPref, setPreviewPref] = useStored<"on" | "off">("preview", "off", ["on", "off"]);
   const [theme, setTheme] = useStored<ThemeId>("theme", matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light", THEME_IDS);
-  // t swaps between the last light and the last dark theme used
   const [lightTheme, setLightTheme] = useStored<ThemeId>("theme-light", "light", LIGHT_IDS);
   const [darkTheme, setDarkTheme] = useStored<ThemeId>("theme-dark", "dark", DARK_IDS);
   const [cvd, setCvd] = useStored<"on" | "off">("cvd", "off", ["on", "off"]);
@@ -67,13 +66,10 @@ export function App() {
   const [toast, setToast] = useState<ToastMsg | null>(null);
   const loadedView = useRef<string | null>(null);
   const shownFiles = useRef<string[]>([]);
-  // Files whose diff changed in the last refresh, flashed in the sidebar.
   const [fresh, setFresh] = useState<{ paths: ReadonlySet<string>; at: number } | null>(null);
   const loadedKeys = useRef(new Map<string, string>());
-  // Set from an action until the diff reloads, so a quick second keypress can't act on the old diff.
   const acting = useRef(false);
   const [busy, setBusy] = useState(false);
-  // Only the reload that starts after an action has finished may clear the flag.
   const settleAt = useRef(Infinity);
   const setActing = useCallback((on: boolean) => {
     acting.current = on;
@@ -89,7 +85,26 @@ export function App() {
   const tokenCache = useRef(new Map<string, [TokLines | null, TokLines | null]>());
 
   const modeKey = JSON.stringify(mode);
-  const file = diff?.files.find((f) => f.path === active) ?? null;
+  const [filesView, setFilesView] = useStored<FilesView>("files", "changed", ["changed", "all"]);
+  const browsing = useRef(filesView === "all");
+  browsing.current = filesView === "all";
+  const tree = useTree(repo, mode, modeKey, refreshTick, filesView === "all", (e) => setError(message(e)));
+  const [browsed, setBrowsed] = useState<{ path: string; modeKey: string; data: FileContents } | null>(null);
+  const browsedFile = useMemo(
+    (): FileDiff | null =>
+      browsed && {
+        path: browsed.path,
+        status: "unchanged",
+        binary: false,
+        blobs: hashString(JSON.stringify(browsed.data)),
+        additions: 0,
+        deletions: 0,
+        hunks: [],
+      },
+    [browsed],
+  );
+  const changedFile = diff?.files.find((f) => f.path === active) ?? null;
+  const file = changedFile ?? (browsedFile && browsedFile.path === active && browsed!.modeKey === modeKey ? browsedFile : null);
   const fileKey = useMemo(() => (file ? fileKeyOf(modeKey, file) : null), [file, modeKey]);
 
   useLayoutEffect(() => {
@@ -99,16 +114,15 @@ export function App() {
     (toneOf(theme) === "dark" ? setDarkTheme : setLightTheme)(theme);
     root.dataset.cvd = cvd;
     const css = getComputedStyle(root);
-    window.moire.setTheme(css.getPropertyValue("--frame").trim(), css.getPropertyValue("--graphite").trim());
+    void window.moire.setTheme(css.getPropertyValue("--frame").trim(), css.getPropertyValue("--graphite").trim());
   }, [theme, cvd, setDarkTheme, setLightTheme]);
 
   useEffect(() => {
     document.documentElement.dataset.layout = layout;
   }, [layout]);
 
-  // Zoom keys are handled in the main process; a change shows its level for a moment.
   useEffect(() => {
-    window.moire.zoom().then(setZoom);
+    void window.moire.zoom().then(setZoom);
     const mod = window.moire.platform === "darwin" ? "Cmd" : "Ctrl";
     return window.moire.onZoom((factor) => {
       setZoom(factor);
@@ -141,7 +155,6 @@ export function App() {
     window.moire.diff(repo.root, mode).then(
       async (result) => {
         if (stale) return;
-        // Load the open file's new contents before showing its new diff, so the view updates in one step instead of flashing folded.
         const open = result.files.find((f) => f.path === activeRef.current);
         const openKey = open && fileKeyOf(modeKey, open);
         if (open && openKey && !open.binary && !open.tooLarge && !contentCache.current.has(openKey)) {
@@ -167,8 +180,8 @@ export function App() {
         setActive((cur) => {
           const kept = [cur, wanted].find(has);
           if (kept || !sameView) return kept ?? ordered[0]?.path ?? null;
-          // The open file was staged or discarded away: move on to the next one, not back to the top.
           const prev = shownFiles.current;
+          if (cur && browsing.current && !prev.includes(cur)) return cur;
           return prev.slice(prev.indexOf(cur!) + 1).find(has) ?? ordered.at(-1)?.path ?? null;
         });
       },
@@ -180,7 +193,6 @@ export function App() {
     return () => {
       stale = true;
     };
-    // modeKey stands in for mode, which is a fresh object every render
   }, [repo, modeKey, refreshTick]);
 
   useEffect(() => {
@@ -189,8 +201,6 @@ export function App() {
     setBlink(null);
   }, [active, modeKey]);
 
-  // A refresh can add or remove hunks above the focused one, so focus follows its hunk rather than its position;
-  // otherwise s or x would act on whichever hunk slid into that slot.
   const focused = useRef<{ path: string; hunk: Hunk } | null>(null);
   useEffect(() => {
     const prev = focused.current;
@@ -205,7 +215,6 @@ export function App() {
     focused.current = file && hunk ? { path: file.path, hunk } : null;
   }, [file, focusHunk]);
 
-  // Blinking follows the focused hunk: moving focus elsewhere stops it.
   useEffect(() => {
     setBlink((b) => (b && b.hunk === focusHunk ? b : null));
   }, [focusHunk]);
@@ -216,9 +225,22 @@ export function App() {
     return () => clearInterval(timer);
   }, [blink?.auto, blink?.hunk]);
 
+  const inDiff = !!changedFile;
+  useEffect(() => {
+    if (!repo || !active || !diff || inDiff || filesView !== "all") return;
+    let stale = false;
+    window.moire.fileContents(repo.root, mode, { path: active, status: "unchanged" }).then(
+      (data) => !stale && setBrowsed({ path: active, modeKey, data }),
+      (e) => !stale && setError(message(e)),
+    );
+    return () => {
+      stale = true;
+    };
+  }, [repo, active, modeKey, refreshTick, !!diff, inDiff, filesView]);
+
   useEffect(() => {
     if (!repo || !file || !fileKey || file.binary || file.tooLarge) return;
-    const cached = contentCache.current.get(fileKey);
+    const cached = contentCache.current.get(fileKey) ?? (file === browsedFile ? browsed!.data : undefined);
     if (cached) {
       setContents({ key: fileKey, data: cached });
       return;
@@ -236,7 +258,8 @@ export function App() {
     };
   }, [fileKey]);
 
-  const fileContents = contents?.key === fileKey ? contents.data : fileKey ? (contentCache.current.get(fileKey) ?? null) : null;
+  const fileContents =
+    contents?.key === fileKey ? contents.data : fileKey ? (contentCache.current.get(fileKey) ?? (file === browsedFile ? browsed!.data : null)) : null;
 
   useEffect(() => {
     if (!file || !fileKey || !fileContents || fileContents.tooLarge) return;
@@ -246,7 +269,7 @@ export function App() {
       return;
     }
     let stale = false;
-    highlight(langFor(file.path), fileContents.a, fileContents.b).then((data) => {
+    void highlight(langFor(file.path), fileContents.a, fileContents.b).then((data) => {
       remember(tokenCache.current, fileKey, data);
       if (!stale) setTokens({ key: fileKey, data });
     });
@@ -255,18 +278,22 @@ export function App() {
     };
   }, [fileContents]);
 
-  // While a changed file is re-coloured, keep the previous colours; lines whose text changed render plain until then.
   const lastTokens = useRef<{ path: string; data: [TokLines | null, TokLines | null] } | null>(null);
   const freshTokens = tokens && fileKey && tokens.key === fileKey ? tokens.data : null;
   if (freshTokens && file) lastTokens.current = { path: file.path, data: freshTokens };
   const fileTokens = freshTokens ?? (lastTokens.current && lastTokens.current.path === file?.path ? lastTokens.current.data : null);
 
   const previewable = useMemo(() => (file ? previewOf(file) : null), [file]);
-  // Images in a Markdown file can change without the file itself changing, so their URLs follow the whole diff.
   const diffVersion = useMemo(() => (diff ? hashString(JSON.stringify(diff.files)) : ""), [diff]);
   const preview: Preview | null =
     repo && fileKey && previewable && (previewable.forced || previewPref === "on")
-      ? { kind: previewable.kind, root: repo.root, mode, version: previewable.kind === "markdown" ? diffVersion : fileKey, text: fileContents ? (fileContents.b ?? fileContents.a) : null }
+      ? {
+          kind: previewable.kind,
+          root: repo.root,
+          mode,
+          version: previewable.kind === "markdown" ? diffVersion : fileKey,
+          text: fileContents ? (fileContents.b ?? fileContents.a) : null,
+        }
       : null;
   const togglePreview = useCallback(() => setPreviewPref((p) => (p === "on" ? "off" : "on")), [setPreviewPref]);
 
@@ -289,21 +316,28 @@ export function App() {
 
   const files = useMemo(() => orderFiles(diff?.files ?? []), [diff]);
   shownFiles.current = files.map((f) => f.path);
-  const [filter, setFilter] = useState("");
+  const [filters, setFilters] = useState<Record<FilesView, string>>({ changed: "", all: "" });
+  const setFilter = useCallback((text: string) => setFilters((cur) => ({ ...cur, [filesView]: text })), [filesView]);
+  const filter = filters.changed;
   const filterInput = useRef<HTMLInputElement>(null);
-  // The sidebar and [ ] j k walk only files matching the filter; search still covers every file.
   const listed = useMemo(() => (filter ? files.filter((f) => fuzzyMatch(filter, f.path)) : files), [files, filter]);
+  const showFiles = useCallback(
+    (view: FilesView) => {
+      setFilesView(view);
+      if (view === "changed" && !files.some((f) => f.path === activeRef.current)) setActive(listed[0]?.path ?? null);
+    },
+    [files, listed, setFilesView],
+  );
   const [repoPicker, setRepoPicker] = useState(false);
   const closeRepoPicker = useCallback(() => setRepoPicker(false), []);
   const [draft, setDraft] = useState("");
 
-  // Selected lines are positions in this exact diff, so any change to it drops them.
   const { selection, select, clear } = useSelection(rows);
   useEffect(() => {
     clear();
   }, [fileKey, clear]);
 
-  const search = useSearch(repo, mode, modeKey, files, active);
+  const search = useSearch(repo, mode, modeKey, files, active, (e) => setError(message(e)));
   const searchInput = useRef<HTMLInputElement>(null);
   const openSearch = useCallback(() => {
     search.setOpen(true);
@@ -317,7 +351,6 @@ export function App() {
     searchInput.current?.blur();
   }, [search.setOpen]);
 
-  // Going to a hit may switch files and open a fold first, so it waits until the hit's row exists.
   const pendingReveal = useRef<Hit | null>(null);
   useEffect(() => {
     if (!search.revealTick || !search.current) return;
@@ -337,8 +370,15 @@ export function App() {
       return;
     }
     const n = hit.sel.startsWith("g") ? Number(hit.sel.slice(1)) : NaN;
-    const fold = rows.find((r) => r.t === "fold" && (r.hunk === undefined ? n >= r.newFrom && n < r.newFrom + r.count : hit.sel.startsWith(`${r.hunk}:`)));
-    if (fold) setExpanded((cur) => (cur.has(fold.key) ? cur : new Set(cur).add(fold.key)));
+    const covers = (from: number, count: number) => n >= from && n < from + count;
+    const keys = rows.flatMap((r) =>
+      r.t === "fold" && covers(r.newFrom, r.count)
+        ? [r.key]
+        : r.t === "hunk" && r.folded && (hit.sel.startsWith(`${r.hunk}:`) || r.folded.gaps.some(([from, count]) => covers(from, count)))
+          ? r.folded.keys
+          : [],
+    );
+    if (keys.length) setExpanded((cur) => (keys.every((k) => cur.has(k)) ? cur : new Set([...cur, ...keys])));
   }, [rows, active, search.revealTick]);
 
   const actions = mode.kind === "unstaged" || mode.kind === "staged" ? mode.kind : null;
@@ -346,10 +386,9 @@ export function App() {
 
   const act = async (action: StageAction, target: number | "file" | null) => {
     if (!repo || !file || !actions || acting.current) return;
+    if (file.status === "unchanged") return notify(`${file.path.split("/").pop()} has no changes here`);
     let lines: LineRef[] | null = null;
-    // A folded noise file has no visible hunks, so it's acted on whole.
     const folded = file.noise && !expanded.has("noise");
-    // A rendered SVG shows no hunks, so it's acted on whole.
     if (target !== "file" && file.hunks.length && !folded && preview?.kind !== "image") {
       const changed = changedRefs(file, selection);
       if (target === null && selection.size && !changed.length) return notify("No changed lines selected");
@@ -369,7 +408,6 @@ export function App() {
   actRef.current = act;
   const onAct = useCallback((action: StageAction, target: number | "file" | null) => actRef.current(action, target), []);
 
-  // The button blinks on its own; reduced motion gets the plates by hand only.
   const toggleBlink = useCallback(
     (hunk: number) => {
       if (blinkRef.current?.hunk === hunk) return setBlink(null);
@@ -380,7 +418,6 @@ export function App() {
     },
     [notify],
   );
-  // Holding b shows plate A; letting go brings back plate B.
   const holdBlink = useCallback(() => {
     if (!hunkRows.length) return;
     if (!blinkRef.current) notify("Plate A while b is held, plate B when you let go. Esc stops.");
@@ -399,8 +436,7 @@ export function App() {
       if (format === "markdown") notify("Select lines first: click or drag their line numbers");
       return;
     }
-    const { text, count } =
-      format === "code" ? copyCode(file, fileContents, expanded, selection) : copyMarkdown(file, fileContents, expanded, selection, diff);
+    const { text, count } = format === "code" ? copyCode(file, fileContents, expanded, selection) : copyMarkdown(file, fileContents, expanded, selection, diff);
     window.moire.copy(text).then(
       () => notify(`Copied ${count} ${count === 1 ? "line" : "lines"}${format === "markdown" ? " for an agent" : ""}`),
       (e) => notify(message(e)),
@@ -450,7 +486,7 @@ export function App() {
     if (!info) return;
     setSpecial(null);
     setDiff(null);
-    setFilter("");
+    setFilters({ changed: "", all: "" });
     setRepo(info);
   }, []);
   const pickRepo = useCallback(() => {
@@ -502,7 +538,6 @@ export function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      // Ctrl+C copies selected lines unless some text is selected the usual way.
       if ((event.ctrlKey || event.metaKey) && event.key === "c" && !window.getSelection()?.toString()) {
         event.preventDefault();
         copyRef.current("code");
@@ -540,6 +575,7 @@ export function App() {
         e: () => editorRef.current(),
         m: () => (previewable && !previewable.forced ? togglePreview() : notify("Only Markdown and SVG files switch between preview and diff")),
         p: () => filterInput.current?.focus(),
+        a: () => showFiles(filesView === "all" ? "changed" : "all"),
         Escape: () => (blink ? setBlink(null) : selection.size ? clear() : closeSearch()),
         "/": openSearch,
         n: () => search.step(1),
@@ -561,7 +597,40 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [moveHunk, selectFile, scope, layout, theme, picker, repo, pickRepo, setMode, setScope, setLayout, setTheme, actions, onAct, notify, undo, clear, selection, openSearch, closeSearch, search.step, previewable, togglePreview, holdBlink, toggleBlink, focusHunk, hunkRows, blink, lightTheme, darkTheme]);
+  }, [
+    moveHunk,
+    selectFile,
+    scope,
+    layout,
+    theme,
+    picker,
+    repo,
+    pickRepo,
+    setMode,
+    setScope,
+    setLayout,
+    setTheme,
+    actions,
+    onAct,
+    notify,
+    undo,
+    clear,
+    selection,
+    openSearch,
+    closeSearch,
+    search.step,
+    previewable,
+    togglePreview,
+    holdBlink,
+    toggleBlink,
+    focusHunk,
+    hunkRows,
+    blink,
+    lightTheme,
+    darkTheme,
+    showFiles,
+    filesView,
+  ]);
 
   useDevHooks(viewRef, !!diff && (!file || file.binary || !!file.tooLarge || !!freshTokens || fileContents?.tooLarge === true));
 
@@ -599,7 +668,7 @@ export function App() {
   return (
     <div className="app" aria-busy={busy}>
       {toolbar}
-      {diff && files.length > 0 ? (
+      {diff && (files.length > 0 || filesView === "all") ? (
         <>
           {search.open && (
             <SearchBar
@@ -616,12 +685,15 @@ export function App() {
           )}
           <Sidebar
             repo={repo}
+            view={filesView}
+            onView={showFiles}
             files={listed}
-            total={files.length}
+            changed={files}
+            tree={tree}
             active={active}
             hitCounts={search.counts}
             fresh={fresh}
-            filter={filter}
+            filter={filters[filesView]}
             filterRef={filterInput}
             onFilter={setFilter}
             onSelect={setActive}
@@ -629,6 +701,7 @@ export function App() {
           >
             {mode.kind === "staged" && <CommitBox message={draft} busy={busy} onMessage={setDraft} onCommit={commitStaged} />}
           </Sidebar>
+          {!file && !files.length && <NoChanges mode={mode} onBranches={() => setPicker("branches")} onAllFiles={() => showFiles("all")} />}
           {file && (
             <DiffView
               key={`${modeKey}:${file.path}`}
@@ -643,7 +716,7 @@ export function App() {
               selection={selection}
               hits={search.inFile}
               currentHit={search.current}
-              actions={actions}
+              actions={file.status === "unchanged" ? null : actions}
               onExpand={(key) => setExpanded((cur) => new Set(cur).add(key))}
               onFocusHunk={setFocusHunk}
               onSelect={select}
@@ -656,7 +729,7 @@ export function App() {
           )}
         </>
       ) : diff ? (
-        <NoChanges mode={mode} onBranches={() => setPicker("branches")} />
+        <NoChanges mode={mode} onBranches={() => setPicker("branches")} onAllFiles={() => showFiles("all")} />
       ) : (
         <div className="loading" />
       )}
@@ -667,7 +740,6 @@ export function App() {
   );
 }
 
-// The line to open in an editor: the first selected line, else the focused hunk's first added line, on the new side.
 function editorLine(file: FileDiff, rows: Row[], selection: ReadonlySet<string>, focusHunk: number): number {
   for (const r of selection.size ? rows : []) {
     const picked = r.t === "split" ? [r.a, r.b].some((s) => s?.sel && selection.has(s.sel)) : r.t === "uni" && !!r.line.sel && selection.has(r.line.sel);
@@ -683,15 +755,14 @@ function remember<V>(cache: Map<string, V>, key: string, value: V) {
   if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!);
 }
 
-// Dev-only: MOIRE_SCREENSHOT captures the window once the first file is coloured, MOIRE_BENCH runs the scroll test.
 function useDevHooks(viewRef: React.RefObject<DiffViewHandle | null>, settled: boolean) {
   const done = useRef(false);
   useEffect(() => {
     if (!settled || done.current) return;
     done.current = true;
-    window.moire.devHooks().then((hooks) => {
+    void window.moire.devHooks().then((hooks) => {
       if (hooks.bench) runBench(viewRef.current?.scroller() ?? null);
-      else if (hooks.screenshot) window.moire.ready();
+      else if (hooks.screenshot) void window.moire.ready();
     });
   }, [settled, viewRef]);
 }
@@ -709,7 +780,7 @@ function runBench(el: HTMLDivElement | null) {
     const sorted = [...deltas].sort((a, b) => a - b);
     const avg = Math.round((deltas.length / deltas.reduce((s, d) => s + d, 0)) * 1000);
     const p95 = sorted[Math.floor(sorted.length * 0.95)]?.toFixed(1);
-    window.moire.benchReport(`${avg} fps avg, p95 ${p95} ms, ${deltas.filter((d) => d > 25).length}/${deltas.length} slow frames`);
+    void window.moire.benchReport(`${avg} fps avg, p95 ${p95} ms, ${deltas.filter((d) => d > 25).length}/${deltas.length} slow frames`);
   };
   requestAnimationFrame(step);
 }

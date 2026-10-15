@@ -26,4 +26,3 @@ export function makeRepo() {
   };
   return { root, git, write, commit };
 }
-

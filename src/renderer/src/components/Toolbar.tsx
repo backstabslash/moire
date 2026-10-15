@@ -60,7 +60,9 @@ export function Toolbar(props: Props) {
               {b.label}
             </span>
           )}
-          {props.picker && <PickerPop key={props.picker} initial={props.picker} root={root} mode={mode} onMode={props.onMode} onClose={() => props.onPicker(null)} />}
+          {props.picker && (
+            <PickerPop key={props.picker} initial={props.picker} root={root} mode={mode} onMode={props.onMode} onClose={() => props.onPicker(null)} />
+          )}
         </div>
       )}
       <div className="spacer" />
@@ -130,12 +132,22 @@ function PickerPop({ initial, root, mode, onMode, onClose }: PickerPopProps) {
       {simple("staged", "2", "A HEAD, B index")}
       {simple("all", "3", "A HEAD, B working tree")}
       <div className="sep" />
-      <button role="option" aria-selected={mode.kind === "commit"} className={sub === "commit" ? "is-hot" : ""} onClick={() => setSub(sub === "commit" ? null : "commit")}>
+      <button
+        role="option"
+        aria-selected={mode.kind === "commit"}
+        className={sub === "commit" ? "is-hot" : ""}
+        onClick={() => setSub(sub === "commit" ? null : "commit")}
+      >
         {MODE_NAMES.commit}
         <kbd>4</kbd>
         <small>A parent, B the commit</small>
       </button>
-      <button role="option" aria-selected={mode.kind === "branches"} className={sub === "branches" ? "is-hot" : ""} onClick={() => setSub(sub === "branches" ? null : "branches")}>
+      <button
+        role="option"
+        aria-selected={mode.kind === "branches"}
+        className={sub === "branches" ? "is-hot" : ""}
+        onClick={() => setSub(sub === "branches" ? null : "branches")}
+      >
         {MODE_NAMES.branches}
         <kbd>5</kbd>
         <small>A merge base, B the branch, like a pull request</small>
@@ -175,7 +187,7 @@ function BranchForm({ root, mode, onPick }: { root: string; mode: CompareMode; o
   const [base, setBase] = useState(mode.kind === "branches" ? mode.base : "");
   const [head, setHead] = useState(mode.kind === "branches" ? mode.head : "");
   useEffect(() => {
-    window.moire.branches(root).then((list) => {
+    void window.moire.branches(root).then((list) => {
       setBranches(list);
       setHead((h) => h || list[0] || "");
       setBase((b) => b || list.find((n) => n === "main" || n === "master") || list.find((n) => n !== list[0]) || list[0] || "");

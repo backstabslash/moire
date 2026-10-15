@@ -5,7 +5,6 @@ interface Piece {
   text: string;
   color?: string;
   fontStyle: number;
-  // which search hit this piece belongs to, counting from 1
   hit?: number;
 }
 
@@ -14,7 +13,6 @@ const BOLD = 2;
 const WRAP_HINT_MIN = 60;
 const TAB_WIDTH = 4;
 
-// Wrapped continuation lines hang under the code's own indent instead of restarting at the gutter.
 export function hangingIndent(text: string): React.CSSProperties | undefined {
   if (text.length <= WRAP_HINT_MIN) return undefined;
   let cols = 0;
@@ -26,7 +24,6 @@ export function hangingIndent(text: string): React.CSSProperties | undefined {
   return { paddingLeft: `calc(8px + ${cols + 2}ch)`, textIndent: `-${cols + 2}ch`, "--hang": `${cols}ch` } as React.CSSProperties;
 }
 
-// Long chains like a.b(c).d() have no spaces, so offer breaks after punctuation rather than mid-word.
 function renderBreakable(p: Piece, key: number) {
   const parts = p.text.split(/(?<=[.,(=/])/);
   if (parts.length === 1) return renderPiece(p, key);
@@ -39,7 +36,6 @@ interface CodeProps {
   words?: Range[];
   mark: "w-add" | "w-del";
   hits?: Range[];
-  // start of the current search hit, if it's on this line
   current?: number;
 }
 
@@ -51,7 +47,6 @@ export function Code({ text, tokens, words, mark, hits, current }: CodeProps) {
   const isCurrent = (hit: number) => hits?.[hit - 1]?.[0] === current;
   if (!words?.length) return withHits(pieces, render, isCurrent);
 
-  // Word-change runs wrap their tokens in one outer span so the highlight reads as a single shape.
   const out: React.ReactNode[] = [];
   let run: Piece[] = [];
   let runInside = false;
@@ -60,7 +55,15 @@ export function Code({ text, tokens, words, mark, hits, current }: CodeProps) {
   const flush = () => {
     if (!run.length) return;
     const rendered = withHits(run, render, isCurrent);
-    out.push(runInside ? <span key={out.length} className={mark}>{rendered}</span> : rendered);
+    out.push(
+      runInside ? (
+        <span key={out.length} className={mark}>
+          {rendered}
+        </span>
+      ) : (
+        rendered
+      ),
+    );
     run = [];
   };
   for (const piece of splitAt(pieces, words, () => undefined)) {
@@ -75,7 +78,6 @@ export function Code({ text, tokens, words, mark, hits, current }: CodeProps) {
   return out;
 }
 
-// Cuts pieces at range edges; pieces inside a range get its hit value, others keep theirs.
 function splitAt(pieces: Piece[], ranges: Range[], hit: (r: Range, i: number) => number | undefined): Piece[] {
   const out: Piece[] = [];
   let pos = 0;
@@ -95,7 +97,6 @@ function splitAt(pieces: Piece[], ranges: Range[], hit: (r: Range, i: number) =>
   return out;
 }
 
-// One mark per search hit, even when the hit spans several syntax tokens.
 function withHits(pieces: Piece[], render: (p: Piece, key: number) => React.ReactNode, isCurrent: (hit: number) => boolean) {
   const out: React.ReactNode[] = [];
   let i = 0;
@@ -118,7 +119,6 @@ function withHits(pieces: Piece[], render: (p: Piece, key: number) => React.Reac
 
 const BIDI = /([\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069])/;
 
-// Bidi controls can make code read differently from how it runs, so they're drawn as visible marks instead.
 function showBidi(text: string): React.ReactNode {
   if (!BIDI.test(text)) return text;
   return text.split(BIDI).map((s, i) =>
@@ -148,7 +148,6 @@ function renderPiece(p: Piece, key: number) {
   );
 }
 
-// Tokens from before a refresh can belong to a different line of the same length, so compare the text itself.
 function tokensMatch(tokens: Tok[], text: string) {
   let at = 0;
   for (const [t] of tokens) {

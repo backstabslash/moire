@@ -1,42 +1,50 @@
 import type { DiffLine, FileContents, FileDiff, Hunk } from "../../../shared/types";
+import { langFor } from "./lang";
 import { gapKey, lineKey } from "./selection";
 import { type Range, wordRanges } from "./words";
 
 export type Layout = "split" | "unified";
 export type Scope = "changed" | "full";
 
+const INDENTED = new Set(["python", "yaml", "make", "haskell", "fsharp", "nim", "coffee", "pug", "haml", "sass", "stylus", "elm"]);
+
 export interface Side {
   no: number;
   text: string;
   words?: Range[];
-  // selection key, see model/selection
   sel?: string;
   staged?: boolean;
 }
 
 export type Row =
-  | { t: "hunk"; key: string; hunk: number; label: string; ctx: string; adds: number; dels: number; staged: "full" | "partial" | null }
-  // label and hunk are set when the fold hides a whitespace-only hunk instead of unchanged lines
-  | { t: "fold"; key: string; count: number; expandable: boolean; newFrom: number; label?: string; hunk?: number }
+  | { t: "hunk"; key: string; hunk: number; label: string; ctx: string; adds: number; dels: number; staged: "full" | "partial" | null; folded?: Folded }
+  | { t: "fold"; key: string; count: number; expandable: boolean; newFrom: number }
   | { t: "split"; key: string; hunk: number; kind: "ctx" | "chg"; a?: Side; b?: Side; faded?: boolean }
   | { t: "uni"; key: string; hunk: number; kind: "ctx" | "add" | "del"; a?: number; b?: number; line: Side; faded?: boolean }
   | { t: "note"; key: string; text: string; expand?: string };
+
+export interface Folded {
+  keys: string[];
+  count: number;
+  gaps: [newFrom: number, count: number][];
+}
 
 export interface BuildOptions {
   layout: Layout;
   scope: Scope;
   expanded: ReadonlySet<string>;
-  // ignore noise and whitespace folding, for search and copy
   showAll?: boolean;
-  // a hunk drawn as aligned split rows whatever the layout, for blinking between plates
   plates?: number;
 }
 
 export function buildRows(file: FileDiff, contents: FileContents | null, opts: BuildOptions): Row[] {
+  if (file.status === "unchanged") return wholeFile(contents);
   if (file.binary) return [{ t: "note", key: "note", text: "Binary file, contents not shown." }];
-  if (file.unread) return [{ t: "note", key: "note", text: "Not read: there are over 1,000 untracked files. Add their folder to .gitignore, or stage it whole." }];
+  if (file.unread)
+    return [{ t: "note", key: "note", text: "Not read: there are over 1,000 untracked files. Add their folder to .gitignore, or stage it whole." }];
   if (file.tooLarge) return [{ t: "note", key: "note", text: "File is over 2 MB, contents not shown." }];
-  if (file.status === "conflicted") return [{ t: "note", key: "note", text: "Merge conflict. Resolve it in your editor (e); the All view (3) shows it with the markers." }];
+  if (file.status === "conflicted")
+    return [{ t: "note", key: "note", text: "Merge conflict. Resolve it in your editor (e); the All view (3) shows it with the markers." }];
   if (file.noise && !opts.showAll && !opts.expanded.has("noise")) {
     const n = file.additions + file.deletions;
     return [{ t: "note", key: "noise", text: `${file.noise}, ${n} changed ${n === 1 ? "line" : "lines"}, folded away.`, expand: "noise" }];
@@ -65,15 +73,16 @@ export function buildRows(file: FileDiff, contents: FileContents | null, opts: B
     }
   };
 
+  const indented = INDENTED.has(langFor(file.path));
   file.hunks.forEach((hunk, h) => {
     const oldFirst = hunk.oldLines === 0 ? hunk.oldStart + 1 : hunk.oldStart;
     const newFirst = hunk.newLines === 0 ? hunk.newStart + 1 : hunk.newStart;
     emitGap(`gap${h}`, oldNext, newNext, newFirst - newNext);
-    rows.push(hunkRow(hunk, h));
     const key = `ws${h}`;
-    if (!opts.showAll && !opts.expanded.has(key) && whitespaceOnly(hunk)) {
-      rows.push({ t: "fold", key, count: hunk.lines.length, expandable: true, newFrom: newFirst, label: "Whitespace-only changes", hunk: h });
+    if (!opts.showAll && !opts.expanded.has(key) && whitespaceOnly(hunk, indented)) {
+      rows.push({ ...hunkRow(hunk, h), folded: { keys: [key], count: 0, gaps: [] } });
     } else {
+      rows.push(hunkRow(hunk, h));
       emitHunkLines(rows, h === opts.plates ? "split" : opts.layout, hunk, h);
     }
     oldNext = oldFirst + hunk.oldLines;
@@ -82,17 +91,58 @@ export function buildRows(file: FileDiff, contents: FileContents | null, opts: B
 
   const trailing = bLines ? bLines.length - newNext + 1 : aLines ? aLines.length - oldNext + 1 : 0;
   emitGap(`gap${file.hunks.length}`, oldNext, newNext, trailing);
+  return absorbGaps(rows);
+}
+
+function absorbGaps(rows: Row[]): Row[] {
+  const out: Row[] = [];
+  const take = (f: Folded, gap: Row & { t: "fold" }, before: boolean) => {
+    f.keys[before ? "unshift" : "push"](gap.key);
+    f.count += gap.count;
+    f.gaps.push([gap.newFrom, gap.count]);
+  };
+  for (const row of rows) {
+    const last = out.at(-1);
+    if (row.t === "hunk" && row.folded && last?.t === "fold" && last.expandable) {
+      out.pop();
+      take(row.folded, last, true);
+      out.push(row);
+    } else if (row.t === "fold" && row.expandable && last?.t === "hunk" && last.folded) {
+      take(last.folded, row, false);
+    } else {
+      out.push(row);
+    }
+  }
+  return out;
+}
+
+function wholeFile(contents: FileContents | null): Row[] {
+  if (!contents) return [];
+  if (contents.tooLarge) return [{ t: "note", key: "note", text: "Binary file or over 2 MB, contents not shown." }];
+  const lines = splitLines(contents.b);
+  if (!lines) return [{ t: "note", key: "note", text: "Can't read this file." }];
+  if (!lines.length) return [{ t: "note", key: "note", text: "Empty file." }];
+  const rows: Row[] = [];
+  lines.forEach((text, i) => emitContext(rows, "unified", `l${i}`, -1, i + 1, i + 1, text, gapKey(i + 1)));
   return rows;
 }
 
-function whitespaceOnly(hunk: Hunk): boolean {
-  const squash = (kind: "add" | "del") =>
-    hunk.lines
-      .filter((l) => l.kind === kind)
-      .map((l) => l.text)
-      .join("")
-      .replace(/\s+/g, "");
+function whitespaceOnly(hunk: Hunk, indented: boolean): boolean {
+  const squash = (kind: "add" | "del") => {
+    const texts = hunk.lines.filter((l) => l.kind === kind).map((l) => l.text);
+    if (!indented) return dropSpaces(texts.join("\n"));
+    return texts
+      .filter((t) => t.trim())
+      .map((t) => t.match(/^\s*/)![0] + dropSpaces(t))
+      .join("\n");
+  };
   return hunk.lines.some((l) => l.kind !== "ctx") && squash("add") === squash("del");
+}
+
+// Whitespace between two word characters still matters: `a b` isn't `ab`.
+function dropSpaces(text: string): string {
+  const word = /[\p{L}\p{N}_$]/u;
+  return text.trim().replace(/\s+/g, (gap, at: number, s: string) => (word.test(s[at - 1] ?? "") && word.test(s[at + gap.length] ?? "") ? " " : ""));
 }
 
 export function splitLines(text: string | null): string[] | null {
@@ -102,7 +152,7 @@ export function splitLines(text: string | null): string[] | null {
   return lines;
 }
 
-function hunkRow(hunk: Hunk, h: number): Row {
+function hunkRow(hunk: Hunk, h: number): Row & { t: "hunk" } {
   let adds = 0;
   let dels = 0;
   let staged = 0;
@@ -133,7 +183,6 @@ function emitContext(rows: Row[], layout: Layout, key: string, h: number, oldNo:
 
 function emitHunkLines(rows: Row[], layout: Layout, hunk: Hunk, h: number) {
   const lines = hunk.lines;
-  // Context in a fully staged hunk fades with it.
   const faded = lines.every((l) => l.kind === "ctx" || l.staged);
   let i = 0;
   while (i < lines.length) {
@@ -162,8 +211,6 @@ function emitHunkLines(rows: Row[], layout: Layout, hunk: Hunk, h: number) {
   }
 }
 
-// Where a hunk went after the diff was read again: the hunk with the same changes, else the one nearest its old position.
-// The old side's numbers stay put while an agent edits the working tree, so position is the better fallback.
 export function followHunk(prev: Hunk, hunks: Hunk[]): number {
   const changes = (h: Hunk) => JSON.stringify(h.lines.filter((l) => l.kind !== "ctx").map((l) => [l.kind, l.text]));
   const want = changes(prev);
@@ -178,8 +225,6 @@ export function followHunk(prev: Hunk, hunks: Hunk[]): number {
 
 const LOOKAHEAD = 8;
 
-// Pairs each removed line with a similar added line so an inserted comment doesn't shift every pair below it.
-// Lines with no similar partner pair up by position within their gap, which reads best for rewrites.
 export function align(dels: Side[], adds: Side[]): [Side | undefined, Side | undefined][] {
   const matches: [number, number][] = [];
   let next = 0;

@@ -13,13 +13,12 @@ import { CrashScreen } from "./components/Crash";
 
 document.documentElement.dataset.platform = window.moire.platform;
 
-// A button clicked with the mouse gives focus back, so the next shortcut neither draws a focus ring on it nor presses it again.
-document.addEventListener("click", (event) => {
+function releaseClickedButton(event: MouseEvent) {
   const button = event.target instanceof Element ? event.target.closest("button") : null;
   if (event.detail > 0 && button && button === document.activeElement) button.blur();
-}, true);
+}
+document.addEventListener("click", releaseClickedButton, true);
 
-// Dev-only: MOIRE_PREFS='{"theme":"light","layout":"unified","file":"src/a.ts"}' presets the UI for screenshots.
 const { prefs } = await window.moire.devHooks();
 for (const [key, value] of Object.entries(prefs ?? {})) localStorage.setItem(`moire.${key}`, value);
 

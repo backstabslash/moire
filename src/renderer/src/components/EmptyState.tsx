@@ -9,7 +9,7 @@ const COPY: Record<CompareMode["kind"], [string, string]> = {
   branches: ["Nothing to review.", "The branch has no changes since it split from the base."],
 };
 
-export function NoChanges({ mode, onBranches }: { mode: CompareMode; onBranches(): void }) {
+export function NoChanges({ mode, onBranches, onAllFiles }: { mode: CompareMode; onBranches(): void; onAllFiles(): void }) {
   const [title, text] = COPY[mode.kind];
   return (
     <div className="empty-state">
@@ -18,12 +18,18 @@ export function NoChanges({ mode, onBranches }: { mode: CompareMode; onBranches(
         <div>
           <h2>{title}</h2>
           <p>{text}</p>
-          {mode.kind !== "branches" && (
-            <button className="btn" onClick={onBranches}>
-              Compare with a branch
-              <kbd>5</kbd>
+          <div className="empty-actions">
+            {mode.kind !== "branches" && (
+              <button className="btn" onClick={onBranches}>
+                Compare with a branch
+                <kbd>5</kbd>
+              </button>
+            )}
+            <button className="btn" onClick={onAllFiles}>
+              All files
+              <kbd>a</kbd>
             </button>
-          )}
+          </div>
         </div>
       </div>
     </div>

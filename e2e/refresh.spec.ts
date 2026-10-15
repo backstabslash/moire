@@ -42,7 +42,6 @@ test.afterEach(() => {
   expect(errors).toEqual([]);
 });
 
-// Text of the first B-side line whose top is inside the scroller.
 const topLine = () =>
   page.evaluate(() => {
     const top = document.querySelector(".scroller")!.getBoundingClientRect().top;

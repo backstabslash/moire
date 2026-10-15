@@ -49,8 +49,6 @@ test("search finds hits in folded context and in other files", async () => {
   await expect(input).toBeFocused();
   await input.fill("v25 ");
   await expect(page.locator(".search-status")).toHaveText("1 of 3");
-  // the hit in a.ts sits in folded context, so its fold opens
-  // an unchanged line shows on both sides in split view, so the current hit does too
   await expect(page.locator("mark.hit.is-current")).toHaveText(["v25 ", "v25 "]);
   await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
   await expect(page.locator(".file", { hasText: "b.ts" }).locator(".hit-count")).toHaveText("2");

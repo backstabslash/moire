@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { CommitInfo, CompareMode, DiffResult, FileContents, FileDiff, RepoInfo, StageRequest } from "../shared/types";
+import type { CommitInfo, CompareMode, DiffResult, FileContents, FileDiff, FileTree, RepoInfo, StageRequest } from "../shared/types";
 
 const api = {
   platform: process.platform,
@@ -31,6 +31,8 @@ const api = {
     ipcRenderer.invoke("git:files", root, mode, files),
   blobSizes: (root: string, mode: CompareMode, file: Pick<FileDiff, "path" | "oldPath" | "status">): Promise<[number | null, number | null]> =>
     ipcRenderer.invoke("git:sizes", root, mode, file),
+  tree: (root: string, mode: CompareMode): Promise<FileTree> => ipcRenderer.invoke("git:tree", root, mode),
+  listDir: (root: string, dir: string): Promise<string[]> => ipcRenderer.invoke("git:dir", root, dir),
   commits: (root: string, limit: number): Promise<CommitInfo[]> => ipcRenderer.invoke("git:commits", root, limit),
   branches: (root: string): Promise<string[]> => ipcRenderer.invoke("git:branches", root),
   act: (root: string, req: StageRequest): Promise<string> => ipcRenderer.invoke("git:act", root, req),

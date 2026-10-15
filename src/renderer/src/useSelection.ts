@@ -6,7 +6,6 @@ const EMPTY: ReadonlySet<string> = new Set();
 
 export type SelectHow = "click" | "shift" | "drag";
 
-// Click toggles a line, shift-click adds the range from the last click, and dragging adds or removes lines as it goes.
 export function useSelection(rows: Row[]) {
   const [selection, setSelection] = useState(EMPTY);
   const current = useRef(selection);

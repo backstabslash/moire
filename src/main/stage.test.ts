@@ -229,6 +229,29 @@ describe("undo", () => {
     expect(await undo(r.root, r.log)).toBeNull();
   });
 
+  it("undoes staging a file with a tab in its name", async () => {
+    const r = setup();
+    r.write("a\tb.txt", "a\n");
+    r.commit("init");
+    r.write("a\tb.txt", "b\n");
+    await r.run("unstaged", "stage", (await r.file("unstaged", "a\tb.txt"))!, null);
+    expect(await undo(r.root, r.log)).toBe("Staged a\tb.txt");
+    expect(r.git("diff", "--cached")).toBe("");
+  });
+
+  it("deletes a discarded git add -N file and brings it back untracked", async () => {
+    const r = setup();
+    r.write("a.txt", "a\n");
+    r.commit("init");
+    r.write("new.txt", "fresh\n");
+    r.git("add", "-N", "new.txt");
+    await r.run("unstaged", "discard", (await r.file("unstaged", "new.txt"))!, null);
+    expect(existsSync(join(r.root, "new.txt"))).toBe(false);
+    expect(r.git("status", "--porcelain")).toBe("");
+    await undo(r.root, r.log);
+    expect(readFileSync(join(r.root, "new.txt"), "utf8")).toBe("fresh\n");
+  });
+
   it("refuses to undo a stage once someone else committed it", async () => {
     const r = setup();
     r.write("a.txt", "a\n");

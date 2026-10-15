@@ -52,7 +52,6 @@ export function parseDiff(text: string): FileDiff[] {
   let newLeft = 0;
   let oldNo = 0;
   let newNo = 0;
-  // inside a conflicted file's combined diff, which has no hunks we can show or act on
   let skip = false;
 
   for (const line of text.split("\n")) {
@@ -141,7 +140,6 @@ export function parseDiff(text: string): FileDiff[] {
       file.binary = true;
     }
   }
-  // Text files are keyed by their hunks already.
   for (const f of files) if (!f.binary) delete f.blobs;
   return files;
 }
