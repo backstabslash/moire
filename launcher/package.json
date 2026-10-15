@@ -1,0 +1,31 @@
+{
+  "name": "@backstabslash/moire",
+  "version": "0.1.0",
+  "description": "Install and open moire, a desktop app for reviewing code changes in a git repo",
+  "author": {
+    "name": "backstabslash",
+    "email": "backstabslash@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/backstabslash/moire",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/backstabslash/moire.git",
+    "directory": "launcher"
+  },
+  "type": "module",
+  "bin": {
+    "moire": "moire.mjs"
+  },
+  "files": [
+    "moire.mjs",
+    "install.mjs"
+  ],
+  "os": [
+    "linux",
+    "darwin"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

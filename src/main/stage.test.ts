@@ -322,3 +322,18 @@ describe("commit", () => {
     await expect(commit(r.root, "Nope", r.log)).rejects.toThrow(/^lint failed$/);
   });
 });
+
+describe("files staged, then changed again", () => {
+  it("can stage the new edits", async () => {
+    const r = setup();
+    r.write("a.txt", body(20));
+    r.commit("init");
+    r.write("a.txt", body(20).replace("line 2\n", "line two\n"));
+    await r.run("unstaged", "stage", (await r.file("unstaged", "a.txt"))!);
+    await r.file("unstaged", "a.txt");
+    r.write("a.txt", body(20).replace("line 2\n", "line two\n").replace("line 18\n", "line eighteen\n"));
+    const f = (await r.file("unstaged", "a.txt"))!;
+    expect(f.changedSinceStaged).toBe(true);
+    expect(await r.run("unstaged", "stage", f, hunkLines(f, 0))).toBe("Staged a.txt");
+  });
+});

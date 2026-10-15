@@ -76,8 +76,8 @@ test("staging a whole file moves on to the next one, and the All view marks what
   await expect(page.locator(".hunk-head")).toHaveCount(1);
   await page.keyboard.press("3");
   await expect(page.locator(".hh-badge")).toHaveText("Staged");
-  await expect(page.locator(".file", { hasText: "a.ts" }).locator(".st-partial")).toBeVisible();
-  await expect(page.locator(".file", { hasText: "new.ts" }).locator(".st-none")).toBeVisible();
+  await expect(page.locator(".file", { hasText: "a.ts" }).locator(".mark-partial")).toBeVisible();
+  await expect(page.locator(".file", { hasText: "new.ts" }).locator(".mark")).toHaveCount(0);
   await shot("all-view");
   await page.keyboard.press("1");
   await page.locator(".file", { hasText: "a.ts" }).click();
@@ -86,6 +86,7 @@ test("staging a whole file moves on to the next one, and the All view marks what
   await expect(page.locator(".file.is-active .name")).toHaveText("new.ts");
   await page.keyboard.press("2");
   await expect(page.locator(".file", { hasText: "a.ts" })).toBeVisible();
+  await expect(page.locator(".app")).toHaveAttribute("aria-busy", "false");
   await page.keyboard.press("s");
   await expect(page.locator(".toast.show")).toContainText("Unstaged 2 lines in a.ts");
   const message = page.locator(".commit-box textarea");

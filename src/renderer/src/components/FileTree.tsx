@@ -1,9 +1,9 @@
-import { type ReactNode, type RefObject, useEffect, useMemo, useState } from "react";
+import { type MouseEvent, type ReactNode, type RefObject, useEffect, useMemo, useState } from "react";
 import type { FileDiff, FileStatus, FileTree as Listing } from "../../../shared/types";
 import { buildTree, type Dir } from "../model/tree";
 
 const KIND: Record<FileStatus, string> = { added: "A", modified: "M", deleted: "D", renamed: "R", untracked: "U", conflicted: "C", unchanged: "" };
-const STAGED = { full: "Staged", partial: "Partly staged", none: "Not staged" };
+const MARKS = { full: "Staged", partial: "Partly staged", changed: "Staged, then changed again" };
 const INDENT = 12;
 
 export interface ListState {
@@ -12,6 +12,8 @@ export interface ListState {
   fresh: { paths: ReadonlySet<string>; at: number } | null;
   activeRef: RefObject<HTMLButtonElement | null>;
   onSelect(path: string): void;
+  menu: string | null;
+  onMenu(path: string, event: MouseEvent): void;
 }
 
 export function fileRow(list: ListState, path: string, f: FileDiff | undefined, opts: { depth?: number; ignored?: boolean } = {}) {
@@ -20,13 +22,16 @@ export function fileRow(list: ListState, path: string, f: FileDiff | undefined, 
   const cls = [
     "file",
     isActive && "is-active",
+    path === list.menu && "is-menu",
     f?.status === "deleted" && "is-deleted",
     list.hitCounts && !list.hitCounts.has(path) && "no-hits",
     isFresh && "is-fresh",
     f?.noise && "is-noise",
+    f?.staged === "full" && "is-staged",
     !f && "is-unchanged",
     opts.ignored && "is-ignored",
   ];
+  const mark = f?.changedSinceStaged ? "changed" : f?.staged === "full" || f?.staged === "partial" ? f.staged : null;
   const title = f
     ? `${f.oldPath ? `${f.oldPath} → ${path}` : path}${f.noise ? `\n${f.noise}, folded` : ""}`
     : `${path}${opts.ignored ? "\nIgnored by git" : "\nNo changes"}`;
@@ -39,8 +44,8 @@ export function fileRow(list: ListState, path: string, f: FileDiff | undefined, 
       aria-current={isActive}
       title={title}
       onClick={() => list.onSelect(path)}
+      onContextMenu={(e) => list.onMenu(path, e)}
     >
-      {f?.staged && <span className={`st st-${f.staged}`} title={STAGED[f.staged]} />}
       <span className="name">{path.split("/").pop()}</span>
       <span className="kind">{f ? KIND[f.status] : ""}</span>
       <span className="nums">
@@ -58,7 +63,19 @@ export function fileRow(list: ListState, path: string, f: FileDiff | undefined, 
           </>
         )}
       </span>
+      {mark && <Mark state={mark} />}
     </button>
+  );
+}
+
+function Mark({ state }: { state: keyof typeof MARKS }) {
+  return state === "changed" ? (
+    <span className="mark mark-changed" title={MARKS[state]} />
+  ) : (
+    <svg className={`mark mark-${state}`} viewBox="0 0 12 12" aria-label={MARKS[state]}>
+      <title>{MARKS[state]}</title>
+      <path d="M2 6.4l2.6 2.6L10 3.4" />
+    </svg>
   );
 }
 
@@ -100,11 +117,12 @@ export function FileTree({ root, listing, changed, list }: Props) {
       rows.push(
         <button
           key={d.path}
-          className={`tree-dir${d.ignored ? " is-ignored" : ""}`}
+          className={`tree-dir${d.ignored ? " is-ignored" : ""}${d.path === list.menu ? " is-menu" : ""}`}
           style={{ paddingLeft: 16 + depth * INDENT }}
           aria-expanded={isOpen}
           title={`${d.path}${d.ignored ? "\nIgnored by git" : ""}`}
           onClick={() => toggle(d)}
+          onContextMenu={(e) => list.onMenu(d.path, e)}
         >
           <span className="name">{d.name}</span>
           {d.changes > 0 && (

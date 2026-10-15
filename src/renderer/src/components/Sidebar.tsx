@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, useEffect, useMemo, useRef } from "react";
+import { type MouseEvent, type ReactNode, type RefObject, useEffect, useMemo, useRef } from "react";
 import type { FileDiff, FileTree as Listing, RepoInfo } from "../../../shared/types";
 import { fuzzyMatch, orderPaths } from "../model/files";
 import { fileRow, FileTree, type ListState } from "./FileTree";
@@ -27,6 +27,8 @@ interface Props {
   onFilter(filter: string): void;
   children?: ReactNode;
   onSelect(path: string): void;
+  menu: string | null;
+  onMenu(path: string, event: MouseEvent): void;
   onSwitchRepo(): void;
 }
 
@@ -45,6 +47,8 @@ export function Sidebar({
   onFilter,
   children,
   onSelect,
+  menu,
+  onMenu,
   onSwitchRepo,
 }: Props) {
   const byPath = useMemo(() => new Map(changed.map((f) => [f.path, f])), [changed]);
@@ -73,7 +77,8 @@ export function Sidebar({
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [active, view]);
 
-  const list: ListState = { active, hitCounts, fresh, activeRef, onSelect };
+  const marks = changed.some((f) => f.changedSinceStaged || f.staged === "full" || f.staged === "partial");
+  const list: ListState = { active, hitCounts, fresh, activeRef, onSelect, menu, onMenu };
   const total = view === "changed" ? changed.length : allPaths.length;
   const count = view === "all" && !tree ? "" : filter ? `${listed.length} of ${total}` : `${total} ${total === 1 ? "file" : "files"}`;
 
@@ -112,7 +117,7 @@ export function Sidebar({
           }
         }}
       />
-      <nav className="files" aria-label={view === "changed" ? "Changed files" : "All files"}>
+      <nav className={`files${marks ? " with-marks" : ""}`} aria-label={view === "changed" ? "Changed files" : "All files"}>
         {view === "all" && !filter
           ? tree && <FileTree root={repo.root} listing={tree} changed={changed} list={list} />
           : groups.map((g) => (

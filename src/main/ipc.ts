@@ -6,6 +6,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain } from "electron";
 import type { CompareMode, FileDiff, RepoInfo, StageRequest } from "../shared/types";
 import { blobSizes, branches, commits, diff, fileContents, listDir, manyContents, repoInfo, tree } from "./git";
 import { openInEditor } from "./editor";
+import { openWithDefault, revealFile } from "./open";
 import { allowPreviews } from "./preview";
 import { act, commit, undo } from "./stage";
 import { loadState, saveState } from "./state";
@@ -81,6 +82,8 @@ export function registerIpc(): void {
   ipcMain.handle("git:undo", (_e, root: string) => undo(root, undoLog()));
   ipcMain.handle("git:commit", (_e, root: string, message: string) => commit(root, message, undoLog()));
   ipcMain.handle("editor:open", (_e, root: string, path: string, line: number) => openInEditor(root, path, line, loadState().editor));
+  ipcMain.handle("file:reveal", (_e, root: string, path: string) => revealFile(root, path));
+  ipcMain.handle("file:open", (_e, root: string, path: string) => openWithDefault(root, path));
 
   const dev = !app.isPackaged;
   ipcMain.handle("dev:hooks", () => ({

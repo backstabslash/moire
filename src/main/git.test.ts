@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, unlinkSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -69,6 +69,79 @@ describe("working tree modes", () => {
       b: "fresh\nno newline",
       tooLarge: false,
     });
+  });
+});
+
+describe("staged, then changed", () => {
+  it("flags a file edited after it was staged whole, but not one staged in part", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "one\n");
+    r.write("b.txt", "one\n");
+    r.commit("init");
+    r.write("a.txt", "two\n");
+    r.git("add", "a.txt");
+    r.write("c.txt", "new\n");
+    expect((await diff(r.root, { kind: "unstaged" })).progress).toEqual({ staged: 1, total: 2 });
+
+    r.write("a.txt", "three\n");
+    r.write("b.txt", "two\n");
+    r.git("add", "b.txt");
+    r.write("b.txt", "three\n");
+    const res = await diff(r.root, { kind: "all" });
+    expect(res.files.filter((f) => f.changedSinceStaged).map((f) => f.path)).toEqual(["a.txt"]);
+    expect(res.progress).toEqual({ staged: 0, total: 3 });
+    expect(byPath((await diff(r.root, { kind: "unstaged" })).files, "a.txt").changedSinceStaged).toBe(true);
+  });
+
+  it("counts a staged rename once", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "one\ntwo\nthree\n");
+    r.commit("init");
+    r.git("mv", "a.txt", "b.txt");
+    const res = await diff(r.root, { kind: "all" });
+    expect(res.files.map((f) => f.path)).toEqual(["b.txt"]);
+    expect(res.progress).toEqual({ staged: 1, total: 1 });
+  });
+
+  it("still loads when it can't write to .git", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "one\n");
+    r.commit("init");
+    r.write("a.txt", "two\n");
+    r.git("add", "a.txt");
+    chmodSync(join(r.root, ".git"), 0o555);
+    try {
+      expect((await diff(r.root, { kind: "unstaged" })).progress).toEqual({ staged: 1, total: 1 });
+    } finally {
+      chmodSync(join(r.root, ".git"), 0o755);
+    }
+  });
+
+  it("starts over when its record is empty or garbled", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "one\n");
+    r.commit("init");
+    r.write("a.txt", "two\n");
+    r.git("add", "a.txt");
+    for (const junk of ["", '{"a.txt": "12']) {
+      writeFileSync(join(r.root, ".git", "moire-staged"), junk);
+      expect((await diff(r.root, { kind: "unstaged" })).progress).toEqual({ staged: 1, total: 1 });
+    }
+    expect(JSON.parse(readFileSync(join(r.root, ".git", "moire-staged"), "utf8"))).toHaveProperty("a.txt");
+  });
+
+  it("forgets a file once its staged version changes", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "one\n");
+    r.commit("init");
+    r.write("a.txt", "two\n");
+    r.git("add", "a.txt");
+    await diff(r.root, { kind: "unstaged" });
+    r.git("reset", "-q");
+    r.write("a.txt", "three\n");
+    r.git("add", "a.txt");
+    r.write("a.txt", "four\n");
+    expect(byPath((await diff(r.root, { kind: "unstaged" })).files, "a.txt").changedSinceStaged).toBeUndefined();
   });
 });
 

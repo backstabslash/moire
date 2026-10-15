@@ -9,8 +9,15 @@ const COPY: Record<CompareMode["kind"], [string, string]> = {
   branches: ["Nothing to review.", "The branch has no changes since it split from the base."],
 };
 
-export function NoChanges({ mode, onBranches, onAllFiles }: { mode: CompareMode; onBranches(): void; onAllFiles(): void }) {
-  const [title, text] = COPY[mode.kind];
+interface NoChangesProps {
+  mode: CompareMode;
+  copy?: [string, string];
+  onBranches(): void;
+  onAllFiles(): void;
+}
+
+export function NoChanges({ mode, copy, onBranches, onAllFiles }: NoChangesProps) {
+  const [title, text] = copy ?? COPY[mode.kind];
   return (
     <div className="empty-state">
       <div className="empty-inner">

@@ -11,8 +11,7 @@ moire: a desktop app for reviewing code changes in a local git repo (diffs, stag
 - `src/preload/index.ts`: the entire IPC surface, exposed as `window.moire`
 - `src/shared/types.ts`: data passed between main and renderer
 - `src/renderer/src/model/`: pure functions (rows, selection, search, copy), unit-tested
-- `design/comparator.html`: visual reference for the UI
-- `IDEAS.md`: candidate features and what's out of scope
+- `launcher/`: the `npx @backstabslash/moire` package, plain JS with no dependencies; installs the latest GitHub release and opens it
 
 Flow: renderer → `window.moire` (preload) → `ipcMain` (`src/main/ipc.ts`) → `git`
 
@@ -24,10 +23,12 @@ Flow: renderer → `window.moire` (preload) → `ipcMain` (`src/main/ipc.ts`) �
 - `pnpm test`: unit tests, including real git in throwaway repos
 - `pnpm test:e2e`: builds, then runs Playwright; `npx playwright test` skips the build, so only use it right after one
 - `MOIRE_SHOTS=/tmp/shots pnpm test:e2e`: also saves screenshots from the specs that take them
+- `pnpm demo`: builds, then records `demo/demo.gif` (in the README) and `demo/demo.mp4` from a scripted run on a throwaway repo. Re-run it after UI changes
 - `pnpm dist --linux AppImage deb --publish never`: local packages in `dist/` (rpm also needs `rpmbuild`)
-- Release: bump `version` in package.json, push tag `v<version>`; `.github/workflows/release.yml` uploads Linux and macOS builds to a draft release
+- Release: bump `version` in package.json, push tag `v<version>`; `.github/workflows/release.yml` uploads Linux and macOS builds to a draft release. Updates and the launcher only see it once the draft is published
+- Launcher release, only when `launcher/` changes: bump `launcher/package.json`, push tag `launcher-v<version>`; `.github/workflows/launcher.yml` publishes to npm
 
-Dev-only env vars (ignored when packaged): `MOIRE_PREFS` (preset UI state as JSON), `MOIRE_SCREENSHOT=file.png` (capture once the first file is coloured, then quit), `MOIRE_BENCH=1` (scroll benchmark), `MOIRE_HIDDEN=1` (offscreen window; the e2e specs set it).
+Dev-only env vars (ignored when packaged): `MOIRE_PREFS` (preset UI state as JSON), `MOIRE_SCREENSHOT=file.png` (capture once the first file is coloured, then quit), `MOIRE_BENCH=1` (scroll benchmark), `MOIRE_HIDDEN=1` (offscreen window; the e2e specs set it). The launcher reads `MOIRE_RELEASES`, a URL standing in for GitHub's latest-release JSON.
 
 ## Verification
 Run `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test` and `pnpm test:e2e`. For UI changes, also look at a screenshot in light and dark themes.

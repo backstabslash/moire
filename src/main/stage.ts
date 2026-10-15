@@ -65,9 +65,10 @@ async function runAct(root: string, req: StageRequest, logPath: string): Promise
   const stale = new Error(`${name} changed since you looked. Refreshed.`);
   const paths = file.oldPath ? [file.path, file.oldPath] : [file.path];
   const current = (await diff(root, { kind: mode }, paths)).files.find((f) => f.path === file.path);
-  const same = file.unread ? current?.status === file.status : JSON.stringify(current) === JSON.stringify(file);
+  // The full refresh marks files staged-then-changed; a refresh of one path doesn't.
+  const seen = (f: FileDiff | undefined) => JSON.stringify(f && { ...f, changedSinceStaged: undefined });
+  const same = file.unread ? current?.status === file.status : seen(current) === seen(file);
   if (!same) throw stale;
-  await Promise.all(paths.map((p) => indexEntry(root, p)));
 
   const changed = file.hunks.flatMap((h, hi) => h.lines.flatMap((l, li) => (l.kind === "ctx" ? [] : [`${hi}:${li}`])));
   const picked = new Set((req.lines ?? []).map((r) => `${r.hunk}:${r.line}`).filter((k) => changed.includes(k)));
@@ -77,15 +78,17 @@ async function runAct(root: string, req: StageRequest, logPath: string): Promise
   const kind = action === "discard" ? "worktree" : "index";
   const touched = action === "discard" ? [file.path] : paths;
   const read = (p: string, keep: boolean) => (kind === "index" ? indexEntry(root, p) : worktreeEntry(root, p, keep));
-  const before = await Promise.all(touched.map((p) => read(p, true)));
+  const [before] = await Promise.all([
+    Promise.all(touched.map((p) => read(p, true))),
+    kind === "worktree" && Promise.all(paths.map((p) => indexEntry(root, p))),
+  ]);
   try {
     if (whole) await actWhole(root, action, file, paths);
-    else await actLines(root, action, file, (h, i) => picked.has(`${h}:${i}`));
+    else await actLines(root, action, file, (h, i) => picked.has(`${h}:${i}`), kind === "index" ? before[0] : undefined);
   } catch (e) {
     throw e instanceof StaleError ? stale : e;
   }
-  const after = await Promise.all(touched.map((p) => read(p, false)));
-  const head = kind === "index" ? await headSha(root) : undefined;
+  const [after, head] = await Promise.all([Promise.all(touched.map((p) => read(p, false))), kind === "index" ? headSha(root) : undefined]);
 
   const label = whole ? `${VERB[action]} ${name}` : `${VERB[action]} ${picked.size} ${picked.size === 1 ? "line" : "lines"} in ${name}`;
   const steps = touched.map((path, i): Step => ({ path, [kind]: [before[i], after[i]] }));
@@ -114,7 +117,7 @@ async function actWhole(root: string, action: StageAction, file: FileDiff, paths
   }
 }
 
-async function actLines(root: string, action: StageAction, file: FileDiff, selected: (hunk: number, line: number) => boolean) {
+async function actLines(root: string, action: StageAction, file: FileDiff, selected: (hunk: number, line: number) => boolean, entry?: Blob | null) {
   const name = basename(file.path);
   if (file.binary || file.tooLarge) throw new Error(`${name} can only be ${VERB[action].toLowerCase()} whole`);
   if (file.hunks.some((h) => h.lines.some((l) => l.text.includes("\uFFFD")))) throw new Error(`${name} isn't UTF-8 text, so it can only be changed whole`);
@@ -126,7 +129,6 @@ async function actLines(root: string, action: StageAction, file: FileDiff, selec
     await writeFile(full, splice(utf8(base, name), file.hunks, selected, "a"));
     return;
   }
-  const entry = await indexEntry(root, file.path);
   if (entry?.mode === "120000") throw new Error(`${name} is a symlink and can only be ${VERB[action].toLowerCase()} whole`);
   const base = entry ? await gitBuffer(root, ["cat-file", "blob", entry.sha]) : Buffer.alloc(0);
   const text = splice(utf8(base, name), file.hunks, selected, action === "stage" ? "b" : "a");

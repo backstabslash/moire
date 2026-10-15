@@ -150,7 +150,7 @@ function PickerPop({ initial, root, mode, onMode, onClose }: PickerPopProps) {
       >
         {MODE_NAMES.branches}
         <kbd>5</kbd>
-        <small>A merge base, B the branch, like a pull request</small>
+        <small>A merge base, B the branch</small>
       </button>
       {sub === "commit" && <CommitList root={root} selected={mode.kind === "commit" ? mode.sha : null} onPick={(sha) => pick({ kind: "commit", sha })} />}
       {sub === "branches" && <BranchForm root={root} mode={mode} onPick={(base, head) => pick({ kind: "branches", base, head })} />}

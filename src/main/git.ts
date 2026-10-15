@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
-import { lstat, open, readdir, readFile, readlink } from "node:fs/promises";
-import { basename, isAbsolute, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { lstat, open, readdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
+import { basename, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
 import type { CommitInfo, CompareMode, DiffResult, FileContents, FileDiff, FileTree, Hunk, RepoInfo, SideInfo } from "../shared/types";
 import { parseDiff, sortFiles } from "./parse";
@@ -53,15 +54,27 @@ async function tryGit(root: string, args: string[]): Promise<string | null> {
   }
 }
 
+const fixed = new Map<string, Promise<string | null>>();
+
+function fixedGit(root: string, args: string[]): Promise<string | null> {
+  const key = `${root}\0${args.join("\0")}`;
+  let value = fixed.get(key);
+  if (!value) {
+    value = tryGit(root, args);
+    fixed.set(key, value);
+    void value.then((v) => v === null && fixed.delete(key));
+  }
+  return value;
+}
+
 export async function repoInfo(path: string): Promise<RepoInfo> {
-  const root = await tryGit(path, ["rev-parse", "--show-toplevel"]);
+  const root = await fixedGit(path, ["rev-parse", "--show-toplevel"]);
   if (!root) throw new Error(`Not a git repository: ${path}`);
-  return {
-    root,
-    name: basename(root),
-    branch: await tryGit(root, ["symbolic-ref", "--short", "-q", "HEAD"]),
-    head: await tryGit(root, ["rev-parse", "--short", "-q", "--verify", "HEAD"]),
-  };
+  const [branch, head] = await Promise.all([
+    tryGit(root, ["symbolic-ref", "--short", "-q", "HEAD"]),
+    tryGit(root, ["rev-parse", "--short", "-q", "--verify", "HEAD"]),
+  ]);
+  return { root, name: basename(root), branch, head };
 }
 
 async function resolve(root: string, rev: string): Promise<string> {
@@ -71,7 +84,7 @@ async function resolve(root: string, rev: string): Promise<string> {
 }
 
 async function emptyTree(root: string): Promise<string> {
-  const format = (await tryGit(root, ["rev-parse", "--show-object-format"])) ?? "sha1";
+  const format = (await fixedGit(root, ["rev-parse", "--show-object-format"])) ?? "sha1";
   return EMPTY_TREE[format] ?? EMPTY_TREE.sha1;
 }
 
@@ -166,20 +179,63 @@ async function untrackedFile(root: string, path: string): Promise<FileDiff | nul
 const DIFF = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-relative", "-M", "--src-prefix=a/", "--dst-prefix=b/"];
 
 export async function diff(root: string, mode: CompareMode, paths: string[] = []): Promise<DiffResult> {
-  const repo = await repoInfo(root);
-  const { a, b } = await sides(repo.root, mode);
-  const empty = await emptyTree(repo.root);
+  const [repo, { a, b }, empty] = await Promise.all([repoInfo(root), sides(root, mode), emptyTree(root)]);
   const pathspec = literal(paths);
   const args = [...DIFF, "-U3"];
   if (mode.kind === "staged") args.push("--cached", treeish(a, empty));
   else if (mode.kind === "all") args.push(treeish(a, empty));
   else if (mode.kind === "commit" || mode.kind === "branches") args.push(treeish(a, empty), treeish(b, empty));
   args.push("--", ...pathspec);
-  const files = parseDiff(await git(repo.root, args));
-  if (mode.kind === "unstaged" || mode.kind === "all") files.push(...(await untracked(repo.root, pathspec)));
-  if (mode.kind === "all") await markStaged(repo.root, files, treeish(a, empty), pathspec);
-  await markNoise(repo.root, files);
-  return { repo, a, b, files: sortFiles(files) };
+  const worktree = mode.kind === "unstaged" || mode.kind === "all";
+  const [out, extra] = await Promise.all([git(repo.root, args), worktree ? untracked(repo.root, pathspec) : []]);
+  const files = [...parseDiff(out), ...extra];
+  const [progress] = await Promise.all([
+    worktree && !paths.length ? markChangedSinceStaged(repo.root, files, mode.kind === "unstaged") : undefined,
+    mode.kind === "all" && markStaged(repo.root, files, treeish(a, empty), pathspec),
+    markNoise(repo.root, files),
+  ]);
+  return { repo, a, b, files: sortFiles(files), progress };
+}
+
+function rawBlobs(out: string): Map<string, string> {
+  const parts = out.split("\0");
+  const blobs = new Map<string, string>();
+  for (let i = 0; i + 1 < parts.length;) {
+    const [, , , blob, status] = parts[i].split(" ");
+    const paths = /^[RC]/.test(status) ? 2 : 1;
+    blobs.set(parts[i + paths], blob);
+    i += paths + 1;
+  }
+  return blobs;
+}
+
+// Remembers fully staged blobs, to tell a later edit apart from staging part of a file.
+async function markChangedSinceStaged(root: string, files: FileDiff[], filesAreUnstaged: boolean) {
+  const [cached, unstaged, memoryPath] = await Promise.all([
+    git(root, ["diff", "--cached", "--raw", "--no-abbrev", "-z", "-M"]),
+    filesAreUnstaged ? "" : git(root, ["diff", "--raw", "--no-abbrev", "-z", "--no-renames"]),
+    fixedGit(root, ["rev-parse", "--git-path", "moire-staged"]),
+  ]);
+  const dirty = new Set([...rawBlobs(unstaged).keys(), ...files.filter((f) => filesAreUnstaged || f.status === "untracked").map((f) => f.path)]);
+  const memory = resolvePath(root, memoryPath!.trim());
+  const before: Record<string, string> = await readFile(memory, "utf8")
+    .then(JSON.parse)
+    .catch(() => ({}));
+  const after: Record<string, string> = {};
+  const changed = new Set<string>();
+  const staged = rawBlobs(cached);
+  for (const [path, blob] of staged) {
+    if (!dirty.has(path) || before[path] === blob) after[path] = blob;
+    if (dirty.has(path) && before[path] === blob) changed.add(path);
+  }
+  if (JSON.stringify(after) !== JSON.stringify(before)) {
+    const tmp = `${memory}.${randomUUID()}`;
+    await writeFile(tmp, JSON.stringify(after))
+      .then(() => rename(tmp, memory))
+      .catch(() => rm(tmp, { force: true }));
+  }
+  for (const f of files) if (changed.has(f.path)) f.changedSinceStaged = true;
+  return { staged: [...staged.keys()].filter((p) => !dirty.has(p)).length, total: new Set([...staged.keys(), ...dirty]).size };
 }
 
 const LOCKFILES = new Set([

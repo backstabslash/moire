@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { app, BrowserWindow, nativeTheme, shell } from "electron";
 import { registerIpc } from "./ipc";
 import { handlePreviewProtocol, registerPreviewScheme } from "./preview";
+import { checkForUpdates } from "./update";
 import { registerZoomIpc, setupZoom } from "./zoom";
 
 function createWindow() {
@@ -55,5 +56,6 @@ registerPreviewScheme();
 void app.whenReady().then(() => {
   handlePreviewProtocol();
   createWindow();
+  checkForUpdates();
 });
 app.on("window-all-closed", () => app.quit());

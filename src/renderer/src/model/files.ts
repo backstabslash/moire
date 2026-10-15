@@ -28,3 +28,10 @@ export function fuzzyMatch(query: string, path: string): boolean {
   for (const ch of path.toLowerCase()) if (ch === q[i]) i++;
   return i === q.length;
 }
+
+const CACHE_LIMIT = 24;
+
+export function remember<V>(cache: Map<string, V>, key: string, value: V) {
+  cache.set(key, value);
+  if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!);
+}

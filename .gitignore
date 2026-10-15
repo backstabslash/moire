@@ -24,3 +24,5 @@ dist-ssr
 test-results
 playwright-report
 IDEAS.md
+design/
+demo/demo.mp4

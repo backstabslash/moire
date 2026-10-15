@@ -43,6 +43,7 @@ export interface FileDiff {
   tooLarge?: boolean;
   unread?: boolean;
   staged?: "full" | "partial" | "none";
+  changedSinceStaged?: boolean;
   noise?: string;
   additions: number;
   deletions: number;
@@ -54,6 +55,7 @@ export interface DiffResult {
   a: SideInfo;
   b: SideInfo;
   files: FileDiff[];
+  progress?: { staged: number; total: number };
 }
 
 export interface FileTree {

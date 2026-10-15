@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CompareMode, DiffResult, FileContents, FileDiff, Hunk, LineRef, RepoInfo, StageAction } from "../../shared/types";
+import type { CompareMode, FileContents, FileDiff, Hunk, LineRef, RepoInfo, StageAction } from "../../shared/types";
 import { CommitBox } from "./components/CommitBox";
 import { type Blink, DiffView, type DiffViewHandle, type Preview } from "./components/DiffView";
 import { NoChanges, NoRepo } from "./components/EmptyState";
+import { FileMenu, type MenuAction, type MenuAt } from "./components/FileMenu";
 import { RepoPicker } from "./components/RepoPicker";
 import { SearchBar } from "./components/SearchBar";
+import { StagedNotice, StageProgress } from "./components/StageProgress";
 import { type FilesView, Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { DARK_IDS, LIGHT_IDS, THEME_IDS, type ThemeId, toneOf } from "./components/ThemePicker";
@@ -12,13 +14,14 @@ import { Toast, type ToastMsg } from "./components/Toast";
 import { type PickerState, Toolbar } from "./components/Toolbar";
 import { highlight } from "./highlight/client";
 import type { TokLines } from "./highlight/types";
-import { fileKey as fileKeyOf, fuzzyMatch, hashString, orderFiles } from "./model/files";
+import { fileKey as fileKeyOf, fuzzyMatch, hashString, orderFiles, remember } from "./model/files";
 import { langFor } from "./model/lang";
 import { previewOf } from "./model/preview";
 import { buildRows, followHunk, type Layout, type Row, type Scope } from "./model/rows";
 import { copyCode, copyMarkdown } from "./model/copy";
 import { changedRefs, hunkRefs } from "./model/selection";
 import type { Hit } from "./model/search";
+import { useDiff } from "./useDiff";
 import { useSearch } from "./useSearch";
 import { useSelection } from "./useSelection";
 import { useStored } from "./useStored";
@@ -26,7 +29,6 @@ import { useTree } from "./useTree";
 
 type SimpleMode = "unstaged" | "staged" | "all";
 
-const CACHE_LIMIT = 24;
 const BLINK_MS = 650;
 
 function message(err: unknown) {
@@ -39,7 +41,7 @@ export function App() {
   const [booting, setBooting] = useState(true);
   const [simpleMode, setSimpleMode] = useStored<SimpleMode>("mode", "unstaged", ["unstaged", "staged", "all"]);
   const [special, setSpecial] = useState<CompareMode | null>(null);
-  const mode = useMemo<CompareMode>(() => special ?? { kind: simpleMode }, [special, simpleMode]);
+  const wantMode = useMemo<CompareMode>(() => special ?? { kind: simpleMode }, [special, simpleMode]);
   const [layout, setLayout] = useStored<Layout>("layout", "split", ["split", "unified"]);
   const [scope, setScope] = useStored<Scope>("scope", "changed", ["changed", "full"]);
   const [previewPref, setPreviewPref] = useStored<"on" | "off">("preview", "off", ["on", "off"]);
@@ -47,12 +49,11 @@ export function App() {
   const [lightTheme, setLightTheme] = useStored<ThemeId>("theme-light", "light", LIGHT_IDS);
   const [darkTheme, setDarkTheme] = useStored<ThemeId>("theme-dark", "dark", DARK_IDS);
   const [cvd, setCvd] = useStored<"on" | "off">("cvd", "off", ["on", "off"]);
+  const [hideStaged, setHideStaged] = useStored<"on" | "off">("hide-staged", "off", ["on", "off"]);
   const [blink, setBlink] = useState<(Blink & { auto: boolean }) | null>(null);
   const [zoom, setZoom] = useState(1);
   const blinkRef = useRef(blink);
   blinkRef.current = blink;
-  const [diff, setDiff] = useState<DiffResult | null>(null);
-  const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<string | null>(null);
   const activeRef = useRef(active);
@@ -62,32 +63,48 @@ export function App() {
   const [contents, setContents] = useState<{ key: string; data: FileContents } | null>(null);
   const [tokens, setTokens] = useState<{ key: string; data: [TokLines | null, TokLines | null] } | null>(null);
   const [picker, setPicker] = useState<PickerState>(null);
-  const [refreshTick, setRefreshTick] = useState(0);
   const [toast, setToast] = useState<ToastMsg | null>(null);
-  const loadedView = useRef<string | null>(null);
   const shownFiles = useRef<string[]>([]);
-  const [fresh, setFresh] = useState<{ paths: ReadonlySet<string>; at: number } | null>(null);
-  const loadedKeys = useRef(new Map<string, string>());
-  const acting = useRef(false);
-  const [busy, setBusy] = useState(false);
-  const settleAt = useRef(Infinity);
-  const setActing = useCallback((on: boolean) => {
-    acting.current = on;
-    if (on) settleAt.current = Infinity;
-    setBusy(on);
-  }, []);
-  const settle = useCallback(() => {
-    setRefreshTick((t) => (settleAt.current = t + 1));
-  }, []);
   const viewRef = useRef<DiffViewHandle>(null);
   const pendingFocus = useRef<"first" | "last" | null>(null);
   const contentCache = useRef(new Map<string, FileContents>());
   const tokenCache = useRef(new Map<string, [TokLines | null, TokLines | null]>());
 
-  const modeKey = JSON.stringify(mode);
   const [filesView, setFilesView] = useStored<FilesView>("files", "changed", ["changed", "all"]);
   const browsing = useRef(filesView === "all");
   browsing.current = filesView === "all";
+  const hidden = useCallback((m: CompareMode, f: FileDiff) => m.kind === "all" && hideStaged === "on" && f.staged === "full", [hideStaged]);
+  const visible = (m: CompareMode, files: FileDiff[]) => orderFiles(files).filter((f) => !hidden(m, f));
+  const { mode, diff, loadedAt, fresh, refreshTick, refresh, reset, busy, acting, startActing, settle } = useDiff(repo, wantMode, {
+    async prefetch(root, m, result) {
+      const open = result.files.find((f) => f.path === activeRef.current);
+      const openKey = open && fileKeyOf(JSON.stringify(m), open);
+      if (!open || !openKey || open.binary || open.tooLarge || contentCache.current.has(openKey)) return;
+      const data = await window.moire.fileContents(root, m, open).catch(() => null);
+      if (data) remember(contentCache.current, openKey, data);
+    },
+    loaded(result, m, sameView) {
+      setError(null);
+      const ordered = visible(m, result.files);
+      const has = (p: string | null) => ordered.some((f) => f.path === p);
+      const wanted = localStorage.getItem("moire.file");
+      localStorage.removeItem("moire.file");
+      setActive((cur) => {
+        const kept = [cur, wanted].find(has);
+        if (kept || !sameView) return kept ?? ordered[0]?.path ?? null;
+        const prev = shownFiles.current;
+        if (cur && browsing.current && !prev.includes(cur)) return cur;
+        return prev.slice(prev.indexOf(cur!) + 1).find(has) ?? ordered.at(-1)?.path ?? null;
+      });
+    },
+    switched(result, m) {
+      if (browsing.current) return;
+      const ordered = visible(m, result.files);
+      setActive((cur) => (ordered.some((f) => f.path === cur) ? cur : (ordered[0]?.path ?? null)));
+    },
+    error: (e) => setError(message(e)),
+  });
+  const modeKey = JSON.stringify(mode);
   const tree = useTree(repo, mode, modeKey, refreshTick, filesView === "all", (e) => setError(message(e)));
   const [browsed, setBrowsed] = useState<{ path: string; modeKey: string; data: FileContents } | null>(null);
   const browsedFile = useMemo(
@@ -136,64 +153,6 @@ export function App() {
       .then(setRepo, (e) => setError(message(e)))
       .finally(() => setBooting(false));
   }, []);
-
-  useEffect(() => {
-    const onFocus = () => setRefreshTick((t) => t + 1);
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, []);
-
-  useEffect(() => {
-    if (!repo) return;
-    window.moire.watch(repo.root).catch((e) => setError(message(e)));
-    return window.moire.onRepoChanged(() => setRefreshTick((t) => t + 1));
-  }, [repo]);
-
-  useEffect(() => {
-    if (!repo) return;
-    let stale = false;
-    window.moire.diff(repo.root, mode).then(
-      async (result) => {
-        if (stale) return;
-        const open = result.files.find((f) => f.path === activeRef.current);
-        const openKey = open && fileKeyOf(modeKey, open);
-        if (open && openKey && !open.binary && !open.tooLarge && !contentCache.current.has(openKey)) {
-          const data = await window.moire.fileContents(repo.root, mode, open).catch(() => null);
-          if (stale) return;
-          if (data) remember(contentCache.current, openKey, data);
-        }
-        setDiff((prev) => (prev && JSON.stringify(prev) === JSON.stringify(result) ? prev : result));
-        setLoadedAt(Date.now());
-        setError(null);
-        if (refreshTick >= settleAt.current) setActing(false);
-        const view = `${repo.root}:${modeKey}`;
-        const sameView = loadedView.current === view;
-        loadedView.current = view;
-        const keys = new Map(result.files.map((f) => [f.path, fileKeyOf(modeKey, f)]));
-        const changed = [...keys].filter(([path, key]) => loadedKeys.current.get(path) !== key).map(([path]) => path);
-        if (sameView && !acting.current && changed.length) setFresh({ paths: new Set(changed), at: Date.now() });
-        loadedKeys.current = keys;
-        const ordered = orderFiles(result.files);
-        const has = (p: string | null) => ordered.some((f) => f.path === p);
-        const wanted = localStorage.getItem("moire.file");
-        localStorage.removeItem("moire.file");
-        setActive((cur) => {
-          const kept = [cur, wanted].find(has);
-          if (kept || !sameView) return kept ?? ordered[0]?.path ?? null;
-          const prev = shownFiles.current;
-          if (cur && browsing.current && !prev.includes(cur)) return cur;
-          return prev.slice(prev.indexOf(cur!) + 1).find(has) ?? ordered.at(-1)?.path ?? null;
-        });
-      },
-      (e) => {
-        if (refreshTick >= settleAt.current) setActing(false);
-        if (!stale) setError(message(e));
-      },
-    );
-    return () => {
-      stale = true;
-    };
-  }, [repo, modeKey, refreshTick]);
 
   useEffect(() => {
     setExpanded(new Set());
@@ -320,7 +279,7 @@ export function App() {
   const setFilter = useCallback((text: string) => setFilters((cur) => ({ ...cur, [filesView]: text })), [filesView]);
   const filter = filters.changed;
   const filterInput = useRef<HTMLInputElement>(null);
-  const listed = useMemo(() => (filter ? files.filter((f) => fuzzyMatch(filter, f.path)) : files), [files, filter]);
+  const listed = useMemo(() => files.filter((f) => (!filter || fuzzyMatch(filter, f.path)) && !hidden(mode, f)), [files, filter, hidden, mode]);
   const showFiles = useCallback(
     (view: FilesView) => {
       setFilesView(view);
@@ -328,8 +287,15 @@ export function App() {
     },
     [files, listed, setFilesView],
   );
+  const allHidden = files.length > 0 && files.every((f) => hidden(mode, f));
+  const hideStagedFiles = (hide: boolean) => {
+    setHideStaged(hide ? "on" : "off");
+    if (hide && changedFile?.staged === "full") setActive(files.find((f) => f.staged !== "full")?.path ?? null);
+  };
   const [repoPicker, setRepoPicker] = useState(false);
   const closeRepoPicker = useCallback(() => setRepoPicker(false), []);
+  const [menu, setMenu] = useState<MenuAt | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
   const [draft, setDraft] = useState("");
 
   const { selection, select, clear } = useSelection(rows);
@@ -395,7 +361,7 @@ export function App() {
       const picked = changed.filter((r) => target === null || r.hunk === target);
       lines = picked.length ? picked : hunkRefs(file, target ?? focusHunk);
     }
-    setActing(true);
+    startActing();
     try {
       notify(await window.moire.act(repo.root, { mode: actions, action, file, lines }), true);
     } catch (e) {
@@ -447,7 +413,7 @@ export function App() {
 
   const undo = useCallback(async () => {
     if (!repo) return;
-    setActing(true);
+    startActing();
     try {
       const label = await window.moire.undo(repo.root);
       notify(label ? `Undid: ${label}` : "Nothing to undo");
@@ -455,7 +421,7 @@ export function App() {
       notify(message(e));
     }
     settle();
-  }, [repo, notify, setActing, settle]);
+  }, [repo, notify, startActing, settle]);
 
   const selectFile = useCallback(
     (delta: number, focus: "first" | "last" | null = null) => {
@@ -482,13 +448,16 @@ export function App() {
     [focusHunk, hunkRows, selectFile],
   );
 
-  const switchRepo = useCallback((info: RepoInfo | null) => {
-    if (!info) return;
-    setSpecial(null);
-    setDiff(null);
-    setFilters({ changed: "", all: "" });
-    setRepo(info);
-  }, []);
+  const switchRepo = useCallback(
+    (info: RepoInfo | null) => {
+      if (!info) return;
+      setSpecial(null);
+      reset();
+      setFilters({ changed: "", all: "" });
+      setRepo(info);
+    },
+    [reset],
+  );
   const pickRepo = useCallback(() => {
     setRepoPicker(false);
     window.moire.pickRepo(repo?.root).then(switchRepo, (e) => setError(message(e)));
@@ -503,7 +472,7 @@ export function App() {
 
   const commitStaged = async () => {
     if (!repo || !draft.trim() || acting.current) return;
-    setActing(true);
+    startActing();
     try {
       notify(`Committed ${await window.moire.commit(repo.root, draft.trim())}`);
       setDraft("");
@@ -520,6 +489,26 @@ export function App() {
       (editor) => notify(`Opened in ${editor}`),
       (e) => notify(message(e)),
     );
+  };
+  const openMenu = (path: string, event: React.MouseEvent) => {
+    event.preventDefault();
+    setMenu({ path, x: event.clientX, y: event.clientY });
+  };
+  const pickMenu = (action: MenuAction) => {
+    if (!repo || !menu) return;
+    const path = menu.path.replace(/\/$/, "");
+    const name = path.split("/").pop();
+    const done = (text: string) => () => notify(text);
+    const fail = (e: unknown) => notify(message(e));
+    const line = file && path === file.path ? editorLine(file, rows, selection, focusHunk) : 1;
+    const run: Record<MenuAction, () => Promise<unknown>> = {
+      copy: () => window.moire.copy(path).then(done(`Copied ${path}`)),
+      "copy-abs": () => window.moire.copy(`${repo.root}/${path}`).then(done(`Copied ${repo.root}/${path}`)),
+      reveal: () => window.moire.revealFile(repo.root, path),
+      editor: () => window.moire.openInEditor(repo.root, path, line).then((editor) => notify(`Opened in ${editor}`)),
+      open: () => window.moire.openWithDefault(repo.root, path).then(done(`Opened ${name}`)),
+    };
+    run[action]().catch(fail);
   };
   const editorRef = useRef(openEditor);
   editorRef.current = openEditor;
@@ -554,7 +543,7 @@ export function App() {
         return;
       }
       if (event.ctrlKey || event.metaKey || event.altKey) return;
-      if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea")) return;
+      if (event.target instanceof HTMLElement && event.target.closest("input:not([type=checkbox]), select, textarea, .file-menu")) return;
       if (picker && event.key !== "Escape") return;
       if ((event.key === "b" || event.key === "B") && event.repeat) return event.preventDefault();
       const bindings: Record<string, () => void> = {
@@ -567,7 +556,7 @@ export function App() {
         t: () => setTheme(toneOf(theme) === "dark" ? lightTheme : darkTheme),
         b: holdBlink,
         B: () => hunkRows.length && toggleBlink(focusHunk),
-        r: () => setRefreshTick((t) => t + 1),
+        r: refresh,
         s: () => (actions ? onAct(actions === "staged" ? "unstage" : "stage", null) : notify("Stage from the Unstaged view (1), unstage from Staged (2)")),
         x: () => (actions === "unstaged" ? onAct("discard", null) : notify("Discard works in the Unstaged view (1)")),
         u: undo,
@@ -630,6 +619,7 @@ export function App() {
     darkTheme,
     showFiles,
     filesView,
+    refresh,
   ]);
 
   useDevHooks(viewRef, !!diff && (!file || file.binary || !!file.tooLarge || !!freshTokens || fileContents?.tooLarge === true));
@@ -697,11 +687,29 @@ export function App() {
             filterRef={filterInput}
             onFilter={setFilter}
             onSelect={setActive}
+            menu={menu?.path ?? null}
+            onMenu={openMenu}
             onSwitchRepo={() => setRepoPicker(true)}
           >
+            {diff.progress && diff.progress.total > 0 && (
+              <StageProgress
+                staged={diff.progress.staged}
+                total={diff.progress.total}
+                changed={files.filter((f) => f.changedSinceStaged).length}
+                hideStaged={mode.kind === "all" ? hideStaged === "on" : null}
+                onHideStaged={hideStagedFiles}
+              />
+            )}
             {mode.kind === "staged" && <CommitBox message={draft} busy={busy} onMessage={setDraft} onCommit={commitStaged} />}
           </Sidebar>
-          {!file && !files.length && <NoChanges mode={mode} onBranches={() => setPicker("branches")} onAllFiles={() => showFiles("all")} />}
+          {!file && (!files.length || allHidden) && (
+            <NoChanges
+              mode={mode}
+              copy={allHidden ? ["Everything is staged.", "Turn off Hide staged to see the staged files."] : undefined}
+              onBranches={() => setPicker("branches")}
+              onAllFiles={() => showFiles("all")}
+            />
+          )}
           {file && (
             <DiffView
               key={`${modeKey}:${file.path}`}
@@ -725,6 +733,8 @@ export function App() {
               onTogglePreview={previewable && !previewable.forced ? togglePreview : null}
               blink={blink}
               onBlink={toggleBlink}
+              onMenu={openMenu}
+              notice={file.changedSinceStaged && <StagedNotice newEdits={diff.a.kind === "index"} onMode={setMode} />}
             />
           )}
         </>
@@ -735,6 +745,7 @@ export function App() {
       )}
       <StatusBar loadedAt={loadedAt} files={files} error={error} actions={actions} zoom={zoom} />
       <Toast toast={toast} onUndo={undo} />
+      {menu && <FileMenu at={menu} onDisk={files.find((f) => f.path === menu.path)?.status !== "deleted"} onPick={pickMenu} onClose={closeMenu} />}
       {repoPicker && <RepoPicker current={repo.root} onOpen={openRecent} onBrowse={pickRepo} onClose={closeRepoPicker} />}
     </div>
   );
@@ -748,11 +759,6 @@ function editorLine(file: FileDiff, rows: Row[], selection: ReadonlySet<string>,
   }
   const hunk = file.hunks[focusHunk];
   return Math.max(1, hunk?.lines.find((l) => l.kind === "add")?.newNo ?? hunk?.newStart ?? 1);
-}
-
-function remember<V>(cache: Map<string, V>, key: string, value: V) {
-  cache.set(key, value);
-  if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!);
 }
 
 function useDevHooks(viewRef: React.RefObject<DiffViewHandle | null>, settled: boolean) {

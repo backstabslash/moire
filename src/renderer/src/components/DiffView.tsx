@@ -41,6 +41,8 @@ interface Props {
   onTogglePreview: (() => void) | null;
   blink: Blink | null;
   onBlink(hunk: number): void;
+  onMenu(path: string, event: React.MouseEvent): void;
+  notice?: React.ReactNode;
 }
 
 export interface Blink {
@@ -76,6 +78,8 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     onTogglePreview,
     blink,
     onBlink,
+    onMenu,
+    notice,
   } = props;
   const layout = preview?.kind === "image" ? "split" : preview || file.status === "unchanged" ? "unified" : props.layout;
   const onlyB = file.status === "added" || file.status === "untracked" || file.status === "unchanged";
@@ -163,7 +167,7 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
       className={`main${preview ? ` is-preview preview-${preview.kind}` : file.status === "unchanged" ? " is-whole" : ""}`}
       data-plate={blink && !preview ? blink.plate : undefined}
     >
-      <div className="panes-head">
+      <div className="panes-head" onContextMenu={(e) => onMenu(file.path, e)}>
         {layout === "split" ? (
           <>
             <PaneHead tag="a" name={file.status === "added" || file.status === "untracked" ? "" : oldName} side={a} />
@@ -187,6 +191,7 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
           </div>
         )}
       </div>
+      {notice}
       {preview?.kind === "image" && <ImagePreview root={preview.root} mode={preview.mode} file={file} a={a} b={b} version={preview.version} />}
       {preview?.kind === "markdown" && (
         <MarkdownPreview
