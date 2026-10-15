@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FileDiff } from "../../../shared/types";
+import { type CommandId, COMMANDS, keyLabel } from "../../../shared/keymap";
+import { keyText, MAC, useKeymap } from "./Key";
 import { Mark } from "./Mark";
 
 function ago(ms: number) {
@@ -16,9 +18,24 @@ interface Props {
   error: string | null;
   actions: "unstaged" | "staged" | null;
   zoom: number;
+  hints?: boolean;
+  onCommand(id: CommandId): void;
 }
 
-export function StatusBar({ loadedAt, files, error, actions, zoom }: Props) {
+export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true, onCommand }: Props) {
+  const keymap = useKeymap();
+  const hint = (ids: CommandId[], text: string, run = ids[0]) => {
+    const bound = ids.filter((id) => keymap.keys[id].length);
+    if (!bound.length) return null;
+    const keys = bound.map((id) => keyLabel(keymap, id, MAC));
+    const title = bound.map((id) => `${COMMANDS[id].label} (${keyText(keymap, id)})`).join(", ");
+    return (
+      <button title={title} onClick={() => onCommand(run)}>
+        <kbd>{keys.join("") === "12345" ? "1–5" : keys.join(" ")}</kbd>
+        {text}
+      </button>
+    );
+  };
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 5000);
@@ -48,51 +65,29 @@ export function StatusBar({ loadedAt, files, error, actions, zoom }: Props) {
           {Math.round(zoom * 100)}%
         </button>
       )}
-      {error && <span className="error">{error}</span>}
+      {error && (
+        <span className="error" title={error}>
+          {error}
+        </span>
+      )}
       <span className="keys">
-        <span>
-          <kbd>j k</kbd>hunk
-        </span>
-        <span>
-          <kbd>[ ]</kbd>file
-        </span>
-        <span>
-          <kbd>b</kbd>blink
-        </span>
-        {actions && (
-          <>
-            <span>
-              <kbd>s</kbd>
-              {actions === "staged" ? "unstage" : "stage"}
-            </span>
-            {actions === "unstaged" && (
-              <span>
-                <kbd>x</kbd>discard
-              </span>
-            )}
-            <span>
-              <kbd>u</kbd>undo
-            </span>
-          </>
+        {hints && (
+          <span className="keys-list">
+            {hint(["nextHunk", "prevHunk"], "hunk")}
+            {hint(["prevFile", "nextFile"], "file", "nextFile")}
+            {hint(["blinkHold"], "blink", "blink")}
+            {actions && hint(["stage"], actions === "staged" ? "unstage" : "stage")}
+            {actions === "unstaged" && hint(["discard"], "discard")}
+            {actions && hint(["undo"], "undo")}
+            {hint(["copyMarkdown"], "copy")}
+            {hint(["search"], "search")}
+            {hint(["openEditor"], "editor")}
+            {hint(["fullFile"], "full file")}
+            {hint(["layout"], "layout")}
+            {hint(["unstaged", "staged", "all", "commit", "branches"], "compare", "compare")}
+          </span>
         )}
-        <span>
-          <kbd>c</kbd>copy
-        </span>
-        <span>
-          <kbd>/</kbd>search
-        </span>
-        <span>
-          <kbd>e</kbd>editor
-        </span>
-        <span>
-          <kbd>f</kbd>full file
-        </span>
-        <span>
-          <kbd>v</kbd>layout
-        </span>
-        <span>
-          <kbd>1–5</kbd>compare
-        </span>
+        {hint(["help"], "all keys")}
       </span>
     </footer>
   );

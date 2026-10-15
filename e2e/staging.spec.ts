@@ -86,6 +86,7 @@ test("staging a whole file moves on to the next one, and the All view marks what
   await expect(page.locator(".file.is-active .name")).toHaveText("new.ts");
   await page.keyboard.press("2");
   await expect(page.locator(".file", { hasText: "a.ts" })).toBeVisible();
+  await expect(page.locator(".pane-h").first()).toContainText("a.ts");
   await expect(page.locator(".app")).toHaveAttribute("aria-busy", "false");
   await page.keyboard.press("s");
   await expect(page.locator(".toast.show")).toContainText("Unstaged 2 lines in a.ts");

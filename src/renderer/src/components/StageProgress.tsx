@@ -1,4 +1,5 @@
 import type { CompareMode } from "../../../shared/types";
+import { Key } from "./Key";
 
 interface Props {
   staged: number;
@@ -6,9 +7,10 @@ interface Props {
   changed: number;
   hideStaged: boolean | null;
   onHideStaged(hide: boolean): void;
+  stageAll: { label: string; busy: boolean; run(): void } | null;
 }
 
-export function StageProgress({ staged, total, changed, hideStaged, onHideStaged }: Props) {
+export function StageProgress({ staged, total, changed, hideStaged, onHideStaged, stageAll }: Props) {
   const pct = (n: number) => `${(n / total) * 100}%`;
   return (
     <div className="stage-progress">
@@ -21,6 +23,12 @@ export function StageProgress({ staged, total, changed, hideStaged, onHideStaged
             <input type="checkbox" checked={hideStaged} onChange={(e) => onHideStaged(e.target.checked)} />
             Hide staged
           </label>
+        )}
+        {stageAll && (
+          <button disabled={stageAll.busy} onClick={stageAll.run}>
+            {stageAll.label}
+            <Key id="stageAll" />
+          </button>
         )}
       </div>
       <div className="stage-bar" title={changed ? `${changed} staged, then changed again` : undefined}>
@@ -37,10 +45,12 @@ export function StagedNotice({ newEdits, onMode }: { newEdits: boolean; onMode(m
       <p>{newEdits ? "Staged, then changed again. These are the new edits." : "Staged, then changed again. Staged lines are faded."}</p>
       <div className="seg" role="group" aria-label="Edits shown">
         <button aria-pressed={newEdits} onClick={() => onMode({ kind: "unstaged" })}>
-          New edits<kbd>1</kbd>
+          New edits
+          <Key id="unstaged" />
         </button>
         <button aria-pressed={!newEdits} onClick={() => onMode({ kind: "all" })}>
-          Whole diff<kbd>3</kbd>
+          Whole diff
+          <Key id="all" />
         </button>
       </div>
     </div>

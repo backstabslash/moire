@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FileDiff } from "../../../shared/types";
-import { buildTree, type Dir } from "./tree";
+import { buildTree, type Dir, parentDirs } from "./tree";
 
 const changed = (path: string, status: FileDiff["status"] = "modified"): FileDiff => ({ path, status, binary: false, additions: 1, deletions: 0, hunks: [] });
 
@@ -36,5 +36,13 @@ describe("buildTree", () => {
     ]);
     const tree = buildTree(listing, [], opened);
     expect(show(tree).slice(0, 3)).toEqual(["!out/ (0)", "  !deep/ (0)", "  !out/x.js"]);
+  });
+});
+
+describe("parentDirs", () => {
+  it("lists every folder above a path, outermost first", () => {
+    expect(parentDirs("src/lib/x.ts")).toEqual(["src/", "src/lib/"]);
+    expect(parentDirs("b.ts")).toEqual([]);
+    expect(parentDirs(null)).toEqual([]);
   });
 });

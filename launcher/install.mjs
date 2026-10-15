@@ -1,10 +1,12 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  closeSync,
   createWriteStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -13,7 +15,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -22,6 +24,45 @@ import { pipeline } from "node:stream/promises";
 /** @typedef {{ tag_name: string, assets: Asset[] }} Release */
 
 const releases = process.env.MOIRE_RELEASES || "https://api.github.com/repos/backstabslash/moire/releases/latest";
+
+export const usage = "usage: npx @backstabslash/moire [path] [--no-sandbox] [--uninstall] [--version] [--help]";
+
+/** @param {string[]} args */
+export function parseArgs(args) {
+  const known = ["--help", "-h", "--version", "-v", "--uninstall", "--no-sandbox"];
+  return {
+    help: args.includes("--help") || args.includes("-h"),
+    version: args.includes("--version") || args.includes("-v"),
+    uninstall: args.includes("--uninstall"),
+    noSandbox: args.includes("--no-sandbox"),
+    path: args.find((a) => !a.startsWith("-")),
+    unknown: args.find((a) => a.startsWith("-") && !known.includes(a)),
+  };
+}
+
+/** @param {NodeJS.ProcessEnv} env @param {string} url */
+export function releaseHeaders(env, url) {
+  /** @type {Record<string, string>} */
+  const headers = { Accept: "application/vnd.github+json" };
+  if (env.GITHUB_TOKEN && new URL(url).host === "api.github.com") headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+  return headers;
+}
+
+/** @param {number} status */
+export function releaseError(status) {
+  if (status === 404) return "no release published yet";
+  if (status === 403 || status === 429) return "GitHub's rate limit is used up; try later or set GITHUB_TOKEN";
+  return `GitHub answered ${status}`;
+}
+
+/** @param {string} url @param {RequestInit} [init] */
+async function reach(url, init) {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw Object.assign(new Error("can't reach GitHub"), { offline: true });
+  }
+}
 
 /** @param {string} a @param {string} b */
 export function newer(a, b) {
@@ -49,6 +90,17 @@ export function linuxPaths(env, home) {
 
 const macApp = () => join(homedir(), "Applications", "moire.app");
 
+/** @param {string} platform @param {NodeJS.ProcessEnv} env @param {string} home */
+export function installedPaths(platform, env, home) {
+  const bin = join(home, ".local", "bin", "moire");
+  if (platform === "darwin") {
+    const app = join(home, "Applications", "moire.app");
+    return { remove: [app, join(home, "Applications", ".moire-previous.app")], bin, owner: app, data: join(home, "Library", "Application Support", "moire") };
+  }
+  const { root, desktop } = linuxPaths(env, home);
+  return { remove: [root, desktop], bin, owner: root, data: join(env.XDG_CONFIG_HOME || join(home, ".config"), "moire") };
+}
+
 /** @param {string} path */
 const quote = (path) => `"${path.replace(/["`$\\]/g, "\\$&")}"`;
 
@@ -71,6 +123,18 @@ export function desktopEntry(root, noSandbox) {
 /** @param {string} root @param {boolean} noSandbox */
 export function binScript(root, noSandbox) {
   return `#!/bin/sh\nexec ${quote(join(root, "current", "moire"))}${noSandbox ? " --no-sandbox" : ""} "$@"\n`;
+}
+
+/** @param {string} app */
+export function macShim(app) {
+  return `#!/bin/sh\ncase "\${1:-.}" in /*) dir="$1" ;; *) dir="$PWD/\${1:-.}" ;; esac\nexec open -na ${quote(app)} --args "$dir"\n`;
+}
+
+/** @param {string} bin @param {string} owner @param {string} script */
+function writeBin(bin, owner, script) {
+  if (existsSync(bin) && !readFileSync(bin, "utf8").includes(owner)) return;
+  mkdirSync(dirname(bin), { recursive: true });
+  writeFileSync(bin, script, { mode: 0o755 });
 }
 
 export function sandboxBlocked() {
@@ -110,9 +174,13 @@ export function installedVersion() {
 
 /** @returns {Promise<Release>} */
 export async function latestRelease() {
-  const res = await fetch(releases, { headers: { Accept: "application/vnd.github+json" } });
-  if (res.status === 404) throw new Error("no release published yet");
-  if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+  let res = await reach(releases, { headers: releaseHeaders(process.env, releases) });
+  // A stale token is refused even where none is needed, so try once without it.
+  if (res.status === 401) {
+    process.stderr.write("GitHub rejected GITHUB_TOKEN, so moire is checking without it.\n");
+    res = await reach(releases, { headers: releaseHeaders({}, releases) });
+  }
+  if (!res.ok) throw new Error(releaseError(res.status));
   return /** @type {Promise<Release>} */ (res.json());
 }
 
@@ -120,7 +188,7 @@ export async function latestRelease() {
 async function download(asset, file, label) {
   const want = asset.digest?.replace(/^sha256:/, "");
   if (!want) throw new Error(`${asset.name} has no checksum on GitHub`);
-  const res = await fetch(asset.browser_download_url);
+  const res = await reach(asset.browser_download_url);
   if (!res.ok || !res.body) throw new Error(`downloading ${asset.name}: ${res.status}`);
   const hash = createHash("sha256");
   let done = 0;
@@ -172,6 +240,7 @@ async function installMac(asset, label) {
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+  writeBin(join(homedir(), ".local", "bin", "moire"), app, macShim(app));
 }
 
 /** @param {Asset} asset @param {string} version @param {string} label */
@@ -204,17 +273,53 @@ async function installLinux(asset, version, label) {
   const noSandbox = runsWithoutSandbox();
   mkdirSync(dirname(desktop), { recursive: true });
   writeFileSync(desktop, desktopEntry(root, noSandbox));
-  if (!existsSync(bin) || readFileSync(bin, "utf8").includes(root)) {
-    mkdirSync(dirname(bin), { recursive: true });
-    writeFileSync(bin, binScript(root, noSandbox), { mode: 0o755 });
-  }
+  writeBin(bin, root, binScript(root, noSandbox));
 }
 
-/** @param {string} repo */
-export function launch(repo) {
-  const [cmd, args] =
-    process.platform === "darwin"
-      ? ["open", ["-na", macApp(), "--args", repo]]
-      : [join(linuxPaths(process.env, homedir()).root, "current", "moire"), [...(runsWithoutSandbox() ? ["--no-sandbox"] : []), repo]];
-  spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
+/** Removes what install() put in the home folder, and returns what it removed and where user data stays. */
+export function uninstall() {
+  const { remove, bin, owner, data } = installedPaths(process.platform, process.env, homedir());
+  const removed = remove.filter((p) => existsSync(p));
+  if (existsSync(bin) && readFileSync(bin, "utf8").includes(owner)) removed.push(bin);
+  for (const p of removed) rmSync(p, { recursive: true, force: true });
+  return { removed, data };
+}
+
+/** @param {string} platform @param {string} home @param {NodeJS.ProcessEnv} env @param {boolean} noSandbox @param {string} repo */
+export function launchCommand(platform, home, env, noSandbox, repo) {
+  if (platform === "darwin") return { cmd: "open", args: ["-na", join(home, "Applications", "moire.app"), "--args", repo] };
+  return { cmd: join(linuxPaths(env, home).root, "current", "moire"), args: [...(noSandbox ? ["--no-sandbox"] : []), repo] };
+}
+
+/**
+ * Starts moire and waits a moment, so a launch that fails right away can be reported.
+ * @param {string} repo
+ * @returns {Promise<string | null>} what the app printed, if it failed
+ */
+export async function launch(repo) {
+  const { cmd, args } = launchCommand(process.platform, homedir(), process.env, runsWithoutSandbox(), repo);
+  // A file rather than a pipe, since the app keeps writing to stderr after the launcher exits.
+  const dir = mkdtempSync(join(tmpdir(), "moire-launch-"));
+  const log = join(dir, "stderr");
+  const fd = openSync(log, "w");
+  try {
+    const child = spawn(cmd, args, { detached: true, stdio: ["ignore", "ignore", fd] });
+    /** @type {string | null} */
+    const failure = await new Promise((done) => {
+      const timer = setTimeout(() => done(null), 2000);
+      child.on("error", (e) => {
+        clearTimeout(timer);
+        done(e.message);
+      });
+      child.on("exit", (code, signal) => {
+        clearTimeout(timer);
+        done(code === 0 ? null : readFileSync(log, "utf8").trim().split("\n").slice(-20).join("\n") || `exited with ${signal ?? code}`);
+      });
+    });
+    child.unref();
+    return failure;
+  } finally {
+    closeSync(fd);
+    rmSync(dir, { recursive: true, force: true });
+  }
 }

@@ -1,9 +1,25 @@
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CompareMode, FileDiff } from "../shared/types";
-import { branches, commits, diff, fileContents, listDir, manyContents, repoInfo, tree, UNTRACKED_READ_LIMIT } from "./git";
+import {
+  branches,
+  commitDetail,
+  commits,
+  diff,
+  fileContents,
+  listDir,
+  manyContents,
+  missingGit,
+  oldGit,
+  repoInfo,
+  repoProblem,
+  tree,
+  UNTRACKED_READ_LIMIT,
+  upstream,
+  worktrees,
+} from "./git";
 import { dirs, makeRepo } from "./test-repo";
 
 const paths = (files: FileDiff[]) => files.map((f) => `${f.status}:${f.path}`);
@@ -234,7 +250,7 @@ describe("unborn HEAD", () => {
   it("reports repo info without a head", async () => {
     expect(await repoInfo(join(r.root))).toEqual({ root: r.root, name: r.root.split("/").pop(), branch: "main", head: null });
     expect(await commits(r.root, 10)).toEqual([]);
-    expect(await branches(r.root)).toEqual([]);
+    expect((await branches(r.root)).branches).toEqual([]);
   });
 
   it("shows untracked files in unstaged and all modes", async () => {
@@ -287,9 +303,15 @@ describe("branches mode", () => {
 
   it("lists branches with the current one first", async () => {
     r.git("checkout", "-q", "feature");
-    expect(await branches(r.root)).toEqual(["feature", "main"]);
+    expect((await branches(r.root)).branches).toEqual(["feature", "main"]);
     r.git("checkout", "-q", "main");
-    expect(await branches(r.root)).toEqual(["main", "feature"]);
+    expect(await branches(r.root)).toEqual({ current: "main", upstream: null, branches: ["main", "feature"], remotes: [], tags: [] });
+  });
+
+  it("reads a commit's message and author", async () => {
+    r.git("commit", "-q", "--allow-empty", "-m", "subject line", "-m", "Body one.\nBody two.");
+    expect(await commitDetail(r.root, "HEAD")).toMatchObject({ subject: "subject line", body: "Body one.\nBody two.", author: "Test" });
+    r.git("reset", "-q", "--hard", "HEAD^");
   });
 
   it("reports repo info and rejects non-repositories", async () => {
@@ -299,9 +321,49 @@ describe("branches mode", () => {
     r.git("checkout", "-q", "--detach");
     expect((await repoInfo(r.root)).branch).toBeNull();
     r.git("checkout", "-q", "main");
+    expect(info.state).toBeUndefined();
+    writeFileSync(join(r.root, ".git", "MERGE_HEAD"), r.git("rev-parse", "feature") + "\n");
+    expect((await repoInfo(r.root)).state).toBe("merging");
+    unlinkSync(join(r.root, ".git", "MERGE_HEAD"));
     const outside = realpathSync(mkdtempSync(join(tmpdir(), "moire-norepo-")));
     dirs.push(outside);
-    await expect(repoInfo(outside)).rejects.toThrow(`Not a git repository: ${outside}`);
+    await expect(repoInfo(outside)).rejects.toThrow(`${outside} isn't a git repository`);
+    await expect(repoInfo(join(outside, "gone"))).rejects.toThrow(`${outside}/gone doesn't exist`);
+  });
+});
+
+describe("repo problems", () => {
+  const failed = (stderr: string) => Object.assign(new Error(`Command failed: git rev-parse\n${stderr}`), { stderr });
+  const home = homedir();
+
+  it("puts git's refusals in plain words", () => {
+    expect(repoProblem(`${home}/x`, failed("fatal: not a git repository (or any of the parent directories): .git\n"))).toBe("~/x isn't a git repository");
+    expect(repoProblem("/srv/x", failed("fatal: cannot change to '/srv/x': Permission denied\n"))).toBe("moire can't read /srv/x: permission denied");
+    const dubious = [
+      "fatal: detected dubious ownership in repository at '/srv/x'",
+      "To add an exception for this directory, call:",
+      "",
+      "\tgit config --global --add safe.directory /srv/x",
+    ].join("\n");
+    expect(repoProblem("/srv/x", failed(dubious))).toBe(
+      "/srv/x belongs to another user, so git won't open it. To trust it, run: git config --global --add safe.directory /srv/x",
+    );
+    expect(repoProblem("/srv/x", failed("fatal: something new\n"))).toBe("something new");
+  });
+
+  it("knows when git itself is missing", () => {
+    const enoent = Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" });
+    expect(missingGit(enoent, "linux")).toMatch(/^git isn't installed/);
+    expect(missingGit(enoent, "darwin")).toContain("xcode-select --install");
+    const stub = Object.assign(new Error("Command failed"), { code: 1, stderr: "xcode-select: note: No developer tools were found, requesting install." });
+    expect(missingGit(stub, "darwin")).toContain("xcode-select --install");
+    expect(missingGit(stub, "linux")).toBeNull();
+  });
+
+  it("names a git too old for moire", () => {
+    expect(oldGit("git version 2.25.1\n")).toBe("moire needs git 2.26 or newer, and this is 2.25.1.");
+    expect(oldGit("git version 2.26.0\n")).toBeNull();
+    expect(oldGit("git version 2.50.1 (Apple Git-155)\n")).toBeNull();
   });
 });
 
@@ -321,6 +383,51 @@ describe("many contents in working tree modes", () => {
       const one = await Promise.all(files.map((f) => fileContents(r.root, { kind }, f)));
       expect(await manyContents(r.root, { kind }, files)).toEqual(one);
     }
+  });
+});
+
+describe("repeated refreshes", () => {
+  const texts = (file: FileDiff) => file.hunks.flatMap((h) => h.lines.map((l) => l.text));
+
+  it("rereads an untracked file once its size or mtime changes", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "a\n");
+    r.commit("init");
+    r.write("new.txt", "one\n");
+    expect(texts(byPath((await diff(r.root, { kind: "unstaged" })).files, "new.txt"))).toEqual(["one"]);
+    r.write("new.txt", "one\ntwo\n");
+    expect(texts(byPath((await diff(r.root, { kind: "unstaged" })).files, "new.txt"))).toEqual(["one", "two"]);
+    const { mtime } = statSync(join(r.root, "new.txt"));
+    r.write("new.txt", "ONE\nTWO\n");
+    utimesSync(join(r.root, "new.txt"), mtime, new Date(mtime.getTime() + 5000));
+    expect(texts(byPath((await diff(r.root, { kind: "all" })).files, "new.txt"))).toEqual(["ONE", "TWO"]);
+    unlinkSync(join(r.root, "new.txt"));
+    expect(paths((await diff(r.root, { kind: "unstaged" })).files)).toEqual([]);
+  });
+
+  it("keeps versions stable until a file changes", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "a\n");
+    r.write("b.txt", "b\n");
+    r.commit("init");
+    r.write("a.txt", "A\n");
+    r.write("b.txt", "B\n");
+    r.write("new.txt", "new\n");
+    const first = await diff(r.root, { kind: "all" });
+    const second = await diff(r.root, { kind: "all" });
+    expect(second.version).toBe(first.version);
+    expect(second.files.map((f) => f.version)).toEqual(first.files.map((f) => f.version));
+    expect(new Set(first.files.map((f) => f.version)).size).toBe(3);
+
+    r.write("a.txt", "AA\n");
+    r.write("new.txt", "newer\n");
+    const third = await diff(r.root, { kind: "all" });
+    expect(third.version).not.toBe(first.version);
+    const changed = third.files.filter((f, i) => f.version !== first.files[i].version).map((f) => f.path);
+    expect(changed).toEqual(["a.txt", "new.txt"]);
+
+    r.git("add", "b.txt");
+    expect(byPath((await diff(r.root, { kind: "all" })).files, "b.txt").version).not.toBe(byPath(third.files, "b.txt").version);
   });
 });
 
@@ -377,14 +484,109 @@ describe("noise", () => {
   r.commit("init");
   for (const p of ["pnpm-lock.yaml", "gen/api.ts", "src/__snapshots__/x.test.ts.snap", "src/a.ts"]) r.write(p, "b\n");
 
-  it("marks lockfiles, snapshots and linguist-generated files", async () => {
+  it("marks lockfiles and linguist-generated files, but not snapshots", async () => {
     const files = (await diff(r.root, { kind: "unstaged" })).files;
     expect(files.map((f) => `${f.path}:${f.noise ?? "-"}`)).toEqual([
       "gen/api.ts:Generated file",
       "pnpm-lock.yaml:Lockfile",
-      "src/__snapshots__/x.test.ts.snap:Snapshot",
+      "src/__snapshots__/x.test.ts.snap:-",
       "src/a.ts:-",
     ]);
+  });
+
+  it("folds minified files and source maps, but not code with the odd long line", async () => {
+    const long = "x".repeat(30_000);
+    r.write("dist/app.js", `${long}\n`);
+    r.write("dist/app.min.css", "a{b:c}\n");
+    r.write("dist/app.js.map", "{}\n");
+    r.write("src/data.ts", `${lines(40)}const blob = "${long}";\n`);
+    const files = (await diff(r.root, { kind: "unstaged" }, ["dist", "src/data.ts"])).files;
+    expect(files.map((f) => `${f.path}:${f.noise ?? "-"}`)).toEqual([
+      "dist/app.js:Minified file",
+      "dist/app.js.map:Source map",
+      "dist/app.min.css:Minified file",
+      "src/data.ts:-",
+    ]);
+  });
+});
+
+describe("size limit", () => {
+  it("marks a tracked file too large once its changes pass 2 MB, but shows a small edit to a big file", async () => {
+    const r = makeRepo();
+    const big = lines(200_000);
+    r.write("big.txt", big);
+    r.write("grows.txt", "a\n");
+    r.commit("init");
+    r.write("big.txt", big.replace("line 5\n", "line five\n"));
+    r.write("grows.txt", big);
+    const files = (await diff(r.root, { kind: "unstaged" })).files;
+    expect(byPath(files, "grows.txt")).toMatchObject({ tooLarge: true, hunks: [], additions: 200_000 });
+    expect(byPath(files, "big.txt").tooLarge).toBeUndefined();
+    expect(byPath(files, "big.txt").hunks).toHaveLength(1);
+  });
+});
+
+describe("file modes", () => {
+  it("reports executable bits and symlinks, tracked and untracked", async () => {
+    const r = makeRepo();
+    r.write("run.sh", "echo\n");
+    r.write("plain.txt", "a\n");
+    symlinkSync("plain.txt", join(r.root, "link"));
+    r.commit("init");
+    chmodSync(join(r.root, "run.sh"), 0o755);
+    unlinkSync(join(r.root, "link"));
+    symlinkSync("run.sh", join(r.root, "link"));
+    r.write("new.sh", "echo\n");
+    chmodSync(join(r.root, "new.sh"), 0o755);
+    symlinkSync("new.sh", join(r.root, "new-link"));
+    r.write("plain.txt", "b\n");
+    const files = (await diff(r.root, { kind: "unstaged" })).files;
+    const mode = (p: string) => [byPath(files, p).oldMode, byPath(files, p).newMode];
+    expect(mode("run.sh")).toEqual(["100644", "100755"]);
+    expect(byPath(files, "run.sh").hunks).toEqual([]);
+    expect(mode("link")).toEqual(["120000", "120000"]);
+    expect(mode("new.sh")).toEqual([undefined, "100755"]);
+    expect(mode("new-link")).toEqual([undefined, "120000"]);
+    expect(byPath(files, "new-link").hunks[0].lines[0].text).toBe("new.sh");
+    expect(mode("plain.txt")).toEqual([undefined, undefined]);
+  });
+});
+
+describe("renames git doesn't know about yet", () => {
+  const setup = () => {
+    const r = makeRepo();
+    r.write("old.ts", lines(20));
+    r.write("gone.ts", lines(20, "gone"));
+    r.commit("init");
+    renameSync(join(r.root, "old.ts"), join(r.root, "new.ts"));
+    r.write("new.ts", lines(20).replace("line 3\n", "line three\n"));
+    unlinkSync(join(r.root, "gone.ts"));
+    r.write("other.ts", "unrelated\n");
+    return r;
+  };
+
+  it("pairs a deleted file with a similar untracked one, in the unstaged and all views", async () => {
+    const r = setup();
+    const index = readFileSync(join(r.root, ".git", "index"));
+    for (const kind of ["unstaged", "all"] as const) {
+      const files = (await diff(r.root, { kind })).files;
+      expect(paths(files)).toEqual(["deleted:gone.ts", "renamed:new.ts", "untracked:other.ts"]);
+      const f = byPath(files, "new.ts");
+      expect(f).toMatchObject({ oldPath: "old.ts", additions: 1, deletions: 1 });
+      expect(f.hunks[0].lines.filter((l) => l.kind !== "ctx")).toEqual([
+        { kind: "del", text: "line 3", oldNo: 3 },
+        { kind: "add", text: "line three", newNo: 3 },
+      ]);
+      expect(await fileContents(r.root, { kind }, f)).toMatchObject({ a: lines(20), b: lines(20).replace("line 3\n", "line three\n") });
+    }
+    expect(readFileSync(join(r.root, ".git", "index")).equals(index)).toBe(true);
+    expect(r.git("diff", "--cached", "--name-only")).toBe("");
+    expect(r.git("ls-files")).toBe("gone.ts\nold.ts");
+  });
+
+  it("pairs them when only those two paths are asked for", async () => {
+    const r = setup();
+    expect(paths((await diff(r.root, { kind: "unstaged" }, ["new.ts", "old.ts"])).files)).toEqual(["renamed:new.ts"]);
   });
 });
 
@@ -441,5 +643,98 @@ describe("file tree", () => {
     expect(await listDir(r.root, "out/deep/")).toEqual(["out/deep/x.js"]);
     expect(await listDir(r.root, "../")).toEqual([]);
     expect(await listDir(r.root, "/etc/")).toEqual([]);
+  });
+});
+
+describe("index lock", () => {
+  it("never rewrites the index, and leaves out files whose stat info alone is stale", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "a\n");
+    r.write("touched.txt", "same\n");
+    r.write("staged.txt", "s\n");
+    r.commit("init");
+    r.write("a.txt", "b\n");
+    r.write("staged.txt", "S\n");
+    r.git("add", "staged.txt");
+    const later = new Date(Date.now() + 5000);
+    utimesSync(join(r.root, "touched.txt"), later, later);
+    const index = join(r.root, ".git", "index");
+    const before = readFileSync(index);
+    for (const kind of ["unstaged", "staged", "all"] as const) {
+      const res = await diff(r.root, { kind });
+      expect(paths(res.files)).toEqual(
+        kind === "unstaged" ? ["modified:a.txt"] : kind === "staged" ? ["modified:staged.txt"] : ["modified:a.txt", "modified:staged.txt"],
+      );
+      if (kind === "all") expect(res.progress).toEqual({ staged: 1, total: 2 });
+    }
+    expect(readFileSync(index).equals(before)).toBe(true);
+  });
+
+  it("follows the repo's diff.algorithm, as git diff does", async () => {
+    const r = makeRepo();
+    r.write("f", "c\n{\n{\nc\n{\nb\n{\na\n");
+    r.commit("init");
+    r.write("f", "c\n{\n{\nc\nb\n{\nb\nx\n{\na\nb\n");
+    r.git("config", "diff.algorithm", "histogram");
+    const changed = async () => (await diff(r.root, { kind: "unstaged" })).files[0].hunks[0].lines.filter((l) => l.kind !== "ctx").map((l) => l.kind + l.text);
+    expect(await changed()).toEqual(["del{", "addb", "addx", "add{", "addb"]);
+  });
+});
+
+describe("upstream tracking", () => {
+  const remote = makeRepo();
+  remote.write("a.txt", "a\n");
+  remote.commit("init");
+  const r = makeRepo();
+  r.git("remote", "add", "origin", remote.root);
+  r.git("fetch", "-q", "origin");
+  r.git("reset", "-q", "--hard", "origin/main");
+  r.git("tag", "v1");
+
+  it("has no counts without an upstream", async () => {
+    expect(await upstream(r.root)).toBeNull();
+  });
+
+  it("counts commits ahead of and behind the upstream as of the last fetch", async () => {
+    r.git("branch", "-q", "--set-upstream-to=origin/main");
+    r.write("b.txt", "b\n");
+    r.commit("local one");
+    r.write("c.txt", "c\n");
+    r.commit("local two");
+    remote.write("d.txt", "d\n");
+    remote.commit("remote one");
+    expect(await upstream(r.root)).toMatchObject({ name: "origin/main", ahead: 2, behind: 0, fetchedAt: expect.any(Number) });
+    r.git("fetch", "-q", "origin");
+    const up = (await upstream(r.root))!;
+    expect(up).toMatchObject({ ahead: 2, behind: 1 });
+    expect(Math.abs(up.fetchedAt! - Date.now())).toBeLessThan(60_000);
+  });
+
+  it("lists remote branches and tags as refs", async () => {
+    expect(await branches(r.root)).toEqual({ current: "main", upstream: "origin/main", branches: ["main"], remotes: ["origin/main"], tags: ["v1"] });
+  });
+});
+
+describe("worktrees", () => {
+  it("is empty for a repo with one worktree", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "a\n");
+    r.commit("init");
+    expect(await worktrees(r.root)).toEqual([]);
+  });
+
+  it("lists every worktree with its branch and change count", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "a\n");
+    r.commit("init");
+    const other = realpathSync(mkdtempSync(join(tmpdir(), "moire-wt-")));
+    dirs.push(other);
+    r.git("worktree", "add", "-q", "-b", "agent", join(other, "agent"));
+    writeFileSync(join(other, "agent", "a.txt"), "changed\n");
+    writeFileSync(join(other, "agent", "new.txt"), "new\n");
+    expect(await worktrees(r.root)).toEqual([
+      { path: r.root, branch: "main", changes: 0 },
+      { path: join(other, "agent"), branch: "agent", changes: 2 },
+    ]);
   });
 });

@@ -1,29 +1,34 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { forwardRef, memo, useImperativeHandle, useLayoutEffect, useMemo, useRef } from "react";
+import type { CommandId } from "../../../shared/keymap";
 import type { CompareMode, FileDiff, SideInfo, StageAction } from "../../../shared/types";
 import type { TokLines } from "../highlight/types";
+import { modeNote } from "../model/modes";
 import type { Layout, Row, Side } from "../model/rows";
 import type { PreviewKind } from "../model/preview";
-import type { Hit } from "../model/search";
+import type { Find, Hit } from "../model/search";
 import { type Col, changedRefs } from "../model/selection";
 import type { Range } from "../model/words";
 import type { SelectHow } from "../useSelection";
-import { Code, hangingIndent } from "./Code";
+import { Code, hangingIndent, withoutJoins } from "./Code";
+import { Key, keyText, useKeymap } from "./Key";
 import { Minimap } from "./Minimap";
 import { ImagePreview, MarkdownPreview } from "./Preview";
 
 const ROW = 21;
 const HUNK_HEAD = 36;
 const FOLD = 28;
+const RESTORE_MS = 300;
 
 export interface DiffViewHandle {
-  scrollToRow(index: number, align?: "start" | "center"): void;
+  scrollToRow(index: number, align?: "start" | "center" | "auto"): void;
   scroller(): HTMLDivElement | null;
 }
 
 interface Props {
   file: FileDiff;
   rows: Row[];
+  initialRow?: { index: number; align: "start" | "center" };
   layout: Layout;
   a: SideInfo;
   b: SideInfo;
@@ -32,11 +37,14 @@ interface Props {
   selection: ReadonlySet<string>;
   hits: ReadonlyMap<string, Range[]> | null;
   currentHit: Hit | null;
+  find: Find | null;
   actions: "unstaged" | "staged" | null;
   onExpand(key: string): void;
   onFocusHunk(hunk: number): void;
   onSelect(key: string, col: Col, how: SelectHow): void;
   onAct(action: StageAction, target: number | "file"): void;
+  onCopy(format: "code" | "markdown", hunk: number): void;
+  onDiscardFile(): void;
   preview: Preview | null;
   onTogglePreview: (() => void) | null;
   blink: Blink | null;
@@ -62,6 +70,7 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
   const {
     file,
     rows,
+    initialRow,
     a,
     b,
     tokens,
@@ -69,11 +78,14 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     selection,
     hits,
     currentHit,
+    find,
     actions,
     onExpand,
     onFocusHunk,
     onSelect,
     onAct,
+    onCopy,
+    onDiscardFile,
     preview,
     onTogglePreview,
     blink,
@@ -93,9 +105,26 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     overscan: 24,
   });
 
+  // Rows get measured as they render, so a few passes before the first paint land the start row exactly.
+  const settling = useRef(initialRow ? 4 : 0);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!initialRow || !settling.current || !el) return;
+    settling.current--;
+    const [offset] = virtualizer.getOffsetForIndex(initialRow.index, initialRow.align) ?? [0];
+    const top = Math.max(0, initialRow.align === "start" ? offset - 40 : offset);
+    if (Math.abs(el.scrollTop - top) < 1) return void (settling.current = 0);
+    el.scrollTop = top;
+    el.dispatchEvent(new Event("scroll"));
+  });
+
   const anchor = useRef<(Anchor & { offset: number }) | null>(null);
   const shownRows = useRef(rows);
+  // Rows above the anchor get measured after the first jump to it, which moves it again; so it's re-applied briefly.
+  const restore = useRef<{ key: string; offset: number; until: number } | null>(null);
   const record = () => {
+    if (restore.current && performance.now() < restore.current.until) return;
+    restore.current = null;
     const top = scrollRef.current?.scrollTop ?? 0;
     const first = virtualizer.getVirtualItemForOffset(top)?.index ?? 0;
     anchor.current = null;
@@ -120,23 +149,46 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
       if (d < distance) [best, distance] = [i, d];
     });
     if (best < 0) return;
-    scrollRef.current?.scrollTo({ top: Math.max(0, virtualizer.measurementsCache[best].start - at.offset) });
+    restore.current = { key: rows[best].key, offset: at.offset, until: performance.now() + RESTORE_MS };
   }, [rows]);
+  useLayoutEffect(() => {
+    const at = restore.current;
+    const el = scrollRef.current;
+    if (!at || !el || performance.now() > at.until) return;
+    const index = rows.findIndex((r) => r.key === at.key);
+    const line = index < 0 ? null : anchorOf(rows[index]);
+    if (!line) return;
+    anchor.current = { ...line, offset: at.offset };
+    const top = Math.max(0, virtualizer.measurementsCache[index].start - at.offset);
+    if (Math.abs(el.scrollTop - top) >= 1) el.scrollTop = top;
+  });
 
   useImperativeHandle(ref, () => ({
     scrollToRow(index, align = "start") {
+      restore.current = null;
       if (previewRef.current) return previewRef.current.scrollToRow(index, align);
       const [offset] = virtualizer.getOffsetForIndex(index, align) ?? [0];
+      if (align === "auto" && offset === scrollRef.current?.scrollTop) return;
       scrollRef.current?.scrollTo({ top: Math.max(0, align === "start" ? offset - 40 : offset) });
     },
     scroller: () => scrollRef.current,
   }));
+
+  const digits = useMemo(() => {
+    let max = 0;
+    for (const r of rows) {
+      if (r.t === "split") max = Math.max(max, r.a?.no ?? 0, r.b?.no ?? 0);
+      else if (r.t === "uni") max = Math.max(max, r.a ?? 0, r.b ?? 0);
+    }
+    return Math.max(2, String(max).length);
+  }, [rows]);
 
   const selCount = useMemo(() => {
     const counts = new Map<number, number>();
     for (const { hunk } of changedRefs(file, selection)) counts.set(hunk, (counts.get(hunk) ?? 0) + 1);
     return counts;
   }, [file, selection]);
+  const picked = useMemo(() => new Set([...selection].filter((k) => !k.startsWith("g")).map((k) => Number(k.split(":")[0]))), [selection]);
 
   const gutter = (e: React.MouseEvent, how: SelectHow) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>("[data-line]");
@@ -152,16 +204,19 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     <span className="actions">
       {onTogglePreview && (
         <button aria-pressed={!!preview} onClick={onTogglePreview}>
-          Preview<kbd>m</kbd>
+          Preview
+          <Key id="preview" />
         </button>
       )}
       {actions && (
         <button onClick={() => onAct(actions === "staged" ? "unstage" : "stage", "file")}>{actions === "staged" ? "Unstage file" : "Stage file"}</button>
       )}
+      {actions === "unstaged" && <button onClick={onDiscardFile}>Discard file</button>}
     </span>
   );
   const shown = file.status === "deleted" ? a : b;
   const oldName = file.oldPath ?? file.path;
+  const modeWords = modeNote(file)?.words;
   return (
     <main
       className={`main${preview ? ` is-preview preview-${preview.kind}` : file.status === "unchanged" ? " is-whole" : ""}`}
@@ -172,6 +227,7 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
           <>
             <PaneHead tag="a" name={file.status === "added" || file.status === "untracked" ? "" : oldName} side={a} />
             <PaneHead tag="b" name={file.status === "deleted" ? "" : file.path} side={b}>
+              {modeWords && <span className="pane-mode">{modeWords}</span>}
               {fileAction}
             </PaneHead>
           </>
@@ -181,6 +237,7 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
             <span className="plate-tag tag-b">B</span>
             <b>{file.path.split("/").pop()}</b>
             <span>{file.status === "unchanged" ? `${b.label}, ${file.path}, unchanged` : file.path}</span>
+            {modeWords && <span className="pane-mode">{modeWords}</span>}
             {fileAction}
           </div>
         )}
@@ -203,14 +260,21 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
           text={preview.text}
           version={preview.version}
           focusHunk={focusHunk}
+          find={find}
           onFocusHunk={onFocusHunk}
         />
       )}
       {!preview && (
-        <div className="scroller diff-scroller" ref={scrollRef} onScroll={record}>
+        <div className="scroller diff-scroller" ref={scrollRef} onScroll={record} onWheel={() => (restore.current = null)}>
           <div
             className={`diff${onlyB ? " only-b" : file.status === "deleted" ? " only-a" : ""}`}
-            style={{ height: virtualizer.getTotalSize() }}
+            style={{ height: virtualizer.getTotalSize(), "--digits": digits } as React.CSSProperties}
+            onCopy={(e) => {
+              const text = window.getSelection()?.toString() ?? "";
+              if (withoutJoins(text) === text) return;
+              e.preventDefault();
+              e.clipboardData.setData("text/plain", withoutJoins(text));
+            }}
             onMouseDown={(e) => gutter(e, e.shiftKey ? "shift" : "click")}
             onMouseOver={(e) => e.buttons === 1 && gutter(e, "drag")}
           >
@@ -231,10 +295,12 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
                     sel={selected(row, selection, selCount)}
                     found={findIn(row, hits, currentHit?.path === file.path ? currentHit : null)}
                     actions={actions}
+                    copyable={row.t === "hunk" && picked.has(row.hunk)}
                     blinking={!!blink && "hunk" in row && row.hunk === blink.hunk}
                     onExpand={onExpand}
                     onFocusHunk={onFocusHunk}
                     onAct={onAct}
+                    onCopy={onCopy}
                     onBlink={onBlink}
                   />
                 </div>
@@ -314,10 +380,12 @@ interface RowProps {
   sel: number;
   found: Found;
   actions: "unstaged" | "staged" | null;
+  copyable: boolean;
   blinking: boolean;
   onExpand(key: string): void;
   onFocusHunk(hunk: number): void;
   onAct(action: StageAction, target: number | "file"): void;
+  onCopy(format: "code" | "markdown", hunk: number): void;
   onBlink(hunk: number): void;
 }
 
@@ -333,14 +401,20 @@ function Grating({ shifted }: { shifted: boolean }) {
   );
 }
 
-const RowView = memo(function RowView({ row, tokens, focused, sel, found, actions, blinking, onExpand, onFocusHunk, onAct, onBlink }: RowProps) {
+const RowView = memo(function RowView(props: RowProps) {
+  const { row, tokens, focused, sel, found, actions, copyable, blinking, onExpand, onFocusHunk, onAct, onCopy, onBlink } = props;
+  const keymap = useKeymap();
+  const hint = (id: CommandId) => (keyText(keymap, id) ? ` (${keyText(keymap, id)})` : "");
+  const hold = keyText(keymap, "blinkHold");
   switch (row.t) {
     case "hunk": {
       const lines = sel ? ` ${sel} ${sel === 1 ? "line" : "lines"}` : "";
-      const button = (action: StageAction, label: string, key: string) => (
+      const button = (action: StageAction, label: string, key: CommandId) => (
         <button
           className={`hh-btn hh-${action}`}
-          title={`${label} ${sel ? "the selected lines" : "this hunk"} (${key}). Click or drag line numbers to pick single lines.`}
+          title={`${label} ${sel ? "the selected lines" : "this hunk"}${hint(key)}. Click or drag line numbers to pick single lines.`}
+          // Without focus, Enter or Space can't repeat the action on whichever hunk takes this one's place.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.stopPropagation();
             onAct(action, row.hunk);
@@ -348,13 +422,33 @@ const RowView = memo(function RowView({ row, tokens, focused, sel, found, action
         >
           {label}
           {lines}
-          <kbd>{key}</kbd>
+          <Key id={key} />
         </button>
       );
-      const stage = actions && (actions === "staged" ? button("unstage", "Unstage", "s") : button("stage", "Stage", "s"));
-      const discard = actions === "unstaged" && button("discard", "Discard", "x");
+      const stage = actions && (actions === "staged" ? button("unstage", "Unstage", "stage") : button("stage", "Stage", "stage"));
+      const discard = actions === "unstaged" && button("discard", "Discard", "discard");
+      const copy = (format: "code" | "markdown", label: string, title: string, key: CommandId) => (
+        <button
+          className="hh-btn hh-copy"
+          title={`${title}${hint(key)}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onCopy(format, row.hunk);
+          }}
+        >
+          {label}
+          <Key id={key} />
+        </button>
+      );
+      const copies = copyable && (
+        <>
+          {copy("code", "Copy", "Copy the selected lines", "copyCode")}
+          {copy("markdown", "Markdown", "Copy the selected lines as Markdown for an agent", "copyMarkdown")}
+        </>
+      );
       if (row.folded) {
-        const { keys, count } = row.folded;
+        const { keys, count, all } = row.folded;
+        const changed = Math.max(row.adds, row.dels);
         return (
           <div className={`hunk-head is-folded${focused ? " is-focus" : ""}`} onClick={() => onFocusHunk(row.hunk)}>
             <Grating shifted />
@@ -365,9 +459,22 @@ const RowView = memo(function RowView({ row, tokens, focused, sel, found, action
                 keys.forEach(onExpand);
               }}
             >
-              {count ? `${count} ${count === 1 ? "line" : "lines"} unchanged · ` : ""}whitespace-only change
+              {`${changed} ${changed === 1 ? "line" : "lines"} · whitespace only${count ? ` · ${count} unchanged` : ""}`}
             </button>
+            {all && (
+              <button
+                className="fold-label fold-all"
+                title="Expand every whitespace-only fold in this file"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  all.forEach(onExpand);
+                }}
+              >
+                · expand all
+              </button>
+            )}
             <span className="hh-actions">
+              {copies}
               {stage}
               {discard}
             </span>
@@ -396,14 +503,16 @@ const RowView = memo(function RowView({ row, tokens, focused, sel, found, action
             <button
               className="hh-btn hh-blink"
               aria-pressed={blinking}
+              title={blinking ? `Stop blinking${hint("cancel")}` : `Flip between plate A and B${hint("blink")}.${hold ? ` Hold ${hold} to flip by hand.` : ""}`}
               onClick={(e) => {
                 e.stopPropagation();
                 onBlink(row.hunk);
               }}
             >
               {blinking ? "Stop blink" : "Blink"}
-              <kbd>{blinking ? "esc" : "shift b"}</kbd>
+              <Key id={blinking ? "cancel" : "blink"} />
             </button>
+            {copies}
             {stage}
             {discard}
           </span>

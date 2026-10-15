@@ -11,6 +11,12 @@ export interface Dir {
   changes: number;
 }
 
+export function parentDirs(path: string | null): string[] {
+  const out: string[] = [];
+  if (path) for (let i = path.indexOf("/"); i >= 0; i = path.indexOf("/", i + 1)) out.push(path.slice(0, i + 1));
+  return out;
+}
+
 export function buildTree(listing: FileTree, changed: FileDiff[], opened: ReadonlyMap<string, string[] | string>): Dir {
   const root: Dir = { path: "", name: "", dirs: [], files: [], ignored: false, changes: 0 };
   const dirs = new Map([["", root]]);
@@ -32,7 +38,7 @@ export function buildTree(listing: FileTree, changed: FileDiff[], opened: Readon
   };
   for (const f of changed) {
     addFile(f.path, f);
-    for (let i = f.path.indexOf("/"); i >= 0; i = f.path.indexOf("/", i + 1)) dirAt(f.path.slice(0, i + 1)).changes++;
+    for (const dir of parentDirs(f.path)) dirAt(dir).changes++;
   }
   for (const path of listing.files) addFile(path);
   const entries = [...opened.values()].flatMap((e) => (typeof e === "string" ? [] : e));

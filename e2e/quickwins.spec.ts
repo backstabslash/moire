@@ -72,7 +72,7 @@ test("lockfiles and whitespace-only hunks fold away until asked", async () => {
 
   await page.locator(".file", { hasText: "ws.ts" }).click();
   const folded = page.locator(".hunk-head.is-folded");
-  await expect(folded).toHaveText(/whitespace-only change/);
+  await expect(folded.locator(".fold-label")).toHaveText("1 line · whitespace only");
   await shot("whitespace-light");
   await page.keyboard.press("t");
   await shot("whitespace-dark");
@@ -112,7 +112,8 @@ test("commit from the staged view", async () => {
   await box.press("Control+Enter");
   await expect(page.locator(".toast.show")).toContainText(/Committed [0-9a-f]{7,} Change v3/);
   expect(git(repo, "log", "-1", "--format=%B").trim()).toBe("Change v3\n\nFrom the app");
-  await expect(page.getByRole("heading", { name: "Nothing staged." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Committed." })).toBeVisible();
+  await expect(page.locator(".empty-state p")).toContainText(/^[0-9a-f]{7,} Change v3$/);
 });
 
 test("o lists recent repos and opens one", async () => {

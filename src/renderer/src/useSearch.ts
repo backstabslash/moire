@@ -12,9 +12,12 @@ export function useSearch(
   modeKey: string,
   allFiles: FileDiff[],
   active: string | null,
+  browsed: { file: FileDiff; contents: FileContents } | null,
   onError: (e: unknown) => void,
 ) {
-  const files = useMemo(() => allFiles.filter((f) => !f.noise), [allFiles]);
+  const changed = useMemo(() => allFiles.filter((f) => !f.noise), [allFiles]);
+  // An unchanged file opened from All files is searched too, since it's what's on screen.
+  const files = useMemo(() => (browsed ? [...changed, browsed.file] : changed), [changed, browsed]);
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<SearchOptions>({ query: "", matchCase: false, regex: false, side: "both" });
   const deferred = useDeferredValue(options);
@@ -28,7 +31,7 @@ export function useSearch(
 
   useEffect(() => {
     if (!searching || !repo) return;
-    const missing = files.filter((f) => !f.binary && !f.tooLarge && !loaded.current.has(fileKey(modeKey, f)));
+    const missing = changed.filter((f) => !f.binary && !f.tooLarge && !loaded.current.has(fileKey(modeKey, f)));
     if (!missing.length) return;
     let stale = false;
     setFailed(false);
@@ -37,7 +40,7 @@ export function useSearch(
         if (stale) return;
         setContents((cur) => {
           const next = new Map<string, FileContents>();
-          for (const f of files) {
+          for (const f of changed) {
             const key = fileKey(modeKey, f);
             const have = cur.get(key);
             if (have) next.set(key, have);
@@ -55,20 +58,30 @@ export function useSearch(
     return () => {
       stale = true;
     };
-  }, [searching, repo, modeKey, files]);
+  }, [searching, repo, modeKey, changed]);
 
+  const contentsOf = useCallback(
+    (f: FileDiff) => (f === browsed?.file ? browsed.contents : (contents.get(fileKey(modeKey, f)) ?? null)),
+    [browsed, contents, modeKey],
+  );
   const pattern = useMemo(() => (open ? compile(deferred) : null), [open, deferred]);
-  const hits = useMemo(() => {
-    if (!(pattern instanceof RegExp)) return [];
+  const found = useMemo(() => {
+    if (!(pattern instanceof RegExp)) return { hits: [], upTo: files.length };
     const out: Hit[] = [];
-    for (const f of files) {
-      if (out.length >= MAX_HITS) break;
-      out.push(...searchFile(f, contents.get(fileKey(modeKey, f)) ?? null, pattern, deferred.side, MAX_HITS - out.length));
+    let i = 0;
+    for (; i < files.length && out.length < MAX_HITS; i++) {
+      out.push(...searchFile(files[i], contentsOf(files[i]), pattern, deferred.side, MAX_HITS - out.length));
     }
-    return out;
-  }, [pattern, files, contents, modeKey, deferred.side]);
+    return { hits: out, upTo: i };
+  }, [pattern, files, contentsOf, deferred.side]);
+  // Past the cap, the open file still gets its hits, or a short query would jump away from it.
+  const hits = useMemo(() => {
+    const at = files.findIndex((f) => f.path === active);
+    if (at < found.upTo || !(pattern instanceof RegExp)) return found.hits;
+    return [...found.hits, ...searchFile(files[at], contentsOf(files[at]), pattern, deferred.side, MAX_HITS)];
+  }, [found, files, active, contentsOf, pattern, deferred.side]);
 
-  const ready = files.every((f) => f.binary || f.tooLarge || contents.has(fileKey(modeKey, f)));
+  const ready = changed.every((f) => f.binary || f.tooLarge || contents.has(fileKey(modeKey, f)));
 
   const picked = useRef<typeof pattern>(null);
   useEffect(() => {
@@ -110,9 +123,23 @@ export function useSearch(
     return out;
   }, [counts, hits, active]);
 
+  const find = useMemo(() => {
+    if (!open || !(pattern instanceof RegExp)) return null;
+    const own = hits.filter((h) => h.path === active);
+    return {
+      pattern,
+      index: Math.max(
+        0,
+        own.findIndex((h) => sameHit(h, current)),
+      ),
+      tick: revealTick,
+    };
+  }, [open, pattern, hits, active, current, revealTick]);
+
   return {
     open,
     setOpen,
+    contents,
     options,
     setOptions,
     invalid: pattern === "invalid",
@@ -123,6 +150,7 @@ export function useSearch(
     counts,
     inFile,
     revealTick,
+    find,
     step,
   };
 }

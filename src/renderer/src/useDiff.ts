@@ -86,7 +86,7 @@ export function useDiff(repo: RepoInfo | null, wantMode: CompareMode, events: Di
         await on.current.prefetch(repo.root, wantMode, result);
         if (stale) return;
         const cached = viewCache.current.get(view);
-        const same = cached?.writes === at && JSON.stringify(cached.result) === JSON.stringify(result);
+        const same = cached?.writes === at && cached.result.version === result.version;
         const next = same ? cached : { view, mode: wantMode, result, writes: at };
         remember(viewCache.current, view, next);
         setLoaded(next);

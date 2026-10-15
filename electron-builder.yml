@@ -20,6 +20,7 @@ linux:
   synopsis: Review code changes in a git repo
   desktop:
     entry:
+      Name: Moire
       StartupWMClass: moire
 mac:
   target:
@@ -28,6 +29,13 @@ mac:
     - target: zip
       arch: [arm64, x64]
   category: public.app-category.developer-tools
+  # Lets a folder be dropped on the Dock icon.
+  extendInfo:
+    CFBundleDocumentTypes:
+      - CFBundleTypeName: Folder
+        CFBundleTypeRole: Viewer
+        LSHandlerRank: Alternate
+        LSItemContentTypes: [public.folder]
   # Ad-hoc: Apple silicon won't run unsigned code, and hardened runtime would need extra entitlements without a real certificate.
   identity: "-"
   hardenedRuntime: false

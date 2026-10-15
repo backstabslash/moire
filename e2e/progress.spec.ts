@@ -94,7 +94,7 @@ test("switching views never flashes an empty view that isn't", async () => {
     await page.locator(".file", { hasText: name }).click();
     await page.getByRole("button", { name: "Stage file" }).click();
   }
-  await expect(page.locator(".empty-state h2")).toHaveText("Nothing unstaged.");
+  await expect(page.locator(".empty-state h2")).toHaveText("All 3 changes are staged.");
   await page.evaluate(() => {
     const w = window as unknown as { seen: Set<string> };
     w.seen = new Set();
@@ -108,7 +108,7 @@ test("switching views never flashes an empty view that isn't", async () => {
     await expect(page.locator(".toolbar").getByRole("button", { name: names[key], exact: true })).toBeVisible();
   }
   await page.waitForTimeout(300);
-  expect(await page.evaluate(() => [...(window as unknown as { seen: Set<string> }).seen])).toEqual(["Nothing unstaged."]);
+  expect(await page.evaluate(() => [...(window as unknown as { seen: Set<string> }).seen])).toEqual(["All 3 changes are staged."]);
 });
 
 test("with every file staged and hidden, the All view says so instead of opening one", async () => {

@@ -1,6 +1,6 @@
 {
   "name": "@backstabslash/moire",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Install and open moire, a desktop app for reviewing code changes in a git repo",
   "author": {
     "name": "backstabslash",

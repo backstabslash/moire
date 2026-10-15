@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { app, clipboard, Notification, shell } from "electron";
 import { AppImageUpdater } from "electron-updater";
+import { log } from "./log";
 
 const npx = "npx @backstabslash/moire";
 
@@ -36,27 +37,39 @@ async function latestVersion(): Promise<string> {
 }
 
 // APPIMAGE is inherited from any AppImage up the process tree, and the updater deletes the file it names.
-function runningAsAppImage(): boolean {
+export function runningAsAppImage(): boolean {
   const { APPIMAGE, APPDIR } = process.env;
   return !!APPIMAGE && !!APPDIR && app.getPath("exe").startsWith(APPDIR + "/");
 }
 
-export function checkForUpdates() {
+export function checkForUpdates(manual = false) {
   if (!app.isPackaged) return;
+  const failed = (e: Error) => (manual ? notify(`Couldn't check for updates: ${e.message}`, () => {}) : log(`update check failed: ${e.message}`));
+  const current = () => {
+    if (manual) notify(`moire ${app.getVersion()} is the latest version.`, () => {});
+  };
   if (runningAsAppImage()) {
     // Built directly because electron-builder can leave a deb or rpm marker in the AppImage, and the default updater would obey it.
     const updater = new AppImageUpdater();
     updater.logger = null;
     updater.on("update-downloaded", ({ version }) => {
-      notify(`Version ${version} will be used next time you open moire. Click to restart now.`, () => updater.quitAndInstall());
+      notify(`Version ${version} will be used next time you open moire. Click to restart now.`, () => {
+        // The new copy starts before this one quits, and would otherwise hand its launch to us and exit.
+        app.releaseSingleInstanceLock();
+        updater.quitAndInstall();
+      });
     });
-    updater.on("error", (e) => console.log(`update check failed: ${e.message}`));
+    updater.on("update-not-available", current);
+    updater.on("error", failed);
     updater.checkForUpdates().catch(() => {});
     return;
   }
   latestVersion()
     .then((version) => {
-      if (!newer(version, app.getVersion())) return;
+      if (!newer(version, app.getVersion())) {
+        current();
+        return;
+      }
       if (installedByNpx()) {
         notify(`Version ${version} is available. Click to copy the command that updates it: ${npx}`, () => void clipboard.writeText(npx));
       } else {
@@ -65,5 +78,5 @@ export function checkForUpdates() {
         });
       }
     })
-    .catch((e: Error) => console.log(`update check failed: ${e.message}`));
+    .catch(failed);
 }

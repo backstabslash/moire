@@ -1,5 +1,21 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { CommitInfo, CompareMode, DiffResult, FileContents, FileDiff, FileTree, RepoInfo, StageRequest } from "../shared/types";
+import type { CommandId, ResolvedKeys } from "../shared/keymap";
+import type {
+  CommitDetail,
+  CommitInfo,
+  CompareMode,
+  DiffResult,
+  FileContents,
+  FileDiff,
+  FileTree,
+  Refs,
+  RepoInfo,
+  StageAllRequest,
+  StageRequest,
+  UndoResult,
+  Upstream,
+  Worktree,
+} from "../shared/types";
 
 const api = {
   platform: process.platform,
@@ -7,6 +23,7 @@ const api = {
   openRepo: (path: string): Promise<RepoInfo> => ipcRenderer.invoke("repo:open", path),
   pickRepo: (from?: string): Promise<RepoInfo | null> => ipcRenderer.invoke("repo:pick", from),
   recentRepos: (): Promise<string[]> => ipcRenderer.invoke("repo:recent"),
+  worktrees: (root: string): Promise<Worktree[]> => ipcRenderer.invoke("repo:worktrees", root),
   watch: (root: string): Promise<void> => ipcRenderer.invoke("repo:watch", root),
   onRepoChanged: (listener: () => void): (() => void) => {
     const handler = () => listener();
@@ -23,7 +40,26 @@ const api = {
     };
   },
   zoom: (): Promise<number> => ipcRenderer.invoke("zoom:get"),
-  resetZoom: (): Promise<void> => ipcRenderer.invoke("zoom:reset"),
+  resetZoom: (): Promise<void> => ipcRenderer.invoke("zoom:step", 0),
+  stepZoom: (delta: -1 | 0 | 1): Promise<void> => ipcRenderer.invoke("zoom:step", delta),
+  keys: (): Promise<ResolvedKeys> => ipcRenderer.invoke("keys:get"),
+  editKeys: (): Promise<void> => ipcRenderer.invoke("keys:edit"),
+  checkForUpdates: (): Promise<void> => ipcRenderer.invoke("app:check-updates"),
+  reportIssue: (): Promise<void> => ipcRenderer.invoke("app:report-issue"),
+  onKeysChanged: (listener: () => void): (() => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("keys:changed", handler);
+    return () => {
+      ipcRenderer.off("keys:changed", handler);
+    };
+  },
+  onMenu: (listener: (id: CommandId, arg?: string) => void): (() => void) => {
+    const handler = (_e: unknown, id: CommandId, arg?: string) => listener(id, arg);
+    ipcRenderer.on("menu:command", handler);
+    return () => {
+      ipcRenderer.off("menu:command", handler);
+    };
+  },
   diff: (root: string, mode: CompareMode): Promise<DiffResult> => ipcRenderer.invoke("git:diff", root, mode),
   fileContents: (root: string, mode: CompareMode, file: Pick<FileDiff, "path" | "oldPath" | "status">): Promise<FileContents> =>
     ipcRenderer.invoke("git:file", root, mode, file),
@@ -34,9 +70,14 @@ const api = {
   tree: (root: string, mode: CompareMode): Promise<FileTree> => ipcRenderer.invoke("git:tree", root, mode),
   listDir: (root: string, dir: string): Promise<string[]> => ipcRenderer.invoke("git:dir", root, dir),
   commits: (root: string, limit: number): Promise<CommitInfo[]> => ipcRenderer.invoke("git:commits", root, limit),
-  branches: (root: string): Promise<string[]> => ipcRenderer.invoke("git:branches", root),
+  commitDetail: (root: string, rev: string): Promise<CommitDetail> => ipcRenderer.invoke("git:commit-detail", root, rev),
+  branches: (root: string): Promise<Refs> => ipcRenderer.invoke("git:branches", root),
+  upstream: (root: string): Promise<Upstream | null> => ipcRenderer.invoke("git:upstream", root),
   act: (root: string, req: StageRequest): Promise<string> => ipcRenderer.invoke("git:act", root, req),
-  undo: (root: string): Promise<string | null> => ipcRenderer.invoke("git:undo", root),
+  actAll: (root: string, req: StageAllRequest): Promise<string> => ipcRenderer.invoke("git:act-all", root, req),
+  undo: (root: string): Promise<UndoResult | null> => ipcRenderer.invoke("git:undo", root),
+  saveDiscarded: (root: string, id: string): Promise<string> => ipcRenderer.invoke("git:save-discarded", root, id),
+  dropDiscarded: (root: string, id: string): Promise<void> => ipcRenderer.invoke("git:drop-discarded", root, id),
   commit: (root: string, message: string): Promise<string> => ipcRenderer.invoke("git:commit", root, message),
   openInEditor: (root: string, path: string, line: number): Promise<string> => ipcRenderer.invoke("editor:open", root, path, line),
   revealFile: (root: string, path: string): Promise<void> => ipcRenderer.invoke("file:reveal", root, path),

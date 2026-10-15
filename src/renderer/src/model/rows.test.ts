@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FileDiff, Hunk } from "../../../shared/types";
 import { copyCode, copyMarkdown } from "./copy";
 import { fuzzyMatch } from "./files";
+import { modeNote } from "./modes";
 import { align, buildRows, followHunk, type Row } from "./rows";
 import { compile, type SearchOptions, searchFile } from "./search";
 
@@ -31,11 +32,12 @@ const oldText = lines.join("\n") + "\n";
 const kinds = (rows: Row[]) => rows.map((r) => (r.t === "fold" ? `fold${r.count}` : r.t));
 
 describe("buildRows", () => {
-  it("folds the gaps before and after a hunk", () => {
+  it("folds the gaps before and after a hunk, but shows a single unchanged line", () => {
     const rows = buildRows(file([hunk]), { a: oldText, b: newText, tooLarge: false }, opts);
-    expect(kinds(rows)[0]).toBe("fold1");
+    expect(kinds(rows).slice(0, 2)).toEqual(["split", "hunk"]);
+    expect(rows[0]).toMatchObject({ a: { no: 1, text: "line 1", sel: "g1" } });
     expect(kinds(rows).at(-1)).toBe("fold2");
-    expect(rows.filter((r) => r.t === "split")).toHaveLength(7);
+    expect(rows.filter((r) => r.t === "split")).toHaveLength(8);
   });
 
   it("shows every line in full-file scope with correct numbers", () => {
@@ -48,14 +50,14 @@ describe("buildRows", () => {
 
   it("expands one fold on request", () => {
     const rows = buildRows(file([hunk]), { a: oldText, b: newText, tooLarge: false }, { ...opts, expanded: new Set(["gap1"]) });
-    expect(kinds(rows)[0]).toBe("fold1");
-    expect(kinds(rows).filter((k) => k.startsWith("fold"))).toHaveLength(1);
+    expect(kinds(rows).filter((k) => k.startsWith("fold"))).toHaveLength(0);
+    expect(rows.filter((r) => r.t === "split")).toHaveLength(10);
   });
 
   it("draws the blinking hunk as aligned pairs in unified layout", () => {
     const rows = buildRows(file([hunk]), { a: oldText, b: newText, tooLarge: false }, { ...opts, layout: "unified", plates: 0 });
     const pair = rows.find((r) => r.t === "split" && r.kind === "chg");
-    expect(rows.some((r) => r.t === "uni")).toBe(false);
+    expect(rows.some((r) => r.t === "uni" && r.hunk === 0)).toBe(false);
     expect(pair).toMatchObject({ a: { no: 5, text: "line 5" }, b: { no: 5, text: "line five" } });
   });
 
@@ -170,6 +172,75 @@ describe("search", () => {
   });
 });
 
+const change = (del: string[], add: string[]): Hunk => ({
+  oldStart: 1,
+  oldLines: del.length,
+  newStart: 1,
+  newLines: add.length,
+  header: "",
+  lines: [...del.map((text, i) => ({ kind: "del" as const, text, oldNo: i + 1 })), ...add.map((text, i) => ({ kind: "add" as const, text, newNo: i + 1 }))],
+});
+
+describe("what changed when there are no lines to show", () => {
+  const note = (f: FileDiff) => buildRows(f, null, opts).map((r) => r.t === "note" && r.text);
+
+  it("names a mode change, a bare rename, and empty files", () => {
+    expect(note(file([], { oldMode: "100644", newMode: "100755" }))).toEqual(["Now executable (100644 → 100755), no content changes."]);
+    expect(note(file([], { oldMode: "100755", newMode: "100644" }))).toEqual(["No longer executable (100755 → 100644), no content changes."]);
+    expect(note(file([], { status: "renamed", oldPath: "src/b.ts" }))).toEqual(["Renamed from src/b.ts, no content changes."]);
+    expect(note(file([], { status: "renamed", oldPath: "b.sh", oldMode: "100644", newMode: "100755" }))).toEqual([
+      "Renamed from b.sh, now executable, no content changes.",
+    ]);
+    expect(note(file([], { status: "untracked" }))).toEqual(["Empty file."]);
+    expect(note(file([], { status: "deleted" }))).toEqual(["Deleted an empty file."]);
+    expect(note(file([]))).toEqual(["No content changes."]);
+  });
+
+  it("says a renamed binary was renamed, and that a tracked file's changes are too large", () => {
+    expect(note(file([], { status: "renamed", oldPath: "a.png", binary: true }))).toEqual(["Renamed from a.png. Binary file, contents not shown."]);
+    expect(note(file([], { tooLarge: true }))).toEqual(["Over 2 MB of changes, not shown."]);
+    expect(note(file([], { status: "untracked", tooLarge: true }))).toEqual(["File is over 2 MB, contents not shown."]);
+  });
+
+  it("shows where a symlink points rather than its target as text", () => {
+    const link = { oldMode: "120000", newMode: "120000" };
+    expect(note(file([change(["a.txt"], ["b.txt"])], link))).toEqual(["Symlink target changed from a.txt to b.txt."]);
+    expect(note(file([change([], ["b.txt"])], { status: "untracked", newMode: "120000" }))).toEqual(["Symlink to b.txt."]);
+    expect(note(file([change(["a.txt"], [])], { status: "deleted", oldMode: "120000" }))).toEqual(["Deleted a symlink to a.txt."]);
+    expect(buildRows(file([change(["x"], ["a.txt"])], { oldMode: "100644", newMode: "120000" }), null, opts).some((r) => r.t === "split")).toBe(true);
+  });
+
+  it("says where a submodule moved", () => {
+    const sub = (del: string[], add: string[], extra: Partial<FileDiff> = { oldMode: "160000", newMode: "160000" }) =>
+      note(
+        file(
+          [
+            change(
+              del.map((s) => `Subproject commit ${s}`),
+              add.map((s) => `Subproject commit ${s}`),
+            ),
+          ],
+          extra,
+        ),
+      );
+    const [x, y] = ["3cfd90836a3deeda6d5f653afcba69cab9787736", "b86909db604d6e4824c2ce2b48d7cdc457ac98a9"];
+    expect(sub([x], [y])).toEqual(["Submodule moved from 3cfd908 to b86909d."]);
+    expect(sub([x], [`${y}-dirty`])).toEqual(["Submodule moved from 3cfd908 to b86909d, with uncommitted changes inside it."]);
+    expect(sub([x], [`${x}-dirty`])).toEqual(["Submodule has uncommitted changes inside it."]);
+    expect(sub([], [y], { status: "added", newMode: "160000" })).toEqual(["Submodule added at b86909d."]);
+  });
+
+  it("describes mode changes in plain words, with a short tag", () => {
+    expect(modeNote({ oldMode: "100644", newMode: "100755" })).toEqual({ words: "now executable", tag: "+x" });
+    expect(modeNote({ oldMode: "100644", newMode: "120000" })).toEqual({ words: "file type changed to symlink", tag: "link" });
+    expect(modeNote({ oldMode: "120000", newMode: "100755" })).toEqual({ words: "file type changed to file", tag: "file" });
+    expect(modeNote({ oldMode: "120000", newMode: "120000" })).toEqual({ words: "symlink", tag: "link" });
+    expect(modeNote({ newMode: "100755" })).toEqual({ words: "executable", tag: "+x" });
+    expect(modeNote({ oldMode: "100755" })).toBeNull();
+    expect(modeNote({})).toBeNull();
+  });
+});
+
 describe("noise folding", () => {
   const ws: Hunk = {
     oldStart: 2,
@@ -197,14 +268,6 @@ describe("noise folding", () => {
   });
 
   it("doesn't fold spaces that join words, or reindents where indentation matters", () => {
-    const change = (del: string[], add: string[]): Hunk => ({
-      oldStart: 1,
-      oldLines: del.length,
-      newStart: 1,
-      newLines: add.length,
-      header: "",
-      lines: [...del.map((text, i) => ({ kind: "del" as const, text, oldNo: i + 1 })), ...add.map((text, i) => ({ kind: "add" as const, text, newNo: i + 1 }))],
-    });
     const folded = (path: string, h: Hunk) => buildRows(file([h], { path }), null, opts).some((r) => r.t === "hunk" && !!r.folded);
     const dedent = change(["if admin:", "    grant(user)"], ["if admin:", "grant(user)"]);
     expect(folded("a.ts", change(['msg = "a b"'], ['msg = "ab"']))).toBe(false);
@@ -213,6 +276,42 @@ describe("noise folding", () => {
     expect(folded("a.ts", dedent)).toBe(true);
     expect(folded("a.py", dedent)).toBe(false);
     expect(folded("a.py", change(["x = 1  ", "y = 2"], ["x = 1", "", "y = 2"]))).toBe(true);
+  });
+
+  it("counts whitespace inside string literals", () => {
+    const folded = (del: string[], add: string[], path = "a.ts") =>
+      buildRows(file([change(del, add)], { path }), null, opts).some((r) => r.t === "hunk" && !!r.folded);
+    expect(folded(['s.split(" ")'], ['s.split("")'])).toBe(false);
+    expect(folded(["xs.join(', ')"], ["xs.join(',')"])).toBe(false);
+    expect(folded(["const s = `", "  a", "`;"], ["const s = `", "a", "`;"])).toBe(false);
+    expect(folded(['f("a b",  x)'], ['f("a b", x)'])).toBe(true);
+    expect(folded(["// don't", "f(a,b)"], ["// don't", "f(a, b)"])).toBe(true);
+    expect(folded(["x = 'it\\'s  ok'"], ["x = 'it\\'s ok'"])).toBe(false);
+    expect(folded(['msg = "a  b"'], ['msg = "a b"'], "a.py")).toBe(false);
+  });
+
+  it("never folds whitespace in formats where it matters", () => {
+    const folded = (path: string, del: string[], add: string[]) =>
+      buildRows(file([change(del, add)], { path }), null, opts).some((r) => r.t === "hunk" && !!r.folded);
+    expect(folded("README.md", ["line one  "], ["line one"])).toBe(false);
+    expect(folded("README.md", ["- item", "  - nested"], ["- item", "- nested"])).toBe(false);
+    expect(folded("notes.txt", ["a  b"], ["a b"])).toBe(true);
+    expect(folded("Makefile", ["X = a "], ["X = a"])).toBe(false);
+    expect(folded("data.tsv", ["a\tb"], ["a b"])).toBe(false);
+  });
+
+  it("offers to expand every whitespace fold in a file when there are several", () => {
+    const rows = buildRows(file([ws, { ...ws, oldStart: 6, newStart: 6 }]), null, opts);
+    const folds = rows.flatMap((r) => (r.t === "hunk" && r.folded ? [r.folded] : []));
+    expect(folds).toHaveLength(2);
+    expect(folds.map((f) => f.all)).toEqual([["ws0", "ws1"], undefined]);
+    const one = buildRows(file([ws]), null, opts).find((r) => r.t === "hunk");
+    expect(one?.t === "hunk" && one.folded && !one.folded.all).toBe(true);
+  });
+
+  it("folds minified files like generated ones", () => {
+    const min = file([hunk], { noise: "Minified file", additions: 1, deletions: 1 });
+    expect(buildRows(min, null, opts)[0]).toMatchObject({ text: "Minified file, 2 changed lines, folded away.", expand: "noise" });
   });
 
   it("folds a whitespace-only hunk into one row with the unchanged lines around it", () => {

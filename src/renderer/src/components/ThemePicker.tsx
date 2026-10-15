@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Key, keyText, useKeymap } from "./Key";
 
 export const THEMES = [
   { id: "light", name: "Plate", tone: "light", note: "Glass plate on a light table. The default." },
@@ -26,6 +27,7 @@ export function ThemePicker({ theme, cvd, onTheme, onCvd }: Props) {
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
   const current = THEMES.find((t) => t.id === theme) ?? THEMES[0];
+  const toggle = keyText(useKeymap(), "theme");
 
   useEffect(() => {
     if (!open) return;
@@ -45,13 +47,19 @@ export function ThemePicker({ theme, cvd, onTheme, onCvd }: Props) {
 
   return (
     <div className="themes" ref={boxRef}>
-      <button className="theme-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button
+        className="theme-btn"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={toggle ? `Theme (${toggle} switches light and dark)` : "Theme"}
+        onClick={() => setOpen(!open)}
+      >
         <span className="pair" aria-hidden="true">
           <i />
           <i />
         </span>
         {current.name}
-        <kbd>t</kbd>
+        <Key id="theme" />
       </button>
       {open && (
         <div className="theme-pop" role="menu">

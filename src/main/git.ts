@@ -1,9 +1,27 @@
 import { execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { lstat, open, readdir, readFile, readlink, rename, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { lstat, open, readdir, readFile, readlink, rename, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
-import type { CommitInfo, CompareMode, DiffResult, FileContents, FileDiff, FileTree, Hunk, RepoInfo, SideInfo } from "../shared/types";
+import type {
+  CommitDetail,
+  CommitInfo,
+  CompareMode,
+  DiffResult,
+  FileContents,
+  FileDiff,
+  FileTree,
+  Hunk,
+  Refs,
+  RepoInfo,
+  RepoState,
+  SideInfo,
+  Upstream,
+  Worktree,
+} from "../shared/types";
+import { tildify } from "./launch";
 import { parseDiff, sortFiles } from "./parse";
 
 const exec = promisify(execFile);
@@ -15,7 +33,19 @@ const EMPTY_TREE: Record<string, string> = {
 };
 
 // Inherited GIT_DIR/GIT_INDEX_FILE (e.g. when launched from a git hook) would point git at another repo.
-const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"].includes(k)));
+const env: NodeJS.ProcessEnv = {
+  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"].includes(k))),
+  // Stops commands that honour it from refreshing .git/index behind an agent's back; porcelain `git diff` ignores it.
+  GIT_OPTIONAL_LOCKS: "0",
+};
+
+let shellPath: Promise<unknown> = Promise.resolve();
+
+export function setShellPath(path: Promise<string | null>): void {
+  shellPath = path.then((p) => {
+    if (p) env.PATH = p;
+  });
+}
 
 function gitArgs(root: string, args: string[]): string[] {
   // A repo's own config could otherwise make every refresh run a command.
@@ -67,14 +97,131 @@ function fixedGit(root: string, args: string[]): Promise<string | null> {
   return value;
 }
 
+export function missingGit(e: unknown, platform: NodeJS.Platform): string | null {
+  const err = e as { code?: unknown; stderr?: unknown };
+  const mac = "git isn't installed. Run xcode-select --install in a terminal, then reopen moire.";
+  if (err.code === "ENOENT") return platform === "darwin" ? mac : "git isn't installed. Install it with your package manager, then reopen moire.";
+  // Without the command line tools, /usr/bin/git on macOS is a stub that only offers to install them.
+  return platform === "darwin" && /xcode-select|xcrun|developer tools/i.test(String(err.stderr ?? "")) ? mac : null;
+}
+
+// Stage all and rename pairing pass paths with --pathspec-from-file.
+export function oldGit(version: string): string | null {
+  const [major, minor] = (/(\d+)\.(\d+)/.exec(version) ?? []).slice(1).map(Number);
+  return major < 2 || (major === 2 && minor < 26) ? `moire needs git 2.26 or newer, and this is ${version.trim().replace(/^git version /, "")}.` : null;
+}
+
+let missing: Promise<string | null> | undefined;
+
+// The login shell's PATH is only waited for when git isn't on the PATH moire started with.
+export function gitMissing(): Promise<string | null> {
+  const version = () => exec("git", ["--version"], { env }).then(({ stdout }) => oldGit(stdout));
+  missing ??= version().catch(() => shellPath.then(version).catch((e: unknown) => missingGit(e, process.platform)));
+  return missing;
+}
+
+export function repoProblem(path: string, e: unknown): string {
+  const text = gitError(e).replace(/^fatal: /, "");
+  const where = tildify(path);
+  if (/dubious ownership/i.test(text)) {
+    const fix = /git config --global --add safe\.directory .+/.exec(text)?.[0];
+    return `${where} belongs to another user, so git won't open it.${fix ? ` To trust it, run: ${fix}` : ""}`;
+  }
+  if (/permission denied/i.test(text)) return `moire can't read ${where}: permission denied`;
+  if (/not a directory/i.test(text)) return `${where} isn't a folder`;
+  if (/must be run in a work tree/i.test(text)) return `${where} is a bare repository, which has no files to review`;
+  if (/not a git repository/i.test(text)) return `${where} isn't a git repository`;
+  return text;
+}
+
+async function repoError(path: string): Promise<string> {
+  const missing = await gitMissing();
+  if (missing) return missing;
+  if (!existsSync(path)) return `${tildify(path)} doesn't exist`;
+  try {
+    await git(path, ["rev-parse", "--show-toplevel"]);
+    return `Couldn't open ${tildify(path)}`;
+  } catch (e) {
+    return repoProblem(path, e);
+  }
+}
+
 export async function repoInfo(path: string): Promise<RepoInfo> {
   const root = await fixedGit(path, ["rev-parse", "--show-toplevel"]);
-  if (!root) throw new Error(`Not a git repository: ${path}`);
-  const [branch, head] = await Promise.all([
+  if (!root) throw new Error(await repoError(path));
+  const [branch, head, state] = await Promise.all([
     tryGit(root, ["symbolic-ref", "--short", "-q", "HEAD"]),
     tryGit(root, ["rev-parse", "--short", "-q", "--verify", "HEAD"]),
+    repoState(root),
   ]);
-  return { root, name: basename(root), branch, head };
+  const info: RepoInfo = { root, name: basename(root), branch, head };
+  if (state) info.state = state;
+  return info;
+}
+
+const STATES: [string, RepoState][] = [
+  ["rebase-merge", "rebasing"],
+  ["rebase-apply", "rebasing"],
+  ["MERGE_HEAD", "merging"],
+  ["CHERRY_PICK_HEAD", "cherry-picking"],
+  ["REVERT_HEAD", "reverting"],
+  ["BISECT_LOG", "bisecting"],
+];
+
+async function repoState(root: string): Promise<RepoState | null> {
+  const gitDir = await fixedGit(root, ["rev-parse", "--absolute-git-dir"]);
+  if (!gitDir) return null;
+  const found = await Promise.all(
+    STATES.map(([name]) =>
+      stat(join(gitDir, name)).then(
+        () => true,
+        () => false,
+      ),
+    ),
+  );
+  return STATES.find((_, i) => found[i])?.[1] ?? null;
+}
+
+export async function worktrees(root: string): Promise<Worktree[]> {
+  const out = await tryGit(root, ["worktree", "list", "--porcelain", "-z"]);
+  if (!out) return [];
+  const found: { path: string; branch: string | null }[] = [];
+  for (const block of out.split("\0\0")) {
+    const fields = block.split("\0").filter(Boolean);
+    const path = fields.find((f) => f.startsWith("worktree "))?.slice(9);
+    if (!path || fields.some((f) => f === "bare" || f.startsWith("prunable"))) continue;
+    const branch =
+      fields
+        .find((f) => f.startsWith("branch "))
+        ?.slice(7)
+        .replace(/^refs\/heads\//, "") ?? null;
+    found.push({ path, branch });
+  }
+  if (found.length < 2) return [];
+  return Promise.all(
+    found.map(async (w) => {
+      const status = await git(w.path, ["--no-optional-locks", "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all"]).catch(() => "");
+      return { ...w, changes: status.split("\0").filter(Boolean).length };
+    }),
+  );
+}
+
+export async function upstream(root: string): Promise<Upstream | null> {
+  const name = await tryGit(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
+  if (!name) return null;
+  const [counts, fetchHead] = await Promise.all([
+    tryGit(root, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]),
+    fixedGit(root, ["rev-parse", "--git-path", "FETCH_HEAD"]),
+  ]);
+  if (!counts) return null;
+  const [ahead, behind] = counts.split(/\s+/).map(Number);
+  const fetchedAt = fetchHead
+    ? await stat(resolvePath(root, fetchHead)).then(
+        (st) => st.mtimeMs,
+        () => null,
+      )
+    : null;
+  return { name, ahead, behind, fetchedAt };
 }
 
 async function resolve(root: string, rev: string): Promise<string> {
@@ -97,8 +244,11 @@ const INDEX: SideInfo = { kind: "index", label: "Index" };
 const WORKTREE: SideInfo = { kind: "worktree", label: "Working tree" };
 
 async function headSide(root: string): Promise<SideInfo> {
-  const sha = await tryGit(root, ["rev-parse", "-q", "--verify", "HEAD^{commit}"]);
-  return sha ? { kind: "commit", rev: sha, label: `HEAD ${await short(root, sha)}` } : EMPTY;
+  const [sha, s] = await Promise.all([
+    tryGit(root, ["rev-parse", "-q", "--verify", "HEAD^{commit}"]),
+    tryGit(root, ["rev-parse", "--short", "-q", "--verify", "HEAD^{commit}"]),
+  ]);
+  return sha && s ? { kind: "commit", rev: sha, label: `HEAD ${s}` } : EMPTY;
 }
 
 export async function sides(root: string, mode: CompareMode): Promise<{ a: SideInfo; b: SideInfo }> {
@@ -135,29 +285,57 @@ function treeish(side: SideInfo, empty: string): string {
 
 export const UNTRACKED_READ_LIMIT = 1000;
 
+interface CachedUntracked {
+  size: number;
+  mtimeMs: number;
+  ino: number;
+  file: FileDiff;
+}
+
+const untrackedCache = new Map<string, Map<string, CachedUntracked>>();
+
 async function untracked(root: string, pathspec: string[]): Promise<FileDiff[]> {
   const out = await git(root, ["ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspec]);
   const paths = out.split("\0").filter((p) => p && !p.endsWith("/"));
+  const cache = untrackedCache.get(root) ?? new Map<string, CachedUntracked>();
+  untrackedCache.set(root, cache);
+  if (!pathspec.length) {
+    const listed = new Set(paths);
+    for (const p of cache.keys()) if (!listed.has(p)) cache.delete(p);
+  }
   const files = await Promise.all(
     paths.map((p, i): Promise<FileDiff | null> | FileDiff =>
       i < UNTRACKED_READ_LIMIT
-        ? untrackedFile(root, p)
+        ? untrackedFile(root, p, cache)
         : { path: p, status: "untracked", binary: false, tooLarge: true, unread: true, additions: 0, deletions: 0, hunks: [] },
     ),
   );
   return files.filter((f): f is FileDiff => f !== null);
 }
 
-async function untrackedFile(root: string, path: string): Promise<FileDiff | null> {
+// The diff() marks only set top-level fields on untracked files, so a shallow copy keeps the cache intact.
+async function untrackedFile(root: string, path: string, cache: Map<string, CachedUntracked>): Promise<FileDiff | null> {
+  const st = await lstat(join(root, path)).catch(() => null);
+  const hit = st && cache.get(path);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs && hit.ino === st.ino) return { ...hit.file };
+  const file = await readUntracked(root, path);
+  if (file && st) {
+    if (file.binary) file.blobs = `${st.size}:${st.mtimeMs}`;
+    if (st.isSymbolicLink()) file.newMode = "120000";
+    else if (st.mode & 0o111) file.newMode = "100755";
+    cache.set(path, { size: st.size, mtimeMs: st.mtimeMs, ino: st.ino, file });
+  } else {
+    cache.delete(path);
+  }
+  return file && { ...file };
+}
+
+async function readUntracked(root: string, path: string): Promise<FileDiff | null> {
   const buf = await readWorktree(root, path);
   if (buf === null) return null;
   const file: FileDiff = { path, status: "untracked", binary: false, additions: 0, deletions: 0, hunks: [] };
   if (isBinary(buf)) file.binary = true;
   if (buf.length > SIZE_LIMIT) file.tooLarge = true;
-  if (file.binary) {
-    const st = await lstat(join(root, path)).catch(() => null);
-    if (st) file.blobs = `${st.size}:${st.mtimeMs}`;
-  }
   if (file.binary || file.tooLarge || buf.length === 0) return file;
   const text = buf.toString("utf8");
   const lines = text.split("\n");
@@ -176,25 +354,75 @@ async function untrackedFile(root: string, path: string): Promise<FileDiff | nul
   return file;
 }
 
-const DIFF = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-relative", "-M", "--src-prefix=a/", "--dst-prefix=b/"];
+const DIFF = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-relative", "-M", "--src-prefix=a/", "--dst-prefix=b/"];
+
+// Porcelain `git diff` rewrites .git/index to refresh stat info, which can fail an agent's commit on index.lock; plumbing never writes it.
+async function diffCommand(root: string, from: string | null, to: "index" | "worktree" | string): Promise<string[]> {
+  const algorithm = await fixedGit(root, ["config", "--get", "--default=", "diff.algorithm"]);
+  const opts = algorithm ? [...DIFF, `--diff-algorithm=${algorithm}`] : DIFF;
+  if (from === null) return ["diff-files", ...opts, "--cc"];
+  if (to === "worktree") return ["diff-index", ...opts, from];
+  if (to === "index") return ["diff-index", ...opts, "--cached", "--ita-invisible-in-index", from];
+  return ["diff", ...opts, from, to];
+}
 
 export async function diff(root: string, mode: CompareMode, paths: string[] = []): Promise<DiffResult> {
   const [repo, { a, b }, empty] = await Promise.all([repoInfo(root), sides(root, mode), emptyTree(root)]);
   const pathspec = literal(paths);
-  const args = [...DIFF, "-U3"];
-  if (mode.kind === "staged") args.push("--cached", treeish(a, empty));
-  else if (mode.kind === "all") args.push(treeish(a, empty));
-  else if (mode.kind === "commit" || mode.kind === "branches") args.push(treeish(a, empty), treeish(b, empty));
-  args.push("--", ...pathspec);
+  const from = mode.kind === "unstaged" ? null : treeish(a, empty);
+  const to = mode.kind === "unstaged" || mode.kind === "all" ? "worktree" : mode.kind === "staged" ? "index" : treeish(b, empty);
+  const args = [...(await diffCommand(repo.root, from, to)), "-U3", "--", ...pathspec];
   const worktree = mode.kind === "unstaged" || mode.kind === "all";
   const [out, extra] = await Promise.all([git(repo.root, args), worktree ? untracked(repo.root, pathspec) : []]);
-  const files = [...parseDiff(out), ...extra];
+  const files = await pairRenames(repo.root, mode.kind === "all" ? treeish(a, empty) : null, parseDiff(out), extra);
   const [progress] = await Promise.all([
-    worktree && !paths.length ? markChangedSinceStaged(repo.root, files, mode.kind === "unstaged") : undefined,
+    worktree && !paths.length ? markChangedSinceStaged(repo.root, files, mode.kind === "unstaged", repo.head ?? empty) : undefined,
     mode.kind === "all" && markStaged(repo.root, files, treeish(a, empty), pathspec),
     markNoise(repo.root, files),
   ]);
-  return { repo, a, b, files: sortFiles(files), progress };
+  for (const f of files) f.version = fileVersion(f);
+  const version = hash(JSON.stringify([repo, a, b, progress, files.map((f) => f.version)]));
+  return { repo, a, b, files: sortFiles(files), progress, version };
+}
+
+// `mv old new` plus an edit shows as a deletion and an untracked file. Git pairs them once the new
+// file is in an index as intent-to-add, so this builds a scratch index of just those paths.
+async function pairRenames(root: string, base: string | null, files: FileDiff[], extra: FileDiff[]): Promise<FileDiff[]> {
+  const gone = files.filter((f) => f.status === "deleted").map((f) => f.path);
+  const fresh = extra.filter((f) => !f.unread).map((f) => f.path);
+  if (!gone.length || !fresh.length) return [...files, ...extra];
+  const index = join(tmpdir(), `moire-index-${randomUUID()}`);
+  const scratch = (args: string[], input = "") =>
+    new Promise<string>((resolve, reject) => {
+      const opts = { maxBuffer: MAX_BUFFER, env: { ...env, GIT_INDEX_FILE: index, GIT_LITERAL_PATHSPECS: "1" } };
+      const child = execFile("git", gitArgs(root, args), opts, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+      child.stdin!.end(input);
+    });
+  try {
+    const entries = await git(root, ["ls-files", "-s", "-z", "--", ...literal(gone)]);
+    await scratch(["update-index", "-z", "--index-info"], entries);
+    await scratch(["add", "-N", "--pathspec-from-file=-", "--pathspec-file-nul"], fresh.map((p) => `${p}\0`).join(""));
+    const out = await scratch(["diff", ...DIFF, "-U3", ...(base ? [base] : []), "--", ...gone, ...fresh]);
+    const [wasGone, isFresh] = [new Set(gone), new Set(fresh)];
+    const renames = parseDiff(out).filter((f) => f.status === "renamed" && wasGone.has(f.oldPath!) && isFresh.has(f.path));
+    if (!renames.length) return [...files, ...extra];
+    const paired = new Set(renames.flatMap((f) => [f.path, f.oldPath!]));
+    return [...files.filter((f) => !paired.has(f.path)), ...extra.filter((f) => !paired.has(f.path)), ...renames];
+  } catch {
+    return [...files, ...extra];
+  } finally {
+    await rm(index, { force: true });
+  }
+}
+
+const hash = (text: string) => createHash("sha1").update(text).digest("base64url");
+const hunkVersions = new WeakMap<Hunk[], string>();
+
+// Cached untracked files share their hunks across refreshes, so their hash is computed once.
+function fileVersion(file: FileDiff): string {
+  let hunks = hunkVersions.get(file.hunks);
+  if (!hunks) hunkVersions.set(file.hunks, (hunks = hash(JSON.stringify(file.hunks))));
+  return hash(JSON.stringify({ ...file, hunks }));
 }
 
 function rawBlobs(out: string): Map<string, string> {
@@ -210,13 +438,18 @@ function rawBlobs(out: string): Map<string, string> {
 }
 
 // Remembers fully staged blobs, to tell a later edit apart from staging part of a file.
-async function markChangedSinceStaged(root: string, files: FileDiff[], filesAreUnstaged: boolean) {
+async function markChangedSinceStaged(root: string, files: FileDiff[], filesAreUnstaged: boolean, head: string) {
   const [cached, unstaged, memoryPath] = await Promise.all([
-    git(root, ["diff", "--cached", "--raw", "--no-abbrev", "-z", "-M"]),
-    filesAreUnstaged ? "" : git(root, ["diff", "--raw", "--no-abbrev", "-z", "--no-renames"]),
+    git(root, ["diff-index", "--cached", "--ita-invisible-in-index", "--raw", "--no-abbrev", "-z", "-M", head]),
+    // --numstat compares contents, so files whose stat info alone is stale don't count.
+    filesAreUnstaged ? "" : git(root, ["diff-files", "--numstat", "-z", "--no-renames"]),
     fixedGit(root, ["rev-parse", "--git-path", "moire-staged"]),
   ]);
-  const dirty = new Set([...rawBlobs(unstaged).keys(), ...files.filter((f) => filesAreUnstaged || f.status === "untracked").map((f) => f.path)]);
+  const numstatPaths = unstaged
+    .split("\0")
+    .filter(Boolean)
+    .map((rec) => rec.replace(/^[^\t]*\t[^\t]*\t/, ""));
+  const dirty = new Set([...numstatPaths, ...files.filter((f) => filesAreUnstaged || f.status === "untracked").map((f) => f.path)]);
   const memory = resolvePath(root, memoryPath!.trim());
   const before: Record<string, string> = await readFile(memory, "utf8")
     .then(JSON.parse)
@@ -260,8 +493,35 @@ const LOCKFILES = new Set([
   "gradle.lockfile",
 ]);
 
+// A one-line bundle soft-wraps into thousands of rows; ordinary code averages well under this.
+const LONG_LINES = 1000;
+
+function longLines(file: FileDiff): boolean {
+  let chars = 0;
+  let count = 0;
+  for (const h of file.hunks) {
+    for (const l of h.lines) {
+      if (l.kind === "ctx") continue;
+      chars += l.text.length;
+      count++;
+    }
+  }
+  return chars > 20 * LONG_LINES && chars / count > LONG_LINES;
+}
+
+function changedChars(file: FileDiff): number {
+  let chars = 0;
+  for (const h of file.hunks) for (const l of h.lines) chars += l.text.length + 1;
+  return chars;
+}
+
 async function markNoise(root: string, files: FileDiff[]) {
   if (!files.length) return;
+  for (const f of files) {
+    if (f.tooLarge || changedChars(f) <= SIZE_LIMIT) continue;
+    f.tooLarge = true;
+    f.hunks = [];
+  }
   const out = await gitInput(root, ["check-attr", "-z", "--stdin", "linguist-generated"], files.map((f) => `${f.path}\0`).join(""));
   const attr = new Map<string, string>();
   const parts = out.split("\0");
@@ -275,17 +535,19 @@ async function markNoise(root: string, files: FileDiff[]) {
         ? "Generated file"
         : LOCKFILES.has(name)
           ? "Lockfile"
-          : name.endsWith(".snap") || /(^|\/)__snapshots__\//.test(f.path)
-            ? "Snapshot"
-            : null;
+          : /\.(js|mjs|cjs|css)\.map$/.test(name)
+            ? "Source map"
+            : /\.min\.(js|mjs|cjs|css)$/.test(name) || longLines(f)
+              ? "Minified file"
+              : null;
     if (noise) f.noise = noise;
   }
 }
 
 async function markStaged(root: string, files: FileDiff[], head: string, pathspec: string[]) {
   const [staged, unstaged] = await Promise.all([
-    git(root, [...DIFF, "-U0", "--cached", head, "--", ...pathspec]),
-    git(root, [...DIFF, "-U0", "--", ...pathspec]),
+    diffCommand(root, head, "index").then((cmd) => git(root, [...cmd, "-U0", "--", ...pathspec])),
+    diffCommand(root, null, "worktree").then((cmd) => git(root, [...cmd, "-U0", "--", ...pathspec])),
   ]).then((out) => out.map((text) => new Map(parseDiff(text).map((f) => [f.path, f]))));
   for (const file of files) {
     const s = staged.get(file.path);
@@ -483,12 +745,28 @@ export async function commits(root: string, limit: number): Promise<CommitInfo[]
     });
 }
 
-export async function branches(root: string): Promise<string[]> {
-  const out = await git(root, ["for-each-ref", "--format=%(refname)", "refs/heads/"]);
-  const names = out
-    .split("\n")
-    .filter(Boolean)
-    .map((r) => r.slice("refs/heads/".length));
-  const current = await tryGit(root, ["symbolic-ref", "--short", "-q", "HEAD"]);
-  return current && names.includes(current) ? [current, ...names.filter((n) => n !== current)] : names;
+export async function commitDetail(root: string, rev: string): Promise<CommitDetail> {
+  const sha = await resolve(root, rev);
+  const out = await git(root, ["log", "-1", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%b", sha, "--"]);
+  const [full, short, subject, author, date, body] = out.split("\x1f");
+  return { sha: full, short, subject, author, date, body: body.trim() };
+}
+
+export async function branches(root: string): Promise<Refs> {
+  const list = async (args: string[]) => (await git(root, ["for-each-ref", "--format=%(refname)", ...args])).split("\n").filter(Boolean);
+  const [heads, remotes, tags, current, upstream] = await Promise.all([
+    list(["refs/heads/"]),
+    list(["refs/remotes/"]),
+    list(["--sort=-creatordate", "refs/tags/"]),
+    tryGit(root, ["symbolic-ref", "--short", "-q", "HEAD"]),
+    tryGit(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]),
+  ]);
+  const names = heads.map((r) => r.slice("refs/heads/".length));
+  return {
+    current: current && names.includes(current) ? current : null,
+    upstream,
+    branches: current && names.includes(current) ? [current, ...names.filter((n) => n !== current)] : names,
+    remotes: remotes.map((r) => r.slice("refs/remotes/".length)).filter((n) => !n.endsWith("/HEAD")),
+    tags: tags.map((r) => r.slice("refs/tags/".length)),
+  };
 }

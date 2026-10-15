@@ -1,8 +1,17 @@
-import { type MouseEvent, type ReactNode, type RefObject, useEffect, useMemo, useState } from "react";
+import { type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction, useMemo } from "react";
 import type { FileDiff, FileStatus, FileTree as Listing } from "../../../shared/types";
+import { modeNote } from "../model/modes";
 import { buildTree, type Dir } from "../model/tree";
 
-const KIND: Record<FileStatus, string> = { added: "A", modified: "M", deleted: "D", renamed: "R", untracked: "U", conflicted: "C", unchanged: "" };
+const KIND: Record<FileStatus, [string, string]> = {
+  added: ["A", "Added"],
+  modified: ["M", "Modified"],
+  deleted: ["D", "Deleted"],
+  renamed: ["R", "Renamed"],
+  untracked: ["U", "Untracked"],
+  conflicted: ["C", "Conflict"],
+  unchanged: ["", ""],
+};
 const MARKS = { full: "Staged", partial: "Partly staged", changed: "Staged, then changed again" };
 const INDENT = 12;
 
@@ -31,9 +40,10 @@ export function fileRow(list: ListState, path: string, f: FileDiff | undefined, 
     !f && "is-unchanged",
     opts.ignored && "is-ignored",
   ];
+  const mode = f && modeNote(f);
   const mark = f?.changedSinceStaged ? "changed" : f?.staged === "full" || f?.staged === "partial" ? f.staged : null;
   const title = f
-    ? `${f.oldPath ? `${f.oldPath} → ${path}` : path}${f.noise ? `\n${f.noise}, folded` : ""}`
+    ? `${f.oldPath ? `${f.oldPath} → ${path}` : path}${mode ? `\n${mode.words[0].toUpperCase()}${mode.words.slice(1)}` : ""}${f.noise ? `\n${f.noise}, folded` : ""}`
     : `${path}${opts.ignored ? "\nIgnored by git" : "\nNo changes"}`;
   return (
     <button
@@ -47,11 +57,18 @@ export function fileRow(list: ListState, path: string, f: FileDiff | undefined, 
       onContextMenu={(e) => list.onMenu(path, e)}
     >
       <span className="name">{path.split("/").pop()}</span>
-      <span className="kind">{f ? KIND[f.status] : ""}</span>
+      <span className="kind" title={f ? KIND[f.status][1] : undefined}>
+        {f ? KIND[f.status][0] : ""}
+      </span>
       <span className="nums">
         {list.hitCounts?.has(path) && (
           <span className="hit-count" title="Search hits">
             {list.hitCounts.get(path)}
+          </span>
+        )}
+        {mode && (
+          <span className="mode-tag" title={mode.words}>
+            {mode.tag}
           </span>
         )}
         {f?.binary ? (
@@ -74,40 +91,45 @@ function Mark({ state }: { state: keyof typeof MARKS }) {
   ) : (
     <svg className={`mark mark-${state}`} viewBox="0 0 12 12" aria-label={MARKS[state]}>
       <title>{MARKS[state]}</title>
-      <path d="M2 6.4l2.6 2.6L10 3.4" />
+      {state === "full" ? (
+        <path d="M2 6.4l2.6 2.6L10 3.4" />
+      ) : (
+        <>
+          <circle cx="6" cy="6" r="4" />
+          <path className="half" d="M6 2a4 4 0 0 0 0 8z" />
+        </>
+      )}
     </svg>
   );
 }
 
-interface Props {
+export interface Folders {
   root: string;
+  active: string | null;
+  open: ReadonlySet<string>;
+  opened: ReadonlyMap<string, string[] | string>;
+}
+
+interface Props {
   listing: Listing;
   changed: FileDiff[];
   list: ListState;
+  folders: Folders;
+  onFolders: Dispatch<SetStateAction<Folders>>;
 }
 
-export function FileTree({ root, listing, changed, list }: Props) {
-  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
-  const [opened, setOpened] = useState<ReadonlyMap<string, string[] | string>>(new Map());
+export function FileTree({ listing, changed, list, folders, onFolders }: Props) {
+  const { root, open, opened } = folders;
   const tree = useMemo(() => buildTree(listing, changed, opened), [listing, changed, opened]);
-
-  useEffect(() => {
-    const path = list.active;
-    if (!path) return;
-    const parents: string[] = [];
-    for (let i = path.indexOf("/"); i >= 0; i = path.indexOf("/", i + 1)) parents.push(path.slice(0, i + 1));
-    setOpen((cur) => (parents.every((p) => cur.has(p)) ? cur : new Set([...cur, ...parents])));
-  }, [list.active]);
 
   const toggle = (dir: Dir) => {
     const next = new Set(open);
-    if (next.delete(dir.path)) return setOpen(next);
-    setOpen(next.add(dir.path));
+    if (next.delete(dir.path)) return onFolders((cur) => ({ ...cur, open: next }));
+    onFolders((cur) => ({ ...cur, open: next.add(dir.path) }));
     if (!dir.ignored) return;
-    window.moire.listDir(root, dir.path).then(
-      (entries) => setOpened((cur) => new Map(cur).set(dir.path, entries)),
-      () => setOpened((cur) => new Map(cur).set(dir.path, "Can't read this folder.")),
-    );
+    const store = (entries: string[] | string) =>
+      onFolders((cur) => (cur.root === root ? { ...cur, opened: new Map(cur.opened).set(dir.path, entries) } : cur));
+    window.moire.listDir(root, dir.path).then(store, () => store("Can't read this folder."));
   };
 
   const rows: ReactNode[] = [];

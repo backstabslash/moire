@@ -3,6 +3,7 @@ import type { CompareMode, FileDiff, SideInfo } from "../../../shared/types";
 import { renderMarkdown } from "../model/markdown";
 import { blobUrl, changeMarks, resolveRelative, sidePaths } from "../model/preview";
 import type { Row } from "../model/rows";
+import type { Find } from "../model/search";
 import type { DiffViewHandle } from "./DiffView";
 
 interface ImageProps {
@@ -73,6 +74,7 @@ interface MarkdownProps {
   text: string | null;
   version: string;
   focusHunk: number;
+  find: Find | null;
   onFocusHunk(hunk: number): void;
 }
 
@@ -86,7 +88,7 @@ interface Bar {
 const CUT_GAP = 6;
 
 export const MarkdownPreview = forwardRef<DiffViewHandle, MarkdownProps>(function MarkdownPreview(props, ref) {
-  const { root, file, rows, side, text, version, focusHunk, onFocusHunk } = props;
+  const { root, file, rows, side, text, version, focusHunk, find, onFocusHunk } = props;
   const scrollRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLElement>(null);
   const [bars, setBars] = useState<Bar[]>([]);
@@ -121,6 +123,40 @@ export const MarkdownPreview = forwardRef<DiffViewHandle, MarkdownProps>(functio
     resize.observe(article);
     return () => resize.disconnect();
   }, [html]);
+
+  const revealed = useRef("");
+  // Rendered text has no rows to put <mark>s in, so matches are painted with CSS highlights instead.
+  useEffect(() => {
+    const article = articleRef.current;
+    if (!article || !find) return;
+    const ranges: Range[] = [];
+    const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      for (const m of node.textContent!.matchAll(new RegExp(find.pattern.source, find.pattern.flags))) {
+        if (!m[0]) continue;
+        const range = new Range();
+        range.setStart(node, m.index);
+        range.setEnd(node, m.index + m[0].length);
+        ranges.push(range);
+      }
+    }
+    const current = ranges[Math.min(find.index, ranges.length - 1)];
+    CSS.highlights.set("moire-hit", new Highlight(...ranges));
+    if (current) CSS.highlights.set("moire-hit-now", new Highlight(current));
+    const reveal = `${find.tick} ${find.pattern}`;
+    const frame = requestAnimationFrame(() => {
+      const box = scrollRef.current;
+      if (!box || !current || revealed.current === reveal) return;
+      revealed.current = reveal;
+      const top = current.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+      box.scrollTo({ top: Math.max(0, top - box.clientHeight / 2) });
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      CSS.highlights.delete("moire-hit");
+      CSS.highlights.delete("moire-hit-now");
+    };
+  }, [html, find]);
 
   useImperativeHandle(ref, () => ({
     scrollToRow(index, align = "start") {

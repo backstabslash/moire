@@ -119,10 +119,16 @@ export function parseDiff(text: string): FileDiff[] {
       last = null;
     } else if (hunk) {
       continue;
-    } else if (line.startsWith("new file mode")) {
+    } else if (line.startsWith("new file mode ")) {
       file.status = "added";
-    } else if (line.startsWith("deleted file mode")) {
+      file.newMode = line.slice(14);
+    } else if (line.startsWith("deleted file mode ")) {
       file.status = "deleted";
+      file.oldMode = line.slice(18);
+    } else if (line.startsWith("old mode ")) {
+      file.oldMode = line.slice(9);
+    } else if (line.startsWith("new mode ")) {
+      file.newMode = line.slice(9);
     } else if (line.startsWith("rename from ")) {
       file.status = "renamed";
       file.oldPath = unquote(line.slice(12));
@@ -135,13 +141,49 @@ export function parseDiff(text: string): FileDiff[] {
       const p = filePath(line.slice(4));
       if (p !== null) file.path = p;
     } else if (line.startsWith("index ")) {
-      file.blobs = line.slice(6).split(" ")[0];
+      const [blobs, mode] = line.slice(6).split(" ");
+      file.blobs = blobs;
+      if (mode && file.status !== "added") file.oldMode ??= mode;
+      if (mode && file.status !== "deleted") file.newMode ??= mode;
     } else if (line.startsWith("Binary files ") || line === "GIT binary patch") {
       file.binary = true;
     }
   }
-  for (const f of files) if (!f.binary) delete f.blobs;
-  return files;
+  const merged = mergeTypeChanges(files);
+  for (const f of merged) {
+    if (!f.binary) delete f.blobs;
+    if ((f.oldMode ?? PLAIN) === PLAIN && (f.newMode ?? PLAIN) === PLAIN) {
+      delete f.oldMode;
+      delete f.newMode;
+    }
+  }
+  return merged;
+}
+
+const PLAIN = "100644";
+
+// Git prints a file that became a symlink (or the reverse) as a deletion followed by a new file at the same path.
+function mergeTypeChanges(files: FileDiff[]): FileDiff[] {
+  const out: FileDiff[] = [];
+  for (const f of files) {
+    const prev = out.at(-1);
+    if (!prev || prev.status !== "deleted" || f.status !== "added" || prev.path !== f.path) {
+      out.push(f);
+      continue;
+    }
+    out[out.length - 1] = {
+      path: f.path,
+      status: "modified",
+      oldMode: prev.oldMode,
+      newMode: f.newMode,
+      binary: prev.binary || f.binary,
+      blobs: prev.blobs && f.blobs && `${prev.blobs.split("..")[0]}..${f.blobs.split("..")[1]}`,
+      additions: f.additions,
+      deletions: prev.deletions,
+      hunks: [...prev.hunks, ...f.hunks],
+    };
+  }
+  return out;
 }
 
 export function sortFiles(files: FileDiff[]): FileDiff[] {

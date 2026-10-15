@@ -75,9 +75,41 @@ describe("parseDiff", () => {
     expect(files[2].hunks[0].lines).toEqual([{ kind: "del", text: "bye", oldNo: 1 }]);
     expect(files[3]).toMatchObject({ path: "img.png", status: "added", binary: true, hunks: [], blobs: "0000000..6666666" });
     expect(files[2].blobs).toBeUndefined();
-    expect(files[4]).toMatchObject({ path: "run.sh", status: "modified", hunks: [] });
+    expect(files[4]).toMatchObject({ path: "run.sh", status: "modified", oldMode: "100644", newMode: "100755", hunks: [] });
+    expect(files[0].oldMode).toBeUndefined();
     expect(files[5]).toMatchObject({ path: "tab\there", status: "added", additions: 1 });
     expect(files).toHaveLength(6);
+  });
+
+  it("reads symlink modes and merges a type change into one file", () => {
+    const [link, swapped] = parseDiff(`diff --git a/link b/link
+index 12a8d8a..3b7781e 120000
+--- a/link
++++ b/link
+@@ -1 +1 @@
+-target1
+\\ No newline at end of file
++target2
+\\ No newline at end of file
+diff --git a/tc b/tc
+deleted file mode 100644
+index 587be6b..0000000
+--- a/tc
++++ /dev/null
+@@ -1 +0,0 @@
+-x
+diff --git a/tc b/tc
+new file mode 120000
+index 0000000..7f66e4f
+--- /dev/null
++++ b/tc
+@@ -0,0 +1 @@
++f.txt
+\\ No newline at end of file
+`);
+    expect(link).toMatchObject({ path: "link", oldMode: "120000", newMode: "120000", additions: 1, deletions: 1 });
+    expect(swapped).toMatchObject({ path: "tc", status: "modified", oldMode: "100644", newMode: "120000", additions: 1, deletions: 1 });
+    expect(swapped.hunks.flatMap((h) => h.lines.map((l) => l.kind + l.text))).toEqual(["delx", "addf.txt"]);
   });
 
   it("unquotes octal escapes as utf-8", () => {

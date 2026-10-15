@@ -54,8 +54,26 @@ test("a shows every file, with ignored ones, and opens an unchanged file whole",
   await expect(nav.locator(".file .name")).toHaveText(["a.ts", "util.ts", ".gitignore", "IDEAS.md"]);
 
   await nav.getByTitle(/^IDEAS\.md/).click();
-  await expect(page.locator(".pane-h")).toContainText("Working tree, IDEAS.md, unchanged");
+  await expect(page.locator(".pane-h", { hasText: "Working tree, IDEAS.md, unchanged" })).toBeVisible();
   await expect(page.locator(".row.uni .cell")).toHaveText(["# Ideas", "", "- a file tree"]);
+
+  await page.keyboard.press("/");
+  await expect(page.locator(".search input")).toBeFocused();
+  await page.keyboard.type("tree");
+  await expect(page.locator(".search-status")).toHaveText("1 of 1");
+  await expect(page.locator("mark.hit.is-current")).toHaveText("tree");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("m");
+  await expect(page.locator("article.md h1")).toHaveText("Ideas");
+  await page.keyboard.press("/");
+  await expect(page.locator(".search input")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect.poll(() => page.evaluate(() => CSS.highlights.get("moire-hit-now")?.size ?? 0)).toBe(0);
+  await page.keyboard.press("/");
+  await expect(page.locator(".search input")).toHaveValue("tree");
+  await expect.poll(() => page.evaluate(() => CSS.highlights.get("moire-hit-now")?.size ?? 0)).toBe(1);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("m");
 
   await page.keyboard.press("s");
   await expect(page.locator(".toast.show")).toContainText("IDEAS.md has no changes here");
@@ -72,11 +90,33 @@ test("an ignored folder is read when opened", async () => {
   await page.keyboard.press("t");
 });
 
+test("switching between unchanged files keeps the last one up until the next is ready", async () => {
+  await page.evaluate(() => {
+    const w = window as unknown as { gaps: number };
+    w.gaps = 0;
+    const check = () => {
+      if (!document.querySelector("main.main") || document.querySelector(".empty-state")) w.gaps++;
+    };
+    new MutationObserver(check).observe(document.body, { childList: true, subtree: true });
+  });
+  const nav = page.getByRole("navigation", { name: "All files" });
+  for (const [name, title] of [
+    [".gitignore", /^\.gitignore/],
+    ["src/util.ts", /^src\/util\.ts/],
+    ["IDEAS.md", /^IDEAS\.md/],
+    ["src/util.ts", /^src\/util\.ts/],
+  ] as const) {
+    await nav.getByTitle(title).click();
+    await expect(page.locator(".pane-h", { hasText: `${name}, unchanged` })).toBeVisible();
+  }
+  expect(await page.evaluate(() => (window as unknown as { gaps: number }).gaps)).toBe(0);
+});
+
 test("the filter covers every file, and the open file follows edits", async () => {
   await page.keyboard.press("p");
   await page.keyboard.type("util");
   await page.keyboard.press("Enter");
-  await expect(page.locator(".pane-h")).toContainText("src/util.ts, unchanged");
+  await expect(page.locator(".pane-h", { hasText: "src/util.ts, unchanged" })).toBeVisible();
   await page.locator(".file-filter").press("Escape");
 
   writeFileSync(join(repo, "src", "util.ts"), "export function helper() {\n  return 43;\n}\n");

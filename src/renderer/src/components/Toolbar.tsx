@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { CommitInfo, CompareMode, SideInfo } from "../../../shared/types";
+import type { CommitInfo, CompareMode, Refs, SideInfo } from "../../../shared/types";
 import type { Layout, Scope } from "../model/rows";
+import { Key, keyText, useKeymap } from "./Key";
 import { Mark } from "./Mark";
 import { type ThemeId, ThemePicker } from "./ThemePicker";
 
@@ -20,6 +21,7 @@ interface Props {
   a?: SideInfo;
   b?: SideInfo;
   layout: Layout;
+  autoLayout: boolean;
   scope: Scope;
   theme: ThemeId;
   cvd: boolean;
@@ -30,10 +32,12 @@ interface Props {
   onScope(scope: Scope): void;
   onTheme(theme: ThemeId): void;
   onCvd(on: boolean): void;
+  onSearch(): void;
 }
 
 export function Toolbar(props: Props) {
   const { root, mode, a, b, layout, scope } = props;
+  const searchKey = keyText(useKeymap(), "search");
   return (
     <header className="toolbar">
       <div className="brand">
@@ -66,22 +70,37 @@ export function Toolbar(props: Props) {
         </div>
       )}
       <div className="spacer" />
-      <div className="seg" role="group" aria-label="Scope">
-        <button aria-pressed={scope === "changed"} onClick={() => props.onScope("changed")}>
-          Changes only
-        </button>
-        <button aria-pressed={scope === "full"} onClick={() => props.onScope("full")}>
-          Full file
-        </button>
-      </div>
-      <div className="seg" role="group" aria-label="Layout">
-        <button aria-pressed={layout === "split"} onClick={() => props.onLayout("split")}>
-          Split
-        </button>
-        <button aria-pressed={layout === "unified"} onClick={() => props.onLayout("unified")}>
-          Unified
-        </button>
-      </div>
+      {root && (
+        <>
+          <button className="tool-btn" title={searchKey ? `Search (${searchKey})` : "Search"} onClick={props.onSearch}>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="6.8" cy="6.8" r="4.6" />
+              <path d="M10.3 10.3L14 14" />
+            </svg>
+          </button>
+          <div className="seg" role="group" aria-label="Scope">
+            <button aria-pressed={scope === "changed"} onClick={() => props.onScope("changed")}>
+              Changes only
+            </button>
+            <button aria-pressed={scope === "full"} onClick={() => props.onScope("full")}>
+              Full file
+            </button>
+          </div>
+          <div
+            className="seg"
+            role="group"
+            aria-label="Layout"
+            title={props.autoLayout ? "Unified while the window is narrow. Click Split to use it anyway." : undefined}
+          >
+            <button aria-pressed={layout === "split"} onClick={() => props.onLayout("split")}>
+              Split
+            </button>
+            <button aria-pressed={layout === "unified"} className={props.autoLayout ? "is-auto" : undefined} onClick={() => props.onLayout("unified")}>
+              Unified
+            </button>
+          </div>
+        </>
+      )}
       <ThemePicker theme={props.theme} cvd={props.cvd} onTheme={props.onTheme} onCvd={props.onCvd} />
     </header>
   );
@@ -118,19 +137,19 @@ function PickerPop({ initial, root, mode, onMode, onClose }: PickerPopProps) {
     onMode(m);
     onClose();
   };
-  const simple = (kind: "unstaged" | "staged" | "all", key: string, hint: string) => (
+  const simple = (kind: "unstaged" | "staged" | "all", hint: string) => (
     <button role="option" aria-selected={mode.kind === kind} onClick={() => pick({ kind })}>
       {MODE_NAMES[kind]}
-      <kbd>{key}</kbd>
+      <Key id={kind} />
       <small>{hint}</small>
     </button>
   );
 
   return (
     <div className="picker-pop" role="listbox" ref={popRef}>
-      {simple("unstaged", "1", "A index, B working tree")}
-      {simple("staged", "2", "A HEAD, B index")}
-      {simple("all", "3", "A HEAD, B working tree")}
+      {simple("unstaged", "A index, B working tree")}
+      {simple("staged", "A HEAD, B index")}
+      {simple("all", "A HEAD, B working tree")}
       <div className="sep" />
       <button
         role="option"
@@ -139,7 +158,7 @@ function PickerPop({ initial, root, mode, onMode, onClose }: PickerPopProps) {
         onClick={() => setSub(sub === "commit" ? null : "commit")}
       >
         {MODE_NAMES.commit}
-        <kbd>4</kbd>
+        <Key id="commit" />
         <small>A parent, B the commit</small>
       </button>
       <button
@@ -149,7 +168,7 @@ function PickerPop({ initial, root, mode, onMode, onClose }: PickerPopProps) {
         onClick={() => setSub(sub === "branches" ? null : "branches")}
       >
         {MODE_NAMES.branches}
-        <kbd>5</kbd>
+        <Key id="branches" />
         <small>A merge base, B the branch</small>
       </button>
       {sub === "commit" && <CommitList root={root} selected={mode.kind === "commit" ? mode.sha : null} onPick={(sha) => pick({ kind: "commit", sha })} />}
@@ -158,17 +177,37 @@ function PickerPop({ initial, root, mode, onMode, onClose }: PickerPopProps) {
   );
 }
 
+const COMMIT_LIMIT = 1000;
+
 function CommitList({ root, selected, onPick }: { root: string; selected: string | null; onPick(sha: string): void }) {
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
+  const [filter, setFilter] = useState("");
   useEffect(() => {
-    window.moire.commits(root, 60).then(setCommits, () => setCommits([]));
+    window.moire.commits(root, COMMIT_LIMIT).then(setCommits, () => setCommits([]));
   }, [root]);
+  const query = filter.trim().toLowerCase();
+  const shown = query ? commits?.filter((c) => c.sha.startsWith(query) || c.subject.toLowerCase().includes(query)) : commits;
   return (
     <div className="picker-sub">
+      {!!commits?.length && (
+        <input
+          autoFocus
+          className="commit-filter"
+          value={filter}
+          placeholder="Filter by subject or sha"
+          aria-label="Filter commits"
+          spellCheck={false}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && shown?.[0]) onPick(shown[0].sha);
+          }}
+        />
+      )}
       <div className="commit-list">
         {commits === null && <div className="picker-sub-head">Loading commits…</div>}
         {commits?.length === 0 && <div className="picker-sub-head">No commits yet.</div>}
-        {commits?.map((c) => (
+        {!!commits?.length && !shown?.length && <div className="picker-sub-head">No commits match.</div>}
+        {shown?.map((c) => (
           <button key={c.sha} role="option" aria-selected={selected === c.sha} onClick={() => onPick(c.sha)}>
             <code>{c.short}</code>
             <span>{c.subject}</span>
@@ -183,35 +222,55 @@ function CommitList({ root, selected, onPick }: { root: string; selected: string
 }
 
 function BranchForm({ root, mode, onPick }: { root: string; mode: CompareMode; onPick(base: string, head: string): void }) {
-  const [branches, setBranches] = useState<string[]>([]);
+  const [refs, setRefs] = useState<Refs | null>(null);
   const [base, setBase] = useState(mode.kind === "branches" ? mode.base : "");
   const [head, setHead] = useState(mode.kind === "branches" ? mode.head : "");
   useEffect(() => {
-    void window.moire.branches(root).then((list) => {
-      setBranches(list);
-      setHead((h) => h || list[0] || "");
-      setBase((b) => b || list.find((n) => n === "main" || n === "master") || list.find((n) => n !== list[0]) || list[0] || "");
+    void window.moire.branches(root).then((r) => {
+      setRefs(r);
+      const head = r.current ?? r.branches[0] ?? "";
+      const main = r.branches.find((n) => n !== head && (n === "main" || n === "master"));
+      setHead((h) => h || head);
+      setBase((b) => b || r.upstream || main || r.branches.find((n) => n !== head) || head);
     });
   }, [root]);
+  const select = (value: string, onChange: (value: string) => void, label: string) => (
+    <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}>
+      {refs && !known(refs, value) && value && <option>{value}</option>}
+      {refs?.branches.map((n) => (
+        <option key={n}>{n}</option>
+      ))}
+      {!!refs?.remotes.length && (
+        <optgroup label="Remote branches">
+          {refs.remotes.map((n) => (
+            <option key={n}>{n}</option>
+          ))}
+        </optgroup>
+      )}
+      {!!refs?.tags.length && (
+        <optgroup label="Tags">
+          {refs.tags.map((n) => (
+            <option key={n}>{n}</option>
+          ))}
+        </optgroup>
+      )}
+    </select>
+  );
   return (
     <div className="picker-sub">
       <div className="branch-form">
         <span className="plate-tag tag-a">A</span>
-        <select value={base} onChange={(e) => setBase(e.target.value)} aria-label="Base branch">
-          {branches.map((n) => (
-            <option key={n}>{n}</option>
-          ))}
-        </select>
+        {select(base, setBase, "Base branch")}
         <span className="plate-tag tag-b">B</span>
-        <select value={head} onChange={(e) => setHead(e.target.value)} aria-label="Branch to review">
-          {branches.map((n) => (
-            <option key={n}>{n}</option>
-          ))}
-        </select>
+        {select(head, setHead, "Branch to review")}
         <button className="btn" disabled={!base || !head} onClick={() => onPick(base, head)}>
           Compare
         </button>
       </div>
     </div>
   );
+}
+
+function known(refs: Refs, name: string) {
+  return refs.branches.includes(name) || refs.remotes.includes(name) || refs.tags.includes(name);
 }

@@ -51,4 +51,42 @@ describe("RepoWatcher", () => {
     writeFileSync(join(r.root, "src", "deep", "x.ts"), "changed\n");
     expect(await r.settle()).toBe(2);
   });
+
+  it("sees files written deep inside a new directory tree", async () => {
+    const r = await watching();
+    mkdirSync(join(r.root, "a", "b", "c"), { recursive: true });
+    writeFileSync(join(r.root, "a", "b", "c", "x.ts"), "x\n");
+    expect(await r.settle()).toBe(1);
+    writeFileSync(join(r.root, "a", "b", "c", "x.ts"), "changed\n");
+    expect(await r.settle()).toBe(2);
+  });
+
+  it("sees a file written into a new directory a while after it was made", async () => {
+    const r = await watching();
+    mkdirSync(join(r.root, "a", "b", "c"), { recursive: true });
+    expect(await r.settle()).toBe(1);
+    writeFileSync(join(r.root, "a", "b", "c", "x.ts"), "x\n");
+    expect(await r.settle()).toBe(2);
+    mkdirSync(join(r.root, "a", "b", "d"));
+    await r.settle();
+    writeFileSync(join(r.root, "a", "b", "d", "y.ts"), "y\n");
+    expect(await r.settle()).toBe(4);
+  });
+
+  it("doesn't watch new directories inside ignored ones", async () => {
+    const r = await watching();
+    mkdirSync(join(r.root, "build", "deep", "er"), { recursive: true });
+    writeFileSync(join(r.root, "build", "deep", "er", "x.js"), "x\n");
+    expect(await r.settle()).toBe(0);
+    writeFileSync(join(r.root, "build", "deep", "er", "x.js"), "y\n");
+    expect(await r.settle()).toBe(0);
+  });
+  it("sees fetches and updates to remote branches", async () => {
+    const r = await watching();
+    mkdirSync(join(r.root, ".git", "refs", "remotes", "origin"), { recursive: true });
+    writeFileSync(join(r.root, ".git", "FETCH_HEAD"), "");
+    expect(await r.settle()).toBe(1);
+    writeFileSync(join(r.root, ".git", "refs", "remotes", "origin", "main"), r.git("rev-parse", "HEAD") + "\n");
+    expect(await r.settle()).toBe(2);
+  });
 });

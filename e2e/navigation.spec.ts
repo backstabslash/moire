@@ -46,7 +46,7 @@ test.afterEach(() => {
 test("switching to an empty view and back keeps the UI alive", async () => {
   await page.keyboard.press("2");
   await expect(page.getByRole("heading", { name: "Nothing staged." })).toBeVisible();
-  await page.getByRole("button", { name: "All files" }).click();
+  await page.locator(".empty-actions").getByRole("button", { name: "All files" }).click();
   await expect(page.getByRole("navigation", { name: "All files" })).toBeVisible();
   await page.keyboard.press("a");
   await expect(page.getByRole("heading", { name: "Nothing staged." })).toBeVisible();

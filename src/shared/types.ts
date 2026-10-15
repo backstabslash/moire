@@ -7,11 +7,27 @@ export interface SideInfo {
   label: string;
 }
 
+export type RepoState = "merging" | "rebasing" | "cherry-picking" | "reverting" | "bisecting";
+
+export interface Worktree {
+  path: string;
+  branch: string | null;
+  changes: number;
+}
+
+export interface Upstream {
+  name: string;
+  ahead: number;
+  behind: number;
+  fetchedAt: number | null;
+}
+
 export interface RepoInfo {
   root: string;
   name: string;
   branch: string | null;
   head: string | null;
+  state?: RepoState;
 }
 
 export type FileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted" | "unchanged";
@@ -38,6 +54,9 @@ export interface FileDiff {
   path: string;
   oldPath?: string;
   status: FileStatus;
+  // Git's file modes ("100755", "120000" for symlinks, "160000" for submodules), unset when both are plain "100644".
+  oldMode?: string;
+  newMode?: string;
   binary: boolean;
   blobs?: string;
   tooLarge?: boolean;
@@ -48,6 +67,7 @@ export interface FileDiff {
   additions: number;
   deletions: number;
   hunks: Hunk[];
+  version?: string;
 }
 
 export interface DiffResult {
@@ -56,6 +76,7 @@ export interface DiffResult {
   b: SideInfo;
   files: FileDiff[];
   progress?: { staged: number; total: number };
+  version: string;
 }
 
 export interface FileTree {
@@ -77,6 +98,18 @@ export interface CommitInfo {
   date: string;
 }
 
+export interface CommitDetail extends CommitInfo {
+  body: string;
+}
+
+export interface Refs {
+  current: string | null;
+  upstream: string | null;
+  branches: string[];
+  remotes: string[];
+  tags: string[];
+}
+
 export type StageAction = "stage" | "unstage" | "discard";
 
 export interface LineRef {
@@ -90,3 +123,10 @@ export interface StageRequest {
   file: FileDiff;
   lines: LineRef[] | null;
 }
+
+export interface StageAllRequest {
+  mode: "unstaged" | "staged";
+  files: FileDiff[];
+}
+
+export type UndoResult = { label: string } | { refused: string; id: string; saveAs: string };

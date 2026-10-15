@@ -94,3 +94,26 @@ test("the empty state keeps the frame", async () => {
   await expect(page.locator(".empty-state h2")).toHaveText("Working tree matches HEAD.");
   await expectFrame();
 });
+
+test("a narrow window shows unified for now, and split stays the setting", async () => {
+  const html = page.locator("html");
+  const resize = (w: number, h: number) => app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setSize(w, h), [w, h]);
+  writeFileSync(join(repo, "a.ts"), lines(7));
+  await page.keyboard.press("1");
+  await page.locator(".file", { hasText: "a.ts" }).click();
+  await expect(html).toHaveAttribute("data-layout", "split");
+
+  await resize(1000, 700);
+  await expect(html).toHaveAttribute("data-layout", "unified");
+  await expect(page.getByRole("button", { name: "Unified" })).toHaveClass("is-auto");
+  await expect(page.locator(".toast.show")).toContainText("Unified layout while the window is narrow");
+
+  await page.keyboard.press("v");
+  await expect(html).toHaveAttribute("data-layout", "split");
+  const clipped = await page.locator(".pane-h .actions button").evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth).length);
+  expect(clipped).toBe(0);
+
+  await resize(1440, 920);
+  await expect(html).toHaveAttribute("data-layout", "split");
+  expect(await page.evaluate(() => localStorage.getItem("moire.layout"))).toBe("split");
+});

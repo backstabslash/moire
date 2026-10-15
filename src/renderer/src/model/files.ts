@@ -13,7 +13,7 @@ export function orderPaths(paths: string[]): string[] {
 }
 
 export function fileKey(modeKey: string, file: FileDiff): string {
-  return `${modeKey}:${file.path}:${hashString(JSON.stringify(file))}`;
+  return `${modeKey}:${file.path}:${file.version ?? hashString(JSON.stringify(file))}`;
 }
 
 export function hashString(text: string) {

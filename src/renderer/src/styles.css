@@ -38,6 +38,10 @@
   --tok-num: #905211;
   --tok-com: #535c66;
   --tok-pun: #6e7882;
+  --tok-fn: #3057a3;
+  --tok-prop: #7f3e7a;
+  --tok-param: #2f3f4f;
+  --tok-re: #61489b;
   color-scheme: light;
 }
 
@@ -67,6 +71,10 @@
   --tok-num: #e7b375;
   --tok-com: #aab6c0;
   --tok-pun: #909ba5;
+  --tok-fn: #9ebef8;
+  --tok-prop: #dfa9da;
+  --tok-param: #c6d3dd;
+  --tok-re: #c1b3f2;
   color-scheme: dark;
 }
 
@@ -96,6 +104,10 @@
   --tok-num: #6f4928;
   --tok-com: #4f5c4d;
   --tok-pun: #656b5f;
+  --tok-fn: #1b6047;
+  --tok-prop: #6e3f6a;
+  --tok-param: #313c2c;
+  --tok-re: #735800;
   color-scheme: light;
 }
 
@@ -125,6 +137,10 @@
   --tok-num: #d9c190;
   --tok-com: #a9bdaf;
   --tok-pun: #95a299;
+  --tok-fn: #9be2a5;
+  --tok-prop: #e4b3d2;
+  --tok-param: #c7d5cc;
+  --tok-re: #c0b5e7;
   color-scheme: dark;
 }
 
@@ -154,6 +170,10 @@
   --tok-num: #e0aa86;
   --tok-com: #c8b3a1;
   --tok-pun: #a69585;
+  --tok-fn: #e9c48b;
+  --tok-prop: #e1a6a9;
+  --tok-param: #decebc;
+  --tok-re: #d1a4c6;
   color-scheme: dark;
 }
 
@@ -183,6 +203,10 @@
   --tok-num: #e9c89b;
   --tok-com: #a6bbc8;
   --tok-pun: #9aaebc;
+  --tok-fn: #aecbff;
+  --tok-prop: #deb7e9;
+  --tok-param: #cedee5;
+  --tok-re: #9ddbb9;
   color-scheme: dark;
 }
 
@@ -299,23 +323,23 @@ kbd {
 
 .app {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  grid-template-rows: 52px auto minmax(0, 1fr) 30px;
+  grid-template-columns: var(--side, 240px) minmax(0, 1fr);
+  grid-template-rows: 52px auto auto minmax(0, 1fr) 30px;
   height: 100vh;
 }
 
 .sidebar {
-  grid-row: 2 / 4;
+  grid-row: 2 / 5;
 }
 
 .main,
 .empty-state,
 .loading {
-  grid-row: 3;
+  grid-row: 4;
 }
 
 .status {
-  grid-row: 4;
+  grid-row: 5;
 }
 
 .toolbar {
@@ -343,14 +367,15 @@ kbd {
 .brand {
   display: flex;
   align-items: center;
+  flex-shrink: 100;
   gap: 10px;
-  width: 205px;
+  width: calc(var(--side, 240px) - 35px);
   font: 500 17px/1 var(--ui);
   letter-spacing: 0.01em;
 }
 
 [data-platform="darwin"] .brand {
-  width: 129px;
+  width: calc(var(--side, 240px) - 111px);
 }
 
 .brand svg {
@@ -370,6 +395,7 @@ kbd {
 }
 
 .picker-btn {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -445,6 +471,13 @@ kbd {
 
 .picker-pop [role="option"] small {
   grid-column: 1;
+  font: 400 12px var(--code);
+  color: var(--faint);
+}
+
+.picker-pop .repo-tree {
+  grid-column: 2;
+  grid-row: 1;
   font: 400 12px var(--code);
   color: var(--faint);
 }
@@ -555,10 +588,40 @@ kbd {
   border-left: 1px solid var(--rule);
 }
 
+.seg button.is-auto {
+  text-decoration: underline dotted var(--faint);
+  text-underline-offset: 4px;
+}
+
 .seg button[aria-pressed="true"] {
   background: var(--press);
   color: var(--ink);
   box-shadow: inset 0 -2px 0 var(--ink);
+}
+
+.tool-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  color: var(--graphite);
+  app-region: no-drag;
+}
+
+.tool-btn:hover {
+  color: var(--ink);
+}
+
+.tool-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
 }
 
 .themes {
@@ -797,6 +860,7 @@ kbd {
 }
 
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -815,6 +879,7 @@ kbd {
 
 .file-filter,
 .repo-pop input,
+.commit-filter,
 .commit-box textarea {
   border: 1px solid var(--rule);
   border-radius: 3px;
@@ -825,6 +890,7 @@ kbd {
 
 .file-filter:focus,
 .repo-pop input:focus,
+.commit-filter:focus,
 .commit-box textarea:focus {
   outline: none;
   border-color: var(--focus);
@@ -884,12 +950,74 @@ kbd {
   font-weight: 500;
 }
 
+.side-head .repo-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
 .side-head .repo {
+  display: flex;
+  align-items: baseline;
   min-width: 0;
   text-align: left;
+  white-space: nowrap;
+}
+
+.side-head .repo > * {
+  min-width: 3ch;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+/* the repo name gives way before the branch does */
+.side-head .repo > span {
+  flex-shrink: 100;
+}
+
+.repo-state {
+  flex: none;
+  padding: 1px 4px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  color: var(--graphite);
+  font: 600 10px var(--ui);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sync {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  font: 400 12px var(--code);
+}
+
+.sync button {
+  color: var(--graphite);
+}
+
+.sync button:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.side-resize {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+}
+
+.side-resize:hover,
+.side-resize:active {
+  background: linear-gradient(var(--focus), var(--focus)) center / 2px 100% no-repeat;
 }
 
 .side-head .repo small {
@@ -993,6 +1121,10 @@ kbd {
   justify-content: flex-end;
 }
 
+.file .mode-tag {
+  color: var(--faint);
+}
+
 .file.is-deleted .name {
   text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--a) 60%, transparent);
@@ -1078,7 +1210,12 @@ svg.mark {
 }
 
 svg.mark-partial {
-  stroke: var(--faint);
+  stroke-width: 1.3;
+}
+
+svg.mark-partial .half {
+  fill: var(--graphite);
+  stroke: none;
 }
 
 .file .mark-changed {
@@ -1127,6 +1264,46 @@ svg.mark-partial {
   accent-color: var(--ink);
 }
 
+.stage-progress-line button,
+.commit-error-head button {
+  color: var(--graphite);
+  font-size: 13px;
+}
+
+.stage-progress-line button:hover:not(:disabled),
+.commit-error-head button:hover {
+  color: var(--ink);
+}
+
+.commit-error {
+  display: grid;
+  gap: 6px;
+}
+
+.commit-error-head {
+  display: flex;
+  gap: 12px;
+}
+
+.commit-error-head b {
+  margin-right: auto;
+  font-weight: 500;
+  color: var(--a-ink);
+}
+
+.commit-error pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--plate);
+  font: 400 12px/1.45 var(--code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .stage-bar {
   display: flex;
   height: 4px;
@@ -1152,7 +1329,7 @@ svg.mark-partial {
 .main {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  grid-template-columns: minmax(0, 1fr) 72px;
+  grid-template-columns: minmax(0, 1fr) 56px;
   min-width: 0;
   min-height: 0;
   position: relative;
@@ -1190,14 +1367,14 @@ svg.mark-partial {
 .panes-head {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 1fr 1fr 72px;
+  grid-template-columns: 1fr 1fr 56px;
   border-bottom: 1px solid var(--rule);
   background: var(--plate);
 }
 
 [data-layout="unified"] .panes-head,
 .main.is-whole .panes-head {
-  grid-template-columns: 1fr 72px;
+  grid-template-columns: 1fr 56px;
 }
 
 .pane-h {
@@ -1218,6 +1395,8 @@ svg.mark-partial {
 .pane-h b {
   font: 500 15px var(--code);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pane-h span:not(.plate-tag) {
@@ -1228,7 +1407,12 @@ svg.mark-partial {
   text-overflow: ellipsis;
 }
 
+.pane-h .pane-mode {
+  flex: none;
+}
+
 .pane-h .actions {
+  flex: none;
   margin-left: auto;
   display: flex;
   gap: 2px;
@@ -1267,9 +1451,11 @@ svg.mark-partial {
 }
 
 .diff {
+  --ln: calc(var(--digits, 3) * 0.5em + 24px);
   position: relative;
   font: var(--code-weight) 15px/var(--row) var(--code);
   font-variant-ligatures: none;
+  tab-size: 4;
 }
 
 .vrow {
@@ -1284,16 +1470,16 @@ svg.mark-partial {
 }
 
 .row.split {
-  grid-template-columns: 3.4em minmax(0, 1fr) 3.4em minmax(0, 1fr);
+  grid-template-columns: var(--ln) minmax(0, 1fr) var(--ln) minmax(0, 1fr);
 }
 
 .row.uni {
-  grid-template-columns: 3em 3em minmax(0, 1fr);
+  grid-template-columns: var(--ln) var(--ln) minmax(0, 1fr);
 }
 
 .diff.only-a .row.uni,
 .diff.only-b .row.uni {
-  grid-template-columns: 3em minmax(0, 1fr);
+  grid-template-columns: var(--ln) minmax(0, 1fr);
 }
 
 .diff.only-b .row.uni .ln.a,
@@ -1304,7 +1490,7 @@ svg.mark-partial {
 .ln {
   position: relative;
   text-align: right;
-  padding-right: 10px;
+  padding-right: 8px;
   color: var(--faint);
   font-weight: 400;
   font-size: 12.5px;
@@ -1318,7 +1504,8 @@ svg.mark-partial {
 
 .cell {
   position: relative;
-  padding: 0 18px 0 8px;
+  padding: 0 10px 0 calc(8px + 2ch);
+  text-indent: -2ch;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: var(--row);
@@ -1377,7 +1564,7 @@ svg.mark-partial {
 .ln.add::before,
 .ln.del::before {
   position: absolute;
-  left: 6px;
+  left: 5px;
   font-weight: 600;
 }
 
@@ -1664,6 +1851,12 @@ svg.mark-partial {
   color: var(--ink);
 }
 
+/* sits flush against the fold label, reading as one more part of it */
+.fold-all {
+  margin-left: -20px;
+  padding-left: 0;
+}
+
 .hunk-head.is-folded .hh-actions {
   position: absolute;
   z-index: 1;
@@ -1687,7 +1880,7 @@ svg.mark-partial {
 .row.plate > div {
   grid-area: 1 / 1;
   display: grid;
-  grid-template-columns: 3.4em minmax(0, 1fr);
+  grid-template-columns: var(--ln) minmax(0, 1fr);
 }
 
 .main[data-plate="a"] .row.plate > .pb,
@@ -1816,6 +2009,7 @@ svg.mark-partial {
 }
 
 .img-side figcaption {
+  min-height: 1lh;
   font: 400 12.5px var(--code);
   color: var(--graphite);
 }
@@ -2042,6 +2236,27 @@ svg.mark-partial {
   margin-left: auto;
   display: flex;
   gap: 16px;
+  min-width: 0;
+}
+
+/* Hints that don't fit wrap onto a hidden second line, so none is cut in half and ? stays. */
+.status .keys-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  column-gap: 16px;
+  min-width: 0;
+  height: 30px;
+  overflow: hidden;
+}
+
+.status .keys button {
+  height: 30px;
+  color: inherit;
+}
+
+.status .keys button:hover {
+  color: var(--ink);
 }
 
 .status .error {
@@ -2062,7 +2277,7 @@ svg.mark-partial {
 }
 
 .app.no-repo .empty-state {
-  grid-row: 3;
+  grid-row: 4;
 }
 
 .empty-inner {
@@ -2213,6 +2428,63 @@ svg.mark-partial {
   }
 }
 
+.commit-head {
+  grid-row: 3;
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+  min-height: 40px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--frame);
+}
+
+.commit-head code {
+  color: var(--graphite);
+  font: 400 12.5px var(--code);
+}
+
+.commit-subject {
+  min-width: 0;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 39px;
+}
+
+button.commit-subject::before {
+  content: "";
+  display: inline-block;
+  margin: 0 8px 1px 0;
+  border-block: 4px solid transparent;
+  border-left: 5px solid var(--graphite);
+}
+
+button.commit-subject[aria-expanded="true"]::before {
+  transform: rotate(90deg);
+}
+
+.commit-meta {
+  color: var(--graphite);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.commit-body {
+  grid-column: 2 / -1;
+  max-height: 30vh;
+  margin: -6px 0 0;
+  padding: 0 0 12px 13px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--graphite);
+  font: 400 13px/1.5 var(--code);
+}
+
 .search {
   grid-row: 2;
   grid-column: 2;
@@ -2306,6 +2578,15 @@ mark.hit.is-current span[style] {
   color: #17130a !important;
 }
 
+::highlight(moire-hit) {
+  background-color: var(--hit);
+}
+
+::highlight(moire-hit-now) {
+  background-color: var(--hit-now);
+  color: #17130a;
+}
+
 .repo-pop {
   position: fixed;
   top: 60px;
@@ -2313,7 +2594,8 @@ mark.hit.is-current span[style] {
   width: 440px;
 }
 
-.repo-pop input {
+.repo-pop input,
+.commit-filter {
   display: block;
   width: calc(100% - 16px);
   height: 30px;
@@ -2324,4 +2606,80 @@ mark.hit.is-current span[style] {
 .repo-pop [role="listbox"] {
   max-height: 380px;
   overflow: auto;
+}
+
+.keys-help {
+  position: fixed;
+  top: 64px;
+  left: 50%;
+  z-index: 20;
+  width: min(880px, calc(100vw - 48px));
+  max-height: calc(100vh - 112px);
+  overflow: auto;
+  transform: translateX(-50%);
+  background: var(--plate);
+  border: 1px solid var(--rule);
+  box-shadow: 0 18px 40px -20px rgb(23 32 42 / 0.45);
+}
+
+.keys-groups {
+  columns: 3;
+  column-gap: 0;
+  column-rule: 1px solid var(--rule);
+  padding: 8px 0;
+}
+
+.keys-groups section {
+  break-inside: avoid;
+  padding-bottom: 10px;
+}
+
+.keys-groups h3 {
+  margin: 0;
+  padding: 6px 16px 4px;
+  font: 600 13px var(--ui);
+  color: var(--ink);
+}
+
+.keys-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 16px;
+  color: var(--graphite);
+}
+
+.keys-row kbd {
+  color: var(--ink);
+}
+
+.keys-row kbd + kbd::before {
+  content: "or ";
+  color: var(--faint);
+  font-family: var(--ui);
+}
+
+.keys-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 16px;
+  border-top: 1px solid var(--rule);
+  background: var(--frame);
+  color: var(--graphite);
+  font-size: 12.5px;
+}
+
+.keys-links {
+  display: flex;
+  gap: 14px;
+}
+
+.keys-foot button {
+  color: var(--graphite);
+  font-weight: 500;
+}
+
+.keys-foot button:hover {
+  color: var(--ink);
 }

@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
+import { Key } from "./Key";
 
 export interface ToastMsg {
   text: string;
   undo: boolean;
+  // A toast with choices stays up until one is picked or another toast replaces it.
+  choices?: { label: string; pick(): void }[];
 }
 
 export function Toast({ toast, onUndo }: { toast: ToastMsg | null; onUndo(): void }) {
   const [shown, setShown] = useState(false);
   useEffect(() => {
-    if (!toast) return;
-    setShown(true);
+    setShown(!!toast);
+    if (!toast || toast.choices) return;
     const id = setTimeout(() => setShown(false), 5000);
     return () => clearTimeout(id);
   }, [toast]);
@@ -19,9 +22,15 @@ export function Toast({ toast, onUndo }: { toast: ToastMsg | null; onUndo(): voi
       <span>{toast?.text}</span>
       {toast?.undo && (
         <button onClick={onUndo}>
-          Undo<kbd>u</kbd>
+          Undo
+          <Key id="undo" />
         </button>
       )}
+      {toast?.choices?.map((c) => (
+        <button key={c.label} onClick={c.pick}>
+          {c.label}
+        </button>
+      ))}
     </div>
   );
 }
