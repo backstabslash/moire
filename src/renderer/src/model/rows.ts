@@ -75,6 +75,13 @@ export interface BuildOptions {
   plates?: number;
 }
 
+// Main decodes text as UTF-8, which turns each byte it can't read into U+FFFD.
+export function notUtf8(file: FileDiff, contents: FileContents | null): boolean {
+  if (file.binary || file.tooLarge || contents?.tooLarge) return false;
+  const bad = (text: string | null | undefined) => !!text?.includes("�");
+  return file.hunks.some((h) => h.lines.some((l) => bad(l.text))) || bad(contents?.a) || bad(contents?.b);
+}
+
 export function buildRows(file: FileDiff, contents: FileContents | null, opts: BuildOptions): Row[] {
   if (file.status === "unchanged") return wholeFile(contents);
   const note = (text: string): Row[] => [{ t: "note", key: "note", text }];

@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CompareMode, FileDiff, SideInfo } from "../../../shared/types";
+import type { BlobSize, CompareMode, FileDiff, SideInfo } from "../../../shared/types";
 import { renderMarkdown } from "../model/markdown";
 import { blobUrl, changeMarks, resolveRelative, sidePaths } from "../model/preview";
 import type { Row } from "../model/rows";
@@ -16,7 +16,7 @@ interface ImageProps {
 }
 
 export function ImagePreview({ root, mode, file, a, b, version }: ImageProps) {
-  const [sizes, setSizes] = useState<[number | null, number | null] | null>(null);
+  const [sizes, setSizes] = useState<[BlobSize | null, BlobSize | null] | null>(null);
   useEffect(() => {
     let stale = false;
     window.moire
@@ -32,13 +32,13 @@ export function ImagePreview({ root, mode, file, a, b, version }: ImageProps) {
   const urlB = pathB && blobUrl(root, b, pathB, version);
   return (
     <div className="img-compare">
-      <ImageSide key={urlA ?? "a"} side="a" url={urlA} bytes={sizes?.[0] ?? null} />
-      <ImageSide key={urlB ?? "b"} side="b" url={urlB} bytes={sizes?.[1] ?? null} />
+      <ImageSide key={urlA ?? "a"} side="a" url={urlA} size={sizes?.[0] ?? null} />
+      <ImageSide key={urlB ?? "b"} side="b" url={urlB} size={sizes?.[1] ?? null} />
     </div>
   );
 }
 
-function ImageSide({ side, url, bytes }: { side: "a" | "b"; url: string | null; bytes: number | null }) {
+function ImageSide({ side, url, size }: { side: "a" | "b"; url: string | null; size: BlobSize | null }) {
   const [dims, setDims] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   if (!url) return <figure className={`img-side ${side} is-absent`}>Not present</figure>;
@@ -46,12 +46,12 @@ function ImageSide({ side, url, bytes }: { side: "a" | "b"; url: string | null; 
     <figure className={`img-side ${side}`}>
       <div className="img-frame">
         {failed ? (
-          <span className="img-failed">Can't show this image</span>
+          <span className="img-failed">{size?.lfsMissing ? "Stored in Git LFS and not downloaded. git lfs pull fetches it." : "Can't show this image"}</span>
         ) : (
           <img src={url} alt="" onLoad={(e) => setDims(`${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`)} onError={() => setFailed(true)} />
         )}
       </div>
-      <figcaption>{[dims, bytes !== null && formatBytes(bytes)].filter(Boolean).join(", ")}</figcaption>
+      <figcaption>{[dims, size && formatBytes(size.bytes)].filter(Boolean).join(", ")}</figcaption>
     </figure>
   );
 }
@@ -60,7 +60,7 @@ function hunksOf(el: HTMLElement): number[] {
   return el.dataset.hunks ? el.dataset.hunks.split(" ").map(Number) : [];
 }
 
-function formatBytes(n: number) {
+export function formatBytes(n: number) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;

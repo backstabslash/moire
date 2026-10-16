@@ -1,39 +1,48 @@
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { app, clipboard, Notification, shell } from "electron";
+import { dirname, join } from "node:path";
+import { app, BrowserWindow, dialog, type MessageBoxOptions, net, Notification, shell } from "electron";
 import { AppImageUpdater } from "electron-updater";
+import type { UpdateNotice } from "../shared/types";
+import { installedVersion, installKind, newer, npxRoot, type Release, updateNpx, whyManual } from "./install";
+import { real } from "./launch";
 import { log } from "./log";
+import { loadState } from "./state";
 
-const npx = "npx @backstabslash/moire";
+const releases = process.env.MOIRE_RELEASES || "https://api.github.com/repos/backstabslash/moire/releases/latest";
+const CHECK_EVERY = 4 * 60 * 60 * 1000;
 
 // Held so the click handler isn't garbage-collected while the notification is up.
 let shown: Notification | undefined;
 
 function notify(body: string, onClick: () => void) {
-  shown = new Notification({ title: "moire", body });
+  shown = new Notification({ title: "Moire", body });
   shown.on("click", onClick);
   shown.show();
 }
 
-function newer(a: string, b: string): boolean {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) > (pb[i] ?? 0);
-  }
-  return false;
+function message(text: string, buttons = ["OK"]): Promise<number> {
+  const opts: MessageBoxOptions = { type: "info", message: text, buttons, defaultId: 0, cancelId: buttons.length - 1 };
+  const win = BrowserWindow.getFocusedWindow();
+  return (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)).then((r) => r.response);
 }
 
 function installedByNpx(): boolean {
-  const data = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
-  const root = process.platform === "darwin" ? join(homedir(), "Applications", "moire.app") : join(data, "moire");
-  return app.getPath("exe").startsWith(root + "/");
+  return real(app.getPath("exe")).startsWith(real(npxRoot(process.platform, process.env, homedir())) + "/");
 }
 
-async function latestVersion(): Promise<string> {
-  const res = await fetch("https://api.github.com/repos/backstabslash/moire/releases/latest", { headers: { Accept: "application/vnd.github+json" } });
+function packageType(): string | undefined {
+  try {
+    return readFileSync(join(process.resourcesPath, "package-type"), "utf8").trim();
+  } catch {
+    return undefined;
+  }
+}
+
+async function latestRelease(): Promise<Release> {
+  const res = await net.fetch(releases, { headers: { Accept: "application/vnd.github+json" } });
   if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
-  return ((await res.json()) as { tag_name: string }).tag_name.replace(/^v/, "");
+  return (await res.json()) as Release;
 }
 
 // APPIMAGE is inherited from any AppImage up the process tree, and the updater deletes the file it names.
@@ -42,41 +51,162 @@ export function runningAsAppImage(): boolean {
   return !!APPIMAGE && !!APPDIR && app.getPath("exe").startsWith(APPDIR + "/");
 }
 
-export function checkForUpdates(manual = false) {
-  if (!app.isPackaged) return;
-  const failed = (e: Error) => (manual ? notify(`Couldn't check for updates: ${e.message}`, () => {}) : log(`update check failed: ${e.message}`));
-  const current = () => {
-    if (manual) notify(`moire ${app.getVersion()} is the latest version.`, () => {});
-  };
-  if (runningAsAppImage()) {
-    // Built directly because electron-builder can leave a deb or rpm marker in the AppImage, and the default updater would obey it.
-    const updater = new AppImageUpdater();
-    updater.logger = null;
-    updater.on("update-downloaded", ({ version }) => {
-      notify(`Version ${version} will be used next time you open moire. Click to restart now.`, () => {
-        // The new copy starts before this one quits, and would otherwise hand its launch to us and exit.
-        app.releaseSingleInstanceLock();
-        updater.quitAndInstall();
-      });
+let notice: UpdateNotice | null = null;
+let apply: ((repo?: string) => void) | undefined;
+// done settles when the download does; it's missing when there's nothing to download.
+interface Found {
+  version: string;
+  done?: Promise<unknown>;
+}
+
+let downloading: Found | undefined;
+let checking: Promise<Found | null> | undefined;
+let updater: AppImageUpdater | undefined;
+// The macOS bundle that moves in once moire quits.
+let staged: { version: string; moveIn(): void } | undefined;
+
+export function updateNotice(): UpdateNotice | null {
+  return notice;
+}
+
+export function applyUpdate(repo?: string): void {
+  apply?.(repo);
+}
+
+function announce(next: UpdateNotice, onApply: (repo?: string) => void) {
+  if (notice?.version === next.version) return;
+  notice = next;
+  apply = onApply;
+  for (const win of BrowserWindow.getAllWindows()) win.webContents.send("update:notice", next);
+  if (BrowserWindow.getFocusedWindow()) return;
+  notify(next.manual ? `Version ${next.version} is available. Click to download it.` : `Version ${next.version} is ready. Click to restart moire now.`, () =>
+    applyUpdate(),
+  );
+}
+
+// A newer release replaces the one waiting, whose files the next download clears away.
+function withdraw() {
+  notice = null;
+  apply = undefined;
+  staged = undefined;
+  for (const win of BrowserWindow.getAllWindows()) win.webContents.send("update:notice", null);
+}
+
+function moveStagedIn() {
+  if (!staged) return;
+  try {
+    staged.moveIn();
+  } catch (e) {
+    log(`couldn't move moire ${staged.version} in: ${(e as Error).message}`);
+  }
+}
+
+function relaunch(execPath: string, repo = loadState().lastRepo) {
+  const flags = process.argv.slice(1).filter((a) => a.startsWith("-"));
+  app.relaunch({ execPath, args: repo ? [...flags, repo] : flags });
+  app.quit();
+}
+
+async function downloadNpx(release: Release, version: string) {
+  const mac = process.platform === "darwin";
+  const root = npxRoot(process.platform, process.env, homedir());
+  // The launcher may have installed it already while this copy kept running.
+  if (installedVersion(process.platform, root) !== version) {
+    const moveIn = await updateNpx({
+      release,
+      platform: process.platform,
+      arch: process.arch,
+      root,
+      running: mac ? root : dirname(app.getPath("exe")),
+      fetch: net.fetch,
+      onSmallFailed: (e) => log(`small update to ${version} failed, downloading all of it: ${e.message}`),
     });
-    updater.on("update-not-available", current);
-    updater.on("error", failed);
-    updater.checkForUpdates().catch(() => {});
+    if (moveIn) staged = { version, moveIn };
+  }
+  const exe = mac ? join(root, "Contents", "MacOS", "moire") : join(root, "current", "moire");
+  announce({ version }, (repo) => relaunch(exe, repo));
+}
+
+function appImageUpdater(): AppImageUpdater {
+  if (updater) return updater;
+  // Built directly because electron-builder can leave a deb or rpm marker in the AppImage, and the default updater would obey it.
+  const u = new AppImageUpdater();
+  u.logger = null;
+  u.on("update-downloaded", ({ version }) => {
+    announce({ version }, () => {
+      // The new copy starts before this one quits, and would otherwise hand its launch to us and exit.
+      app.releaseSingleInstanceLock();
+      u.quitAndInstall();
+    });
+  });
+  u.on("error", (e) => log(`update failed: ${e.message}`));
+  return (updater = u);
+}
+
+// Resolves with the newer version, if there is one; downloading it carries on in the background.
+async function check(): Promise<Found | null> {
+  if (downloading) return downloading;
+  const ready = notice && { version: notice.version };
+  const kind = installKind(process.platform, installedByNpx(), runningAsAppImage(), packageType());
+  if (kind === "appimage") {
+    const result = await appImageUpdater().checkForUpdates();
+    if (!result?.isUpdateAvailable || result.updateInfo.version === notice?.version) return ready;
+    withdraw();
+    const done = result.downloadPromise ?? Promise.resolve();
+    downloading = { version: result.updateInfo.version, done };
+    void done.catch(() => {}).finally(() => (downloading = undefined));
+    return downloading;
+  }
+  const release = await latestRelease();
+  const version = release.tag_name.replace(/^v/, "");
+  if (!newer(version, notice?.version ?? app.getVersion())) return ready;
+  if (kind !== "npx") {
+    announce({ version, manual: whyManual(kind) }, () => void shell.openExternal(`https://github.com/backstabslash/moire/releases/tag/v${version}`));
+    return { version };
+  }
+  withdraw();
+  const done = downloadNpx(release, version);
+  downloading = { version, done };
+  void done.catch((e: Error) => log(`update to ${version} failed: ${e.message}`)).finally(() => (downloading = undefined));
+  return downloading;
+}
+
+async function report(found: Found | null) {
+  if (!found) {
+    await message(`moire ${app.getVersion()} is the latest version.`);
     return;
   }
-  latestVersion()
-    .then((version) => {
-      if (!newer(version, app.getVersion())) {
-        current();
-        return;
-      }
-      if (installedByNpx()) {
-        notify(`Version ${version} is available. Click to copy the command that updates it: ${npx}`, () => void clipboard.writeText(npx));
-      } else {
-        notify(`Version ${version} is available. Click to download it.`, () => {
-          void shell.openExternal(`https://github.com/backstabslash/moire/releases/tag/v${version}`);
-        });
-      }
-    })
-    .catch(failed);
+  const { version, done } = found;
+  if (!notice) {
+    const failed = done?.then(
+      () => undefined,
+      (e: Error) => e,
+    );
+    await message(`Downloading moire ${version}. A "Restart to update" button appears in the status bar once it's ready.`);
+    const e = await failed;
+    if (e) await message(`Couldn't download moire ${version}: ${e.message}`);
+    return;
+  }
+  const { manual } = notice;
+  const pick = await message(manual ? `moire ${version} is available. ${manual}` : `moire ${version} is ready.`, [
+    manual ? "Open release page" : "Restart now",
+    "Later",
+  ]);
+  if (pick === 0) applyUpdate();
+}
+
+export function checkForUpdates(manual = false) {
+  if (!app.isPackaged) return;
+  checking ??= check().finally(() => (checking = undefined));
+  checking.then(
+    (found) => manual && void report(found),
+    (e: Error) => (manual ? void message(`Couldn't check for updates: ${e.message}`) : log(`update check failed: ${e.message}`)),
+  );
+}
+
+export function startUpdates() {
+  if (!app.isPackaged) return;
+  app.on("will-quit", moveStagedIn);
+  checkForUpdates();
+  setInterval(() => checkForUpdates(), CHECK_EVERY);
 }

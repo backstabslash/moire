@@ -119,7 +119,7 @@ test("record the demo", async () => {
   const frames = join(work, "frames");
   mkdirSync(frames);
   makeDemoRepo(repo);
-  const prefs = { theme: "p7", layout: "split", scope: "changed", mode: "unstaged", file: "src/limiter.ts" };
+  const prefs = { theme: "p7", layout: "unified", scope: "changed", mode: "unstaged", file: "src/limiter.ts" };
   const app = await electron.launch({
     args: [resolve("."), `--user-data-dir=${join(work, "data")}`, repo],
     env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_PREFS: JSON.stringify(prefs) },
@@ -135,43 +135,23 @@ test("record the demo", async () => {
 
     const cdp = await page.context().newCDPSession(page);
     const stop = await record(cdp, frames);
-    await hold(1500);
+    await hold(1800);
 
-    await press("j");
-    await press("j", 1200);
+    await press(".", 1100);
+    await press(".", 2400);
+    await press(".", 900);
+    await press(".", 1200);
+    await press(".", 1500);
 
-    const row = (text: string) => page.locator(".row.split", { hasText: text }).locator(".ln.b");
-    await glide(row("const seconds"));
-    await page.mouse.down();
-    await glide(row("Retry-After"), 500);
-    await page.mouse.up();
+    await click(page.locator(".chapter-head").first());
     await hold(700);
-    await press("c", 1600);
-    await press("s", 1600);
+    await click(page.getByRole("button", { name: "Stage this chapter" }));
+    await glide({ x: 700, y: 600 }, 600);
+    await hold(1200);
 
-    await press("Shift+B", 2600);
-    await press("Escape", 600);
-
-    await press("v", 1400);
-    await press("v", 800);
-
-    await click(page.locator(".file", { hasText: "README.md" }));
-    await hold(900);
-    await press("m", 1600);
-    await click(page.getByRole("button", { name: "Stage file" }));
-    await glide({ x: 900, y: 560 }, 700);
-    await hold(1000);
-
-    await press("Control+f", 300);
-    await page.keyboard.type("bucket", { delay: 110 });
-    await hold(800);
-    await press("Enter", 800);
-    await press("Enter", 1000);
+    await press("Shift+B", 2400);
     await press("Escape", 500);
-
-    await press("3", 1600);
-    await press("j", 700);
-    await press("j", 2600);
+    await press("2", 2600);
     const recorded = await stop();
     encode(recorded, work);
   } finally {

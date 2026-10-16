@@ -9,16 +9,17 @@ export interface MenuAt {
   y: number;
 }
 
-export type MenuAction = "copy" | "copy-abs" | "reveal" | "editor" | "open";
+export type MenuAction = "copy" | "copy-abs" | "copy-contents" | "reveal" | "editor" | "open" | "copy-here";
 
 interface Props {
   at: MenuAt;
   onDisk: boolean;
+  copyHere: boolean;
   onPick(action: MenuAction): void;
   onClose(): void;
 }
 
-export function FileMenu({ at, onDisk, onPick, onClose }: Props) {
+export function FileMenu({ at, onDisk, copyHere, onPick, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: at.x, top: at.y });
   const isDir = at.path.endsWith("/");
@@ -78,10 +79,13 @@ export function FileMenu({ at, onDisk, onPick, onClose }: Props) {
       </div>
       {item("copy", "Copy relative path")}
       {item("copy-abs", "Copy absolute path")}
+      {!isDir && item("copy-contents", "Copy contents", onDisk)}
       <div className="sep" />
       {item("reveal", `Show in ${MANAGER}`, onDisk)}
       {!isDir && item("editor", "Open in editor", onDisk)}
       {!isDir && item("open", "Open with default app", onDisk)}
+      {isDir && <div className="sep" />}
+      {isDir && item("copy-here", "Copy files here…", copyHere)}
     </div>
   );
 }

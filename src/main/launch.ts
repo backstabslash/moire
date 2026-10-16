@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
@@ -18,14 +19,26 @@ export function isLaunchRequest(data: unknown): data is LaunchRequest {
   return typeof d?.cwd === "string" && (d.path === undefined || typeof d.path === "string");
 }
 
+// Fedora Atomic and others link /home to /var/home, so $HOME and the paths the system reports differ.
+export function real(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
 // Desktop launchers start apps in the home folder, which may be a dotfiles repo.
 export function usableCwd(cwd: string, home = homedir()): string | undefined {
-  return cwd === "/" || cwd === home ? undefined : cwd;
+  return cwd === "/" || cwd === home || cwd === real(home) ? undefined : cwd;
 }
 
 export function tildify(path: string, home = homedir()): string {
-  if (path === home) return "~";
-  return path.startsWith(home + "/") ? `~${path.slice(home.length)}` : path;
+  for (const h of new Set([home, real(home)])) {
+    if (path === h) return "~";
+    if (path.startsWith(h + "/")) return `~${path.slice(h.length)}`;
+  }
+  return path;
 }
 
 export function mergePath(first: string, second: string, delimiter = ":"): string {

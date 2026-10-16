@@ -1,5 +1,6 @@
 appId: io.github.backstabslash.moire
 productName: moire
+afterPack: ./build/after-pack.mjs
 directories:
   output: dist
   buildResources: build

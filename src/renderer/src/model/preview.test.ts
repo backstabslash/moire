@@ -16,6 +16,21 @@ describe("previewOf", () => {
     expect(previewOf(file("docs/plan.md", { tooLarge: true }))).toBeNull();
     expect(previewOf(file("Makefile"))).toBeNull();
   });
+
+  it("previews an image stored in Git LFS instead of diffing its pointer", () => {
+    const pointer = (oid: string, size: number) => [`oid sha256:${oid.repeat(64)}`, `size ${size}`];
+    const lines = [
+      { kind: "ctx" as const, text: "version https://git-lfs.github.com/spec/v1", oldNo: 1, newNo: 1 },
+      ...pointer("a", 10).map((text, i) => ({ kind: "del" as const, text, oldNo: i + 2 })),
+      ...pointer("b", 20).map((text, i) => ({ kind: "add" as const, text, newNo: i + 2 })),
+    ];
+    const hunks = [{ oldStart: 1, oldLines: 3, newStart: 1, newLines: 3, header: "", lines }];
+    expect(previewOf(file("a/logo.png", { hunks }))).toEqual({ kind: "image", forced: true });
+    expect(previewOf(file("icon.svg", { hunks }))).toEqual({ kind: "image", forced: true });
+    expect(previewOf(file("notes.txt", { hunks }))).toBeNull();
+    const edited = [{ ...hunks[0], lines: [...lines, { kind: "add" as const, text: "not a pointer", newNo: 4 }] }];
+    expect(previewOf(file("a/logo.png", { hunks: edited }))).toBeNull();
+  });
 });
 
 describe("blobUrl", () => {

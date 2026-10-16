@@ -90,6 +90,12 @@ export interface FileContents {
   tooLarge: boolean;
 }
 
+export interface BlobSize {
+  bytes: number;
+  // A Git LFS pointer whose file isn't in the local LFS store.
+  lfsMissing?: boolean;
+}
+
 export interface CommitInfo {
   sha: string;
   short: string;
@@ -130,3 +136,70 @@ export interface StageAllRequest {
 }
 
 export type UndoResult = { label: string } | { refused: string; id: string; saveAs: string };
+
+export interface UpdateNotice {
+  version: string;
+  // Set when this copy can't replace itself, saying why; the button then opens the release page.
+  manual?: string;
+}
+
+export interface CopyItem {
+  source: string;
+  dest: string;
+  clash: boolean;
+}
+
+export interface CopyPlan {
+  dir: string;
+  sources: string[];
+  items: CopyItem[];
+  // Nested .git folders left out of the copy.
+  skipped: number;
+  ignored: boolean;
+}
+
+export type ClashChoice = "skip" | "keep" | "replace";
+
+export interface CopyResult {
+  text: string;
+  copied: number;
+}
+
+export interface ClashDiff {
+  file: FileDiff;
+  contents: FileContents | null;
+  sizes: [number, number];
+}
+
+export interface NoteRange {
+  path: string;
+  // First and last line in the new version; unset for all of the file's changes.
+  lines?: [number, number];
+  // The first line as written, so the range can follow it when lines above it change.
+  code?: string;
+  // A pinned note on just these lines.
+  note?: string;
+  warn?: boolean;
+}
+
+export interface Chapter {
+  title: string;
+  text: string;
+  warn?: boolean;
+  ranges: NoteRange[];
+}
+
+export interface AgentNotes {
+  summary?: string;
+  chapters: Chapter[];
+}
+
+// Where a range's lines are in the work tree now: null is all of its file's changes.
+export type Placement = { start: number; end: number } | "lost" | null;
+
+export interface NotesFile {
+  path: string;
+  notes: AgentNotes | null;
+  problem?: string;
+  placed?: Placement[][];
+}

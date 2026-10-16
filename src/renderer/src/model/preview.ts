@@ -5,8 +5,16 @@ export type PreviewKind = "image" | "markdown";
 const RASTER = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico"]);
 const MARKDOWN = new Set(["md", "markdown"]);
 
+const LFS_LINE = /^(version https:\/\/git-lfs\.github\.com\/spec\/v1|oid sha256:[0-9a-f]{64}|size \d+|ext-\S+ \S+)$/;
+
+function lfsPointer(file: FileDiff): boolean {
+  const lines = file.hunks.flatMap((h) => h.lines);
+  return lines.some((l) => l.text.startsWith("oid ")) && lines.every((l) => LFS_LINE.test(l.text));
+}
+
 export function previewOf(file: FileDiff): { kind: PreviewKind; forced: boolean } | null {
   const ext = file.path.split("/").pop()!.toLowerCase().split(".").slice(1).pop() ?? "";
+  if ((RASTER.has(ext) || ext === "svg") && !file.binary && lfsPointer(file)) return { kind: "image", forced: true };
   if (RASTER.has(ext)) return file.binary ? { kind: "image", forced: true } : null;
   if (ext === "svg") return file.binary ? null : { kind: "image", forced: !!file.tooLarge };
   if (MARKDOWN.has(ext) && !file.binary && !file.tooLarge) return { kind: "markdown", forced: false };

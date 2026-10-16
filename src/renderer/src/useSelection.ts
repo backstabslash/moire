@@ -1,14 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { type Col, columnKeys, keysBetween } from "./model/selection";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type Col, columnKeys, keysBetween, sideKeys } from "./model/selection";
 import type { Row } from "./model/rows";
 
 const EMPTY: ReadonlySet<string> = new Set();
 
-export type SelectHow = "click" | "shift" | "drag";
+export type SelectHow = "click" | "toggle" | "shift" | "drag";
+
+interface Picked {
+  keys: ReadonlySet<string>;
+  col: Col | null;
+  // The whole file on one side, folded lines included.
+  whole: "a" | "b" | null;
+  // Picked from hunk headers: one side of each hunk stands for all of it when staging.
+  hunks: boolean;
+}
+
+const NONE: Picked = { keys: EMPTY, col: null, whole: null, hunks: false };
 
 export function useSelection(rows: Row[]) {
-  const [selection, setSelection] = useState(EMPTY);
-  const current = useRef(selection);
+  const [picked, setPicked] = useState(NONE);
+  const current = useRef(picked);
   const anchor = useRef<{ key: string; col: Col } | null>(null);
   const drag = useRef<{ base: ReadonlySet<string>; adding: boolean } | null>(null);
   const cursor = useRef<{ key: string; base: ReadonlySet<string> } | null>(null);
@@ -21,36 +32,64 @@ export function useSelection(rows: Row[]) {
     return () => window.removeEventListener("mouseup", up);
   }, []);
 
-  const apply = useCallback((next: ReadonlySet<string>) => {
+  const apply = useCallback((keys: ReadonlySet<string>, col: Col | null, whole: "a" | "b" | null = null, hunks = false) => {
+    const next = keys.size || whole ? { keys, col, whole, hunks } : NONE;
     current.current = next;
-    setSelection(next);
+    setPicked(next);
   }, []);
 
   const select = useCallback(
     (key: string, col: Col, how: SelectHow) => {
-      const cur = current.current;
       const from = anchor.current;
-      if (how === "drag" && (!drag.current || from?.col !== col)) return;
-      if (how === "click" || !from || from.col !== col) {
-        const adding = !cur.has(key);
-        anchor.current = { key, col };
-        drag.current = { base: cur, adding };
-        const next = new Set(cur);
-        if (adding) next.add(key);
-        else next.delete(key);
-        cursor.current = { key, base: adding ? cur : next };
-        return apply(next);
+      if (how === "drag") {
+        const d = drag.current;
+        if (!d || from?.col !== col) return;
+        const next = new Set(d.base);
+        for (const k of keysBetween(rows, col, from.key, key)) {
+          if (d.adding) next.add(k);
+          else next.delete(k);
+        }
+        if (cursor.current) cursor.current.key = key;
+        return apply(next, col);
       }
-      const { base, adding } = how === "drag" ? drag.current! : { base: cur, adding: true };
-      const next = new Set(base);
-      for (const k of keysBetween(rows, col, from.key, key)) {
-        if (adding) next.add(k);
-        else next.delete(k);
+      if (how === "shift" && from?.col === col && cursor.current) {
+        const { base } = cursor.current;
+        cursor.current.key = key;
+        drag.current = { base, adding: true };
+        return apply(new Set([...base, ...keysBetween(rows, col, from.key, key)]), col);
       }
-      if (cursor.current) cursor.current.key = key;
-      apply(next);
+      const { keys, col: had, whole } = current.current;
+      const before = how === "toggle" && had === col && !whole ? keys : EMPTY;
+      const adding = !before.has(key);
+      const next = new Set(before);
+      if (adding) next.add(key);
+      else next.delete(key);
+      const base = adding ? before : next;
+      anchor.current = { key, col };
+      drag.current = { base, adding };
+      cursor.current = { key, base };
+      apply(next, col);
     },
     [rows, apply],
+  );
+
+  const selectAll = useCallback(
+    (side: "a" | "b") => {
+      anchor.current = null;
+      cursor.current = null;
+      apply(EMPTY, side, side);
+    },
+    [apply],
+  );
+
+  const pick = useCallback(
+    (keys: string[], col: Col, hunks = false) => {
+      if (!keys.length) return;
+      anchor.current = { key: keys[0], col };
+      cursor.current = { key: keys[keys.length - 1], base: EMPTY };
+      apply(new Set(keys), col, null, hunks);
+    },
+    [apply],
   );
 
   // Moves the end of the last range by one line, growing or shrinking it from the clicked line.
@@ -64,7 +103,7 @@ export function useSelection(rows: Row[]) {
       const to = keys[i + delta];
       if (i < 0 || !to) return at.key;
       at.key = to;
-      apply(new Set([...at.base, ...keysBetween(rows, from.col, from.key, to)]));
+      apply(new Set([...at.base, ...keysBetween(rows, from.col, from.key, to)]), from.col);
       return to;
     },
     [rows, apply],
@@ -73,7 +112,7 @@ export function useSelection(rows: Row[]) {
   const clear = useCallback(() => {
     anchor.current = null;
     cursor.current = null;
-    if (current.current.size) apply(EMPTY);
+    if (current.current !== NONE) apply(EMPTY, null);
   }, [apply]);
 
   const carry = useCallback(
@@ -84,10 +123,11 @@ export function useSelection(rows: Row[]) {
       anchor.current = from && map.has(from.key) ? { ...from, key: moved(from.key) } : null;
       const at = cursor.current;
       cursor.current = at && anchor.current && map.has(at.key) ? { key: moved(at.key), base: new Set([...at.base].map(moved)) } : null;
-      apply(new Set([...current.current].map(moved)));
+      apply(new Set([...current.current.keys].map(moved)), current.current.col, null, current.current.hunks);
     },
     [apply, clear],
   );
 
-  return { selection, select, extend, clear, carry };
+  const selection = useMemo(() => (picked.whole ? new Set(sideKeys(rows, picked.whole)) : picked.keys), [picked, rows]);
+  return { selection, col: picked.col, whole: picked.whole, hunks: picked.hunks, select, selectAll, pick, extend, clear, carry };
 }

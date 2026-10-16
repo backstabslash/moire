@@ -28,7 +28,7 @@ test.beforeAll(async () => {
   [one, two, plain, userData] = ["one", "two", "plain", "data"].map((n) => mkdtempSync(join(tmpdir(), `moire-e2e-${n}-`)));
   makeRepo(one);
   makeRepo(two);
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, one], env: { ...process.env, MOIRE_HIDDEN: "1" } });
+  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, one], env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_REPO: "" } });
   await expect((await app.firstWindow()).locator(".repo")).toContainText(basename(one));
 });
 
@@ -54,4 +54,10 @@ test("a path that isn't a repo says so instead of opening another one", async ()
   const opened = app.waitForEvent("window");
   expect(await launchAgain(plain)).toBe(0);
   await expect((await opened).locator(".empty-state")).toContainText(`${plain} isn't a git repository`);
+});
+
+test("a launch without a repo, like a panel's Open New Window, opens a window with the picker", async () => {
+  const opened = app.waitForEvent("window");
+  expect(await launchAgain()).toBe(0);
+  await expect((await opened).getByRole("heading", { name: "Open a repository." })).toBeVisible();
 });

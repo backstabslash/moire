@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -39,6 +39,15 @@ describe("paths", () => {
     expect(tildify("/home/u/x", "/home/u")).toBe("~/x");
     expect(tildify("/home/u", "/home/u")).toBe("~");
     expect(tildify("/home/uv/x", "/home/u")).toBe("/home/uv/x");
+  });
+
+  it("knows the home folder by its real path too, where /home is a link", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "moire-home-")));
+    dirs.push(dir);
+    mkdirSync(join(dir, "var-home"));
+    symlinkSync(join(dir, "var-home"), join(dir, "home"));
+    expect(usableCwd(join(dir, "var-home"), join(dir, "home"))).toBeUndefined();
+    expect(tildify(join(dir, "var-home", "x"), join(dir, "home"))).toBe("~/x");
   });
 
   it("merges PATHs without repeats", () => {

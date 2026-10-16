@@ -3,17 +3,35 @@ import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, webContents, type WebContents } from "electron";
-import type { CompareMode, FileDiff, RepoInfo, StageAllRequest, StageRequest } from "../shared/types";
-import { blobSizes, branches, commitDetail, commits, diff, fileContents, gitMissing, listDir, manyContents, repoInfo, tree, upstream, worktrees } from "./git";
+import type { ClashChoice, CompareMode, CopyPlan, FileDiff, RepoInfo, StageAllRequest, StageRequest, UpdateNotice } from "../shared/types";
+import {
+  blobSizes,
+  branches,
+  commitDetail,
+  commits,
+  diff,
+  fileContents,
+  gitMissing,
+  keepUntrackedCache,
+  listDir,
+  manyContents,
+  repoInfo,
+  tree,
+  upstream,
+  worktrees,
+} from "./git";
+import { clashDiff, copyIn, planCopy } from "./copyin";
 import { openInEditor } from "./editor";
+import { clipboardFiles, dragOut, pickFiles } from "./filesin";
 import { editKeys, loadKeys } from "./keys";
 import { buildMenu, reportIssue } from "./menu";
+import { readNotes } from "./notes";
 import { type LaunchRequest, usableCwd } from "./launch";
 import { openWithDefault, revealFile } from "./open";
 import { allowPreviews } from "./preview";
 import { act, actAll, adoptLegacyUndo, commit, dropDiscarded, saveDiscarded, undo } from "./stage";
 import { loadState, saveState } from "./state";
-import { checkForUpdates } from "./update";
+import { applyUpdate, checkForUpdates, updateNotice } from "./update";
 import { RepoWatcher } from "./watch";
 
 const RECENT_LIMIT = 10;
@@ -75,8 +93,10 @@ async function openIn(id: number, path: string): Promise<RepoInfo> {
 }
 
 const watchers = new Map<number, RepoWatcher>();
+const dropUnwatchedCaches = () => keepUntrackedCache([...watchers.values()].map((w) => w.root));
 
 export function registerIpc(): void {
+  const dev = !app.isPackaged;
   ipcMain.handle("repo:watch", async (e, root: string) => {
     const id = e.sender.id;
     const sender = e.sender;
@@ -85,6 +105,7 @@ export function registerIpc(): void {
       sender.once("destroyed", () => {
         watchers.get(id)?.close();
         watchers.delete(id);
+        dropUnwatchedCaches();
       });
     }
     watchers.get(id)?.close();
@@ -92,7 +113,12 @@ export function registerIpc(): void {
       if (!sender.isDestroyed()) sender.send("repo:changed");
     });
     watchers.set(id, watcher);
+    dropUnwatchedCaches();
     await watcher.start();
+  });
+  ipcMain.handle("repo:watchFolders", (e, root: string, dirs: string[]) => {
+    const watcher = watchers.get(e.sender.id);
+    if (watcher?.root === root) watcher.setOpen(dirs);
   });
   ipcMain.handle("repo:initial", (e) => {
     const root = shown.get(e.sender.id);
@@ -115,6 +141,8 @@ export function registerIpc(): void {
   ipcMain.handle("keys:get", () => loadKeys());
   ipcMain.handle("keys:edit", () => editKeys());
   ipcMain.handle("app:check-updates", () => checkForUpdates(true));
+  ipcMain.handle("update:get", () => (dev && process.env.MOIRE_UPDATE ? (JSON.parse(process.env.MOIRE_UPDATE) as UpdateNotice) : updateNotice()));
+  ipcMain.handle("update:apply", (e) => applyUpdate(shown.get(e.sender.id)));
   ipcMain.handle("app:report-issue", () => reportIssue());
   ipcMain.handle("clipboard:write", (_e, text: string) => clipboard.writeText(text));
   ipcMain.handle("git:diff", (_e, root: string, mode: CompareMode) => diff(root, mode));
@@ -133,11 +161,17 @@ export function registerIpc(): void {
   ipcMain.handle("git:save-discarded", (_e, root: string, id: string) => saveDiscarded(root, id));
   ipcMain.handle("git:drop-discarded", (_e, root: string, id: string) => dropDiscarded(root, id));
   ipcMain.handle("git:commit", (_e, root: string, message: string) => commit(root, message));
+  ipcMain.handle("notes:get", (_e, root: string, commit?: string) => readNotes(root, commit));
   ipcMain.handle("editor:open", (_e, root: string, path: string, line: number) => openInEditor(root, path, line, loadState().editor));
   ipcMain.handle("file:reveal", (_e, root: string, path: string) => revealFile(root, path));
   ipcMain.handle("file:open", (_e, root: string, path: string) => openWithDefault(root, path));
+  ipcMain.handle("file:drag", (e, root: string, path: string) => dragOut(e.sender, root, path));
+  ipcMain.handle("files:plan", (_e, root: string, sources: string[], dir: string) => planCopy(root, sources, dir));
+  ipcMain.handle("files:copy", (_e, root: string, plan: CopyPlan, decisions: Record<string, ClashChoice>) => copyIn(root, plan, decisions));
+  ipcMain.handle("files:clash-diff", (_e, root: string, source: string, dest: string) => clashDiff(root, source, dest));
+  ipcMain.handle("files:clipboard", () => clipboardFiles());
+  ipcMain.handle("files:pick", (e) => pickFiles(e.sender));
 
-  const dev = !app.isPackaged;
   ipcMain.handle("dev:hooks", () => ({
     bench: dev && !!process.env.MOIRE_BENCH,
     screenshot: dev && !!process.env.MOIRE_SCREENSHOT,

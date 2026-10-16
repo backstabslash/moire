@@ -7,6 +7,7 @@ interface Loaded {
   mode: CompareMode;
   result: DiffResult;
   writes: number;
+  changes: number;
 }
 
 export interface DiffEvents {
@@ -22,10 +23,11 @@ export function useDiff(repo: RepoInfo | null, wantMode: CompareMode, events: Di
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const viewCache = useRef(new Map<string, Loaded>());
   const writes = useRef(0);
-  // A view cached before the last write would offer actions that main then refuses as stale.
+  const changes = useRef(0);
+  // A view cached before the last write or outside change shows old files, and offers actions that main then refuses as stale.
   const cachedView = (view: string) => {
     const entry = viewCache.current.get(view);
-    return entry?.writes === writes.current ? entry : undefined;
+    return entry?.writes === writes.current && entry.changes === changes.current ? entry : undefined;
   };
   const loadedView = useRef<string | null>(null);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
@@ -60,16 +62,19 @@ export function useDiff(repo: RepoInfo | null, wantMode: CompareMode, events: Di
   useEffect(() => {
     if (!repo) return;
     window.moire.watch(repo.root).catch((e) => on.current.error(e));
-    return window.moire.onRepoChanged(refresh);
+    return window.moire.onRepoChanged(() => {
+      changes.current++;
+      refresh();
+    });
   }, [repo, refresh]);
 
   const preloadViews = useCallback((root: string, except: string, force: boolean) => {
     for (const kind of ["unstaged", "staged", "all"] as const) {
       const view = `${root}:${JSON.stringify({ kind })}`;
       if (view === except || (!force && cachedView(view))) continue;
-      const at = writes.current;
+      const [at, seen] = [writes.current, changes.current];
       window.moire.diff(root, { kind }).then(
-        (result) => remember(viewCache.current, view, { view, mode: { kind }, result, writes: at }),
+        (result) => remember(viewCache.current, view, { view, mode: { kind }, result, writes: at, changes: seen }),
         () => viewCache.current.delete(view),
       );
     }
@@ -79,7 +84,7 @@ export function useDiff(repo: RepoInfo | null, wantMode: CompareMode, events: Di
     if (!repo) return;
     let stale = false;
     const view = `${repo.root}:${wantKey}`;
-    const at = writes.current;
+    const [at, seen] = [writes.current, changes.current];
     window.moire.diff(repo.root, wantMode).then(
       async (result) => {
         if (stale) return;
@@ -87,7 +92,7 @@ export function useDiff(repo: RepoInfo | null, wantMode: CompareMode, events: Di
         if (stale) return;
         const cached = viewCache.current.get(view);
         const same = cached?.writes === at && cached.result.version === result.version;
-        const next = same ? cached : { view, mode: wantMode, result, writes: at };
+        const next = same ? (cached.changes === seen ? cached : { ...cached, changes: seen }) : { view, mode: wantMode, result, writes: at, changes: seen };
         remember(viewCache.current, view, next);
         setLoaded(next);
         setLoadedAt(Date.now());

@@ -2,7 +2,9 @@ import { diffWordsWithSpace } from "diff";
 
 export type Range = [start: number, end: number];
 
-const MAX_LINE_PAIR = 1000;
+const MAX_LINE_PAIR = 10000;
+// In words and spaces; bounds the time a long, heavily rewritten pair can take.
+const MAX_EDITS = 200;
 
 const MIN_SHARED = 0.4;
 
@@ -13,7 +15,9 @@ export function wordRanges(a: string, b: string): [Range[], Range[]] | null {
   let ai = 0;
   let bi = 0;
   let shared = 0;
-  for (const part of diffWordsWithSpace(a, b)) {
+  const parts = diffWordsWithSpace(a, b, { maxEditLength: MAX_EDITS });
+  if (!parts) return null;
+  for (const part of parts) {
     const n = part.value.length;
     if (part.added) {
       push(bRanges, bi, bi + n);

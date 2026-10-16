@@ -228,6 +228,43 @@ function write(root: string, files: Record<string, string>) {
   }
 }
 
+const linesOf = (path: string) => after[path].split("\n");
+const lineOf = (path: string, code: string) => linesOf(path).findIndex((l) => l.includes(code)) + 1;
+// From the line holding `from` to the one holding `to`, plus `past` lines after it.
+const range = (path: string, from: string, to: string, past = 0, extra: object = {}) => {
+  const start = lineOf(path, from);
+  return { path, lines: [start, lineOf(path, to) + past], code: linesOf(path)[start - 1], ...extra };
+};
+
+const notes = {
+  summary: "Swaps the fixed-window limiter for a token bucket, so short bursts go through and blocked clients learn when to retry.",
+  chapters: [
+    {
+      title: "A token bucket per client",
+      text: "Each key holds up to capacity tokens that refill at refillPerSec, and every request spends one. tokenBucket returns 0 to let a request through, or the seconds until the next token.",
+      ranges: [
+        range("src/limiter.ts", "export interface Options", "keyOf?", 1),
+        range("src/limiter.ts", "interface Bucket", "const buckets", 0, {
+          note: "Buckets are never evicted, so memory grows with every new client key.",
+          warn: true,
+        }),
+        range("src/limiter.ts", "const cap", "return 0;", 2),
+      ],
+    },
+    {
+      title: "Telling clients when to retry",
+      text: "Over the limit, limit answers 429 with Retry-After rounded up to whole seconds, so a client that waits as told always gets through.",
+      ranges: [range("src/limiter.ts", "export function limit", "res.status(429)", 2), range("README.md", "## Over the limit", "how many seconds")],
+    },
+    {
+      title: "New options for callers",
+      text: "The server and README move from max and windowMs to capacity and refillPerSec. The old names aren't read anymore, so other callers fail to compile until they switch.",
+      ranges: ["src/server.ts", range("README.md", "Tiny token-bucket", "so short bursts go through")],
+    },
+    { title: "Tests", text: "Covers a burst followed by a wait, and refilling with fake timers.", ranges: ["tests/limiter.test.ts"] },
+  ],
+};
+
 export function makeDemoRepo(root: string) {
   const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args]);
   mkdirSync(root, { recursive: true });
@@ -239,4 +276,7 @@ export function makeDemoRepo(root: string) {
   git("commit", "-qm", "fixed-window limiter");
   git("checkout", "-qb", "agent/token-bucket");
   write(root, after);
+  const path = execFileSync("git", ["-C", root, "rev-parse", "--path-format=absolute", "--git-path", "moire/notes.json"], { encoding: "utf8" }).trim();
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(notes, null, 2));
 }

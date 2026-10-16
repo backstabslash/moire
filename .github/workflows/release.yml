@@ -7,8 +7,32 @@ on:
 permissions:
   contents: write
 
+env:
+  GH_REPO: ${{ github.repository }}
+  TAG: ${{ github.ref_name }}
+
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Tag matches package.json version
+        run: test "v$(node -p 'require("./package.json").version')" = "$TAG"
+      - name: Release isn't already published
+        run: |
+          published=$(gh release list --limit 1000 --json tagName,isDraft --jq ".[] | select(.tagName == \"$TAG\" and (.isDraft | not)) | .tagName")
+          if [ -n "$published" ]; then
+            echo "::error::Release $TAG is already published; bump the version and tag again"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   ci:
+    needs: guard
     uses: ./.github/workflows/ci.yml
 
   build:
@@ -25,8 +49,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Tag matches package.json version
-        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -35,5 +57,33 @@ jobs:
       - if: runner.os == 'Linux'
         run: command -v rpmbuild || (sudo apt-get update && sudo apt-get install -y rpm)
       - run: pnpm dist --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload app.asar for small updates
+        run: |
+          node build/asar-assets.mjs dist dist/asar
+          gh release upload "$TAG" dist/asar/* --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # checkout leaves the tag pointing straight at the commit, dropping the annotated tag object
+      - run: git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+      - name: Release notes from the tag message
+        run: |
+          if [ "$(git cat-file -t "$TAG")" = tag ]; then
+            git cat-file tag "$TAG" | sed '1,/^$/d' | sed '/^-----BEGIN [A-Z ]*SIGNATURE-----$/,$d' > notes.md
+          else
+            git log -1 --format=%B "$TAG" > notes.md
+          fi
+          cat notes.md
+      - run: gh release edit "$TAG" --draft=false --latest --notes-file notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

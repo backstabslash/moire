@@ -25,10 +25,10 @@ Flow: renderer → `window.moire` (preload) → `ipcMain` (`src/main/ipc.ts`) �
 - `MOIRE_SHOTS=/tmp/shots pnpm test:e2e`: also saves screenshots from the specs that take them
 - `pnpm demo`: builds, then records `demo/demo.gif` (in the README) and `demo/demo.mp4` from a scripted run on a throwaway repo. Re-run it after UI changes
 - `pnpm dist --linux AppImage deb --publish never`: local packages in `dist/` (rpm also needs `rpmbuild`)
-- Release: bump `version` in package.json, push tag `v<version>`; `.github/workflows/release.yml` uploads Linux and macOS builds to a draft release. Updates and the launcher only see it once the draft is published
+- Release: bump `version` in package.json, then push `git tag -a v<version> --cleanup=verbatim -F notes.md`; `.github/workflows/release.yml` builds Linux and macOS and publishes the release with the tag message as notes
 - Launcher release, only when `launcher/` changes: bump `launcher/package.json`, push tag `launcher-v<version>`; `.github/workflows/launcher.yml` publishes to npm
 
-Dev-only env vars (ignored when packaged): `MOIRE_PREFS` (preset UI state as JSON), `MOIRE_SCREENSHOT=file.png` (capture once the first file is coloured, then quit), `MOIRE_BENCH=1` (scroll benchmark), `MOIRE_HIDDEN=1` (offscreen window; the e2e specs set it). The launcher reads `MOIRE_RELEASES`, a URL standing in for GitHub's latest-release JSON.
+Dev-only env vars (ignored when packaged): `MOIRE_PREFS` (preset UI state as JSON), `MOIRE_SCREENSHOT=file.png` (capture once the first file is coloured, then quit), `MOIRE_BENCH=1` (scroll benchmark), `MOIRE_HIDDEN=1` (offscreen window; the e2e specs set it), `MOIRE_UPDATE` (an `UpdateNotice` as JSON, to show the status bar's update button). The launcher and the packaged app's updater read `MOIRE_RELEASES`, a URL standing in for GitHub's latest-release JSON.
 
 ## Verification
 Run `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test` and `pnpm test:e2e`. For UI changes, also look at a screenshot in light and dark themes.

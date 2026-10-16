@@ -8,7 +8,7 @@
 
 **See exactly what your coding agent changed, and keep only what you want.** A fast desktop diff viewer for git: stage by line, search every change, and blink between old and new.
 
-![moire stepping through an agent's rewrite of a rate limiter: hunks, staging lines, blink, Markdown preview, search](demo/demo.gif)
+![moire showing an agent's notes beside its rewrite of a rate limiter: stepping through chapters, staging one, blink](demo/demo.gif)
 
 - Side-by-side or unified diffs with syntax highlighting: unstaged, staged, everything since the last commit, a single commit, or one branch against another
 - Stage, unstage and discard whole files, hunks or single lines, with undo, and commit from the staged view
@@ -24,11 +24,11 @@
 npx @backstabslash/moire
 ```
 
-installs the latest release, then opens the repo in the current directory. Run it again to update. On Linux it adds moire to your app menu and a `moire` command to `~/.local/bin`; on macOS it installs to `~/Applications`. moire needs `git` 2.26 or newer on your PATH.
+installs the latest release, then opens the repo in the current directory. After that moire updates itself in the background and offers a restart when a new version is ready. On Linux it adds moire to your app menu and a `moire` command to `~/.local/bin`; on macOS it installs to `~/Applications`. moire needs `git` 2.26 or newer on your PATH.
 
 Or download from [Releases](https://github.com/backstabslash/moire/releases):
 
-- **Linux:** AppImage, `.deb` or `.rpm`. The AppImage updates itself; the `.deb` and `.rpm` also install a `moire` command.
+- **Linux:** AppImage, `.deb` or `.rpm`. The AppImage updates itself; the `.deb` and `.rpm` also install a `moire` command, and moire links to each new release for you to install.
 - **macOS:** `.dmg` for Apple silicon or Intel. Builds aren't notarized yet, so the first time macOS blocks the app. Open System Settings → Privacy & Security and click Open Anyway.
 
 ## Use
@@ -67,6 +67,8 @@ moire path/to/repo
 | `?` | All keyboard shortcuts |
 
 To change a key, open Help → Edit keyboard shortcuts…, which creates `keys.json` with every command and its default, for example `{"stage": "S"}`. Changes apply when you save.
+
+To have your coding agent explain its changes as chapters beside the diff, install the moire-notes skill with `npx skills add backstabslash/moire -g`. It works with Claude Code, Codex, Cursor and other agents that read skills.
 
 ## Build from source
 

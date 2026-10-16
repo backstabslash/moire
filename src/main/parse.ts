@@ -151,6 +151,7 @@ export function parseDiff(text: string): FileDiff[] {
   }
   const merged = mergeTypeChanges(files);
   for (const f of merged) {
+    if (dirtySubmodule(f)) f.oldMode = f.newMode = SUBMODULE;
     if (!f.binary) delete f.blobs;
     if ((f.oldMode ?? PLAIN) === PLAIN && (f.newMode ?? PLAIN) === PLAIN) {
       delete f.oldMode;
@@ -161,6 +162,13 @@ export function parseDiff(text: string): FileDiff[] {
 }
 
 const PLAIN = "100644";
+const SUBMODULE = "160000";
+
+// Edits inside a submodule with no new commit get no index line, the only place git names its mode.
+function dirtySubmodule(f: FileDiff): boolean {
+  const lines = f.hunks.flatMap((h) => h.lines);
+  return f.blobs === undefined && !f.oldMode && !f.newMode && lines.length > 0 && lines.every((l) => /^Subproject commit [0-9a-f]+(-dirty)?$/.test(l.text));
+}
 
 // Git prints a file that became a symlink (or the reverse) as a deletion followed by a new file at the same path.
 function mergeTypeChanges(files: FileDiff[]): FileDiff[] {

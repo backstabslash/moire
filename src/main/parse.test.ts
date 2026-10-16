@@ -112,6 +112,25 @@ index 0000000..7f66e4f
     expect(swapped.hunks.flatMap((h) => h.lines.map((l) => l.kind + l.text))).toEqual(["delx", "addf.txt"]);
   });
 
+  it("knows a submodule with edits inside it, which has no index line", () => {
+    const [sub, text] = parseDiff(`diff --git a/sub b/sub
+--- a/sub
++++ b/sub
+@@ -1 +1 @@
+-Subproject commit 2d9a72a93100e3613cf8c356fb313ec61d70f3f2
++Subproject commit 2d9a72a93100e3613cf8c356fb313ec61d70f3f2-dirty
+diff --git a/notes.txt b/notes.txt
+index 1111111..2222222 100644
+--- a/notes.txt
++++ b/notes.txt
+@@ -1 +1 @@
+-Subproject commit 2d9a72a93100e3613cf8c356fb313ec61d70f3f2
++Subproject commit 3d9a72a93100e3613cf8c356fb313ec61d70f3f2
+`);
+    expect(sub).toMatchObject({ path: "sub", oldMode: "160000", newMode: "160000" });
+    expect(text.oldMode).toBeUndefined();
+  });
+
   it("unquotes octal escapes as utf-8", () => {
     expect(unquote('"a/caf\\303\\251"')).toBe("a/café");
   });

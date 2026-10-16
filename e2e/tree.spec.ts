@@ -90,6 +90,14 @@ test("an ignored folder is read when opened", async () => {
   await page.keyboard.press("t");
 });
 
+test("an open ignored folder shows files as they're added and removed", async () => {
+  const nav = page.getByRole("navigation", { name: "All files" });
+  writeFileSync(join(repo, "out", "later.js"), "later\n");
+  await expect(nav.getByTitle(/^out\/later\.js/)).toBeVisible();
+  rmSync(join(repo, "out", "later.js"));
+  await expect(nav.getByTitle(/^out\/later\.js/)).toHaveCount(0);
+});
+
 test("switching between unchanged files keeps the last one up until the next is ready", async () => {
   await page.evaluate(() => {
     const w = window as unknown as { gaps: number };

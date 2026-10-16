@@ -6,6 +6,12 @@ import { Mark } from "./Mark";
 import { type ThemeId, ThemePicker } from "./ThemePicker";
 
 export type PickerState = null | "main" | "commit" | "branches";
+type BranchesMode = Extract<CompareMode, { kind: "branches" }>;
+// The commit and branches last compared, so 4 and 5 go back to them instead of asking again.
+export interface LastPicked {
+  commit?: Extract<CompareMode, { kind: "commit" }>;
+  branches?: BranchesMode;
+}
 
 export const MODE_NAMES: Record<CompareMode["kind"], string> = {
   unstaged: "Unstaged",
@@ -26,6 +32,7 @@ interface Props {
   theme: ThemeId;
   cvd: boolean;
   picker: PickerState;
+  lastPicked: LastPicked;
   onPicker(picker: PickerState): void;
   onMode(mode: CompareMode): void;
   onLayout(layout: Layout): void;
@@ -33,6 +40,9 @@ interface Props {
   onTheme(theme: ThemeId): void;
   onCvd(on: boolean): void;
   onSearch(): void;
+  // Unset when the repo has no agent notes.
+  notes: { open: boolean } | null;
+  onNotes(): void;
 }
 
 export function Toolbar(props: Props) {
@@ -65,7 +75,15 @@ export function Toolbar(props: Props) {
             </span>
           )}
           {props.picker && (
-            <PickerPop key={props.picker} initial={props.picker} root={root} mode={mode} onMode={props.onMode} onClose={() => props.onPicker(null)} />
+            <PickerPop
+              key={props.picker}
+              initial={props.picker}
+              root={root}
+              mode={mode}
+              lastPicked={props.lastPicked}
+              onMode={props.onMode}
+              onClose={() => props.onPicker(null)}
+            />
           )}
         </div>
       )}
@@ -99,6 +117,14 @@ export function Toolbar(props: Props) {
               Unified
             </button>
           </div>
+          {props.notes && (
+            <div className="seg">
+              <button aria-pressed={props.notes.open} title={props.notes.open ? "Hide agent notes" : "Show agent notes"} onClick={props.onNotes}>
+                Notes
+                <Key id="notes" />
+              </button>
+            </div>
+          )}
         </>
       )}
       <ThemePicker theme={props.theme} cvd={props.cvd} onTheme={props.onTheme} onCvd={props.onCvd} />
@@ -110,11 +136,14 @@ interface PickerPopProps {
   initial: PickerState;
   root: string;
   mode: CompareMode;
+  lastPicked: LastPicked;
   onMode(m: CompareMode): void;
   onClose(): void;
 }
 
-function PickerPop({ initial, root, mode, onMode, onClose }: PickerPopProps) {
+function PickerPop({ initial, root, mode, lastPicked, onMode, onClose }: PickerPopProps) {
+  const commit = mode.kind === "commit" ? mode : lastPicked.commit;
+  const branches = mode.kind === "branches" ? mode : lastPicked.branches;
   const [sub, setSub] = useState<"commit" | "branches" | null>(initial === "commit" || initial === "branches" ? initial : null);
   const popRef = useRef<HTMLDivElement>(null);
 
@@ -171,8 +200,8 @@ function PickerPop({ initial, root, mode, onMode, onClose }: PickerPopProps) {
         <Key id="branches" />
         <small>A merge base, B the branch</small>
       </button>
-      {sub === "commit" && <CommitList root={root} selected={mode.kind === "commit" ? mode.sha : null} onPick={(sha) => pick({ kind: "commit", sha })} />}
-      {sub === "branches" && <BranchForm root={root} mode={mode} onPick={(base, head) => pick({ kind: "branches", base, head })} />}
+      {sub === "commit" && <CommitList root={root} selected={commit?.sha ?? null} onPick={(sha) => pick({ kind: "commit", sha })} />}
+      {sub === "branches" && <BranchForm root={root} last={branches} onPick={(base, head) => pick({ kind: "branches", base, head })} />}
     </div>
   );
 }
@@ -221,10 +250,10 @@ function CommitList({ root, selected, onPick }: { root: string; selected: string
   );
 }
 
-function BranchForm({ root, mode, onPick }: { root: string; mode: CompareMode; onPick(base: string, head: string): void }) {
+function BranchForm({ root, last, onPick }: { root: string; last?: BranchesMode; onPick(base: string, head: string): void }) {
   const [refs, setRefs] = useState<Refs | null>(null);
-  const [base, setBase] = useState(mode.kind === "branches" ? mode.base : "");
-  const [head, setHead] = useState(mode.kind === "branches" ? mode.head : "");
+  const [base, setBase] = useState(last?.base ?? "");
+  const [head, setHead] = useState(last?.head ?? "");
   useEffect(() => {
     void window.moire.branches(root).then((r) => {
       setRefs(r);

@@ -37,6 +37,11 @@ describe("buildTree", () => {
     const tree = buildTree(listing, [], opened);
     expect(show(tree).slice(0, 3)).toEqual(["!out/ (0)", "  !deep/ (0)", "  !out/x.js"]);
   });
+
+  it("leaves out opened folders in views that don't list ignored files", () => {
+    const opened = new Map<string, string[] | string>([["out/", ["out/x.js"]]]);
+    expect(show(buildTree({ files: ["b.ts"], ignored: [] }, [], opened))).toEqual(["b.ts"]);
+  });
 });
 
 describe("parentDirs", () => {

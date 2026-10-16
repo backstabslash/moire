@@ -41,7 +41,9 @@ export function buildTree(listing: FileTree, changed: FileDiff[], opened: Readon
     for (const dir of parentDirs(f.path)) dirAt(dir).changes++;
   }
   for (const path of listing.files) addFile(path);
-  const entries = [...opened.values()].flatMap((e) => (typeof e === "string" ? [] : e));
+  // Opened folders outlive a switch to a view that doesn't read the disk, such as staged or a commit.
+  const listed = (dir: string) => listing.ignored.some((d) => d.endsWith("/") && dir.startsWith(d));
+  const entries = [...opened].flatMap(([dir, e]) => (typeof e === "string" || !listed(dir) ? [] : e));
   for (const path of [...listing.ignored, ...entries]) {
     if (path.endsWith("/")) dirAt(path).ignored = true;
     else addFile(path, undefined, true);

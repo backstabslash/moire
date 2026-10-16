@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { FileDiff, LineRef, StageRequest } from "../shared/types";
 import { diff, UNTRACKED_READ_LIMIT } from "./git";
-import { act, actAll, adoptLegacyUndo, commit, dropDiscarded, saveDiscarded, undo } from "./stage";
+import { act, actAll, adoptLegacyUndo, commit, dropDiscarded, saveDiscarded, setWorktree, undo } from "./stage";
 import { dirs, makeRepo } from "./test-repo";
 
 type Repo = ReturnType<typeof makeRepo>;
@@ -634,5 +634,50 @@ describe("files git converts", () => {
     const f = (await r.file("unstaged", "a.txt"))!;
     await r.run("unstaged", "discard", f, [allLines(f).at(-1)!]);
     expect(readFileSync(join(r.root, "a.txt"), "utf8")).toBe("one\n2\n");
+  });
+});
+
+describe("submodules", () => {
+  it("says a submodule can only be staged whole instead of failing in git", async () => {
+    const sub = makeRepo();
+    sub.write("a.txt", "one\n");
+    sub.commit("init");
+    const r = setup();
+    r.write("keep.txt", "keep\n");
+    r.commit("init");
+    r.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", sub.root, "sub");
+    r.commit("add sub");
+
+    writeFileSync(join(r.root, "sub", "a.txt"), "two\n");
+    const dirty = (await r.file("unstaged", "sub"))!;
+    expect(dirty).toMatchObject({ oldMode: "160000", newMode: "160000" });
+    await expect(r.run("unstaged", "stage", dirty, [{ hunk: 0, line: 1 }])).rejects.toThrow("sub is a submodule and can only be staged whole");
+
+    execFileSync("git", ["-C", join(r.root, "sub"), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qam", "two"]);
+    r.git("add", "sub");
+    const moved = (await r.file("staged", "sub"))!;
+    await expect(r.run("staged", "unstage", moved, [{ hunk: 0, line: 1 }])).rejects.toThrow("sub is a submodule and can only be unstaged whole");
+    expect(await r.run("staged", "unstage", moved, null)).toBe("Unstaged sub");
+  });
+});
+
+describe("setWorktree", () => {
+  it("streams a blob into place with its mode, writes symlinks, and removes files", async () => {
+    const r = setup();
+    const big = Buffer.alloc(8 * 1024 * 1024, "x");
+    const sha = execFileSync("git", ["-C", r.root, "hash-object", "-w", "--stdin"], { input: big, encoding: "utf8" }).trim();
+    const link = execFileSync("git", ["-C", r.root, "hash-object", "-w", "--stdin"], { input: "target", encoding: "utf8" }).trim();
+    symlinkSync("old", join(r.root, "a.bin"));
+    await setWorktree(r.root, "a.bin", { mode: "100755", sha });
+    expect(readFileSync(join(r.root, "a.bin")).equals(big)).toBe(true);
+    expect(lstatSync(join(r.root, "a.bin")).mode & 0o777).toBe(0o755 & ~process.umask());
+    await setWorktree(r.root, "deep/a.bin", { mode: "100644", sha });
+    expect(lstatSync(join(r.root, "deep/a.bin")).mode & 0o111).toBe(0);
+    await setWorktree(r.root, "a.bin", { mode: "120000", sha: link });
+    expect(readlinkSync(join(r.root, "a.bin"))).toBe("target");
+    await expect(setWorktree(r.root, "deep/a.bin", { mode: "100644", sha: "0".repeat(40) })).rejects.toThrow();
+    expect(readdirSync(join(r.root, "deep"))).toEqual(["a.bin"]);
+    await setWorktree(r.root, "deep/a.bin", null);
+    expect(existsSync(join(r.root, "deep/a.bin"))).toBe(false);
   });
 });

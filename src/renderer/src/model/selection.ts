@@ -24,6 +24,23 @@ export function keysBetween(rows: Row[], col: Col, from: string, to: string): st
   return keys.slice(Math.min(i, j), Math.max(i, j) + 1);
 }
 
+// Every line shown on one side; unified rows count by kind, since their lines carry no side.
+export function sideKeys(rows: Row[], side: "a" | "b"): string[] {
+  const out: string[] = [];
+  for (const r of rows) {
+    const line = r.t === "split" ? r[side] : r.t === "uni" && r.kind !== (side === "a" ? "add" : "del") ? r.line : undefined;
+    if (line?.sel) out.push(line.sel);
+  }
+  return out;
+}
+
+export function hunkChange(file: FileDiff, hunk: number): { side: "a" | "b"; keys: string[] } {
+  const lines = file.hunks[hunk]?.lines ?? [];
+  const side = lines.some((l) => l.kind === "add") ? "b" : "a";
+  const kind = side === "b" ? "add" : "del";
+  return { side, keys: lines.flatMap((l, i) => (l.kind === kind ? [lineKey(hunk, i)] : [])) };
+}
+
 export function changedRefs(file: FileDiff, keys: Iterable<string>): LineRef[] {
   return [...keys].flatMap((k) => {
     if (k.startsWith("g")) return [];

@@ -1,11 +1,13 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import { lstat, open, readdir, readFile, readlink, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve as resolvePath } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import type {
+  BlobSize,
   CommitDetail,
   CommitInfo,
   CompareMode,
@@ -60,6 +62,18 @@ export async function git(root: string, args: string[]): Promise<string> {
 export async function gitBuffer(root: string, args: string[]): Promise<Buffer> {
   const { stdout } = await exec("git", gitArgs(root, args), { maxBuffer: MAX_BUFFER, env, encoding: "buffer" });
   return stdout;
+}
+
+// Streams stdout into a new file, for output of any size.
+export async function gitToFile(root: string, args: string[], path: string, mode: number): Promise<void> {
+  const child = spawn("git", gitArgs(root, args), { env, stdio: ["ignore", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", (c: Buffer) => (stderr += c.toString()));
+  const exited = new Promise<void>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(stderr.trim() || `git ${args[0]} exited with code ${code}`))));
+  });
+  await Promise.all([pipeline(child.stdout, createWriteStream(path, { mode, flags: "wx" })), exited]);
 }
 
 export function gitError(e: unknown): string {
@@ -294,6 +308,11 @@ interface CachedUntracked {
 
 const untrackedCache = new Map<string, Map<string, CachedUntracked>>();
 
+export function keepUntrackedCache(roots: Iterable<string>): void {
+  const keep = new Set(roots);
+  for (const root of untrackedCache.keys()) if (!keep.has(root)) untrackedCache.delete(root);
+}
+
 async function untracked(root: string, pathspec: string[]): Promise<FileDiff[]> {
   const out = await git(root, ["ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspec]);
   const paths = out.split("\0").filter((p) => p && !p.endsWith("/"));
@@ -354,7 +373,7 @@ async function readUntracked(root: string, path: string): Promise<FileDiff | nul
   return file;
 }
 
-const DIFF = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-relative", "-M", "--src-prefix=a/", "--dst-prefix=b/"];
+const DIFF = ["--no-color", "--no-ext-diff", "--no-textconv", "--no-relative", "--submodule=short", "-M", "--src-prefix=a/", "--dst-prefix=b/"];
 
 // Porcelain `git diff` rewrites .git/index to refresh stat info, which can fail an agent's commit on index.lock; plumbing never writes it.
 async function diffCommand(root: string, from: string | null, to: "index" | "worktree" | string): Promise<string[]> {
@@ -613,18 +632,52 @@ async function readSide(root: string, side: SideInfo, path: string, limit = SIZE
 export async function readBlob(root: string, side: SideInfo, path: string, limit: number): Promise<Buffer | null> {
   if (!path || isAbsolute(path) || path.split("/").includes("..")) return null;
   const buf = await readSide(root, side, path, limit);
+  const pointer = buf && lfsPointer(buf);
+  if (pointer && pointer.size <= limit) {
+    const real = await readFile(await lfsObjectPath(root, pointer.oid)).catch(() => null);
+    if (real?.length === pointer.size) return real;
+  }
   return buf && buf.length <= limit ? buf : null;
 }
 
-export async function blobSizes(root: string, mode: CompareMode, file: FileRef): Promise<[number | null, number | null]> {
+const LFS_POINTER_MAX = 1024;
+
+function lfsPointer(buf: Buffer): { oid: string; size: number } | null {
+  if (buf.length >= LFS_POINTER_MAX) return null;
+  const m = /^version https:\/\/git-lfs\.github\.com\/spec\/v1\n(?:ext-.*\n)*oid sha256:([0-9a-f]{64})\nsize (\d+)\n?$/.exec(buf.toString("utf8"));
+  return m ? { oid: m[1], size: Number(m[2]) } : null;
+}
+
+async function lfsObjectPath(root: string, oid: string): Promise<string> {
+  const [common, storage] = await Promise.all([
+    fixedGit(root, ["rev-parse", "--git-common-dir"]),
+    fixedGit(root, ["config", "--get", "--default=", "lfs.storage"]),
+  ]);
+  const dir = resolvePath(root, common ?? ".git");
+  return join(storage ? resolvePath(dir, storage) : join(dir, "lfs"), "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
+}
+
+export async function blobSizes(root: string, mode: CompareMode, file: FileRef): Promise<[BlobSize | null, BlobSize | null]> {
   const { a, b } = await sides(root, mode);
-  const size = async (side: SideInfo, path: string | null) => {
-    if (path === null || side.kind === "empty") return null;
+  const bytes = async (side: SideInfo, path: string) => {
     if (side.kind === "worktree")
       return lstat(join(root, path))
         .then((st) => st.size)
         .catch(() => null);
     return tryGit(root, ["cat-file", "-s", side.kind === "index" ? `:${path}` : `${side.rev}:${path}`]).then((out) => (out ? Number(out) : null));
+  };
+  const size = async (side: SideInfo, path: string | null): Promise<BlobSize | null> => {
+    if (path === null || side.kind === "empty") return null;
+    const n = await bytes(side, path);
+    if (n === null || n >= LFS_POINTER_MAX) return n === null ? null : { bytes: n };
+    const buf = await readSide(root, side, path, LFS_POINTER_MAX);
+    const pointer = buf && lfsPointer(buf);
+    if (!pointer) return { bytes: n };
+    const stored = await stat(await lfsObjectPath(root, pointer.oid)).then(
+      (st) => st.size === pointer.size,
+      () => false,
+    );
+    return stored ? { bytes: pointer.size } : { bytes: pointer.size, lfsMissing: true };
   };
   const [pathA, pathB] = sidePaths(file);
   return Promise.all([size(a, pathA), size(b, pathB)]);

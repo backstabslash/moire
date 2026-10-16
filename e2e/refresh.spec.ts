@@ -82,3 +82,30 @@ test("focus stays on its hunk when an edit adds a hunk above it", async () => {
   await expect(heads).toHaveCount(3);
   await expect(focused).toHaveText(before!);
 });
+
+test("a view visited earlier never shows its file list from before an outside change", async () => {
+  const picker = page.locator(".picker-btn");
+  await page.keyboard.press("3");
+  await expect(picker).toHaveText("All since last commit");
+  await page.keyboard.press("1");
+  await expect(picker).toHaveText("Unstaged");
+  writeFileSync(join(repo, "c.ts"), "export const c = 1;\n");
+  await expect(page.locator(".file", { hasText: "c.ts" })).toHaveCount(1);
+
+  await page.evaluate(() => {
+    const w = window as unknown as { stale: number };
+    w.stale = 0;
+    const look = () => {
+      const all = document.querySelector(".picker-btn")?.textContent === "All since last commit";
+      const names = [...document.querySelectorAll(".file .name")].map((n) => n.textContent);
+      if (all && !names.includes("c.ts")) w.stale++;
+    };
+    new MutationObserver(look).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+  await page.keyboard.press("3");
+  await expect(page.locator(".file", { hasText: "c.ts" })).toHaveCount(1);
+  await expect(picker).toHaveText("All since last commit");
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => (window as unknown as { stale: number }).stale)).toBe(0);
+  await page.keyboard.press("1");
+});

@@ -1,18 +1,22 @@
+import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CompareMode, FileDiff } from "../shared/types";
 import {
+  blobSizes,
   branches,
   commitDetail,
   commits,
   diff,
   fileContents,
+  keepUntrackedCache,
   listDir,
   manyContents,
   missingGit,
   oldGit,
+  readBlob,
   repoInfo,
   repoProblem,
   tree,
@@ -405,6 +409,26 @@ describe("repeated refreshes", () => {
     expect(paths((await diff(r.root, { kind: "unstaged" })).files)).toEqual([]);
   });
 
+  it("drops the untracked cache of repos no window shows", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "a\n");
+    r.commit("init");
+    r.write("new.txt", "one\n");
+    const mtime = new Date(2020, 0, 1);
+    utimesSync(join(r.root, "new.txt"), mtime, mtime);
+    const reread = async () => {
+      r.write("new.txt", "two\n");
+      utimesSync(join(r.root, "new.txt"), mtime, mtime);
+      return texts(byPath((await diff(r.root, { kind: "unstaged" })).files, "new.txt"));
+    };
+    await diff(r.root, { kind: "unstaged" });
+    expect(await reread()).toEqual(["one"]);
+    keepUntrackedCache([r.root]);
+    expect(await reread()).toEqual(["one"]);
+    keepUntrackedCache(["/somewhere/else"]);
+    expect(await reread()).toEqual(["two"]);
+  });
+
   it("keeps versions stable until a file changes", async () => {
     const r = makeRepo();
     r.write("a.txt", "a\n");
@@ -605,6 +629,26 @@ describe("binary rewrites", () => {
   });
 });
 
+describe("Git LFS", () => {
+  it("reads an image from the LFS store, and says when only its pointer is here", async () => {
+    const r = makeRepo();
+    const pointer = (data: Buffer) =>
+      `version https://git-lfs.github.com/spec/v1\noid sha256:${createHash("sha256").update(data).digest("hex")}\nsize ${data.length}\n`;
+    const [missing, stored] = [Buffer.from([1, 0, 1]), Buffer.from([2, 0, 2, 0])];
+    r.write("logo.png", pointer(missing));
+    r.commit("init");
+    r.write("logo.png", pointer(stored));
+    const sha = r.commit("stored");
+    const oid = createHash("sha256").update(stored).digest("hex");
+    r.write(`.git/lfs/objects/${oid.slice(0, 2)}/${oid.slice(2, 4)}/${oid}`, stored);
+
+    const side = { kind: "commit" as const, rev: sha, label: "" };
+    expect(await readBlob(r.root, side, "logo.png", 1024)).toEqual(stored);
+    expect(await readBlob(r.root, { ...side, rev: r.git("rev-parse", "HEAD^") }, "logo.png", 1024)).toEqual(Buffer.from(pointer(missing)));
+    expect(await blobSizes(r.root, { kind: "commit", sha }, { path: "logo.png", status: "modified" })).toEqual([{ bytes: 3, lfsMissing: true }, { bytes: 4 }]);
+  });
+});
+
 describe("file tree", () => {
   const r = makeRepo();
   r.write(".gitignore", "IDEAS.md\nout/\n");
@@ -737,4 +781,18 @@ describe("worktrees", () => {
       { path: join(other, "agent"), branch: "agent", changes: 2 },
     ]);
   });
+});
+
+it("shows a moved submodule in a commit even when git config asks for submodule logs", async () => {
+  const sub = makeRepo();
+  sub.write("x.txt", "x\n");
+  sub.commit("one");
+  const r = makeRepo();
+  r.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", sub.root, "sub");
+  r.commit("add sub");
+  r.git("config", "diff.submodule", "log");
+  r.git("-C", "sub", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "two");
+  const sha = r.commit("move sub");
+  const res = await diff(r.root, { kind: "commit", sha });
+  expect(res.files.map((f) => f.path)).toEqual(["sub"]);
 });

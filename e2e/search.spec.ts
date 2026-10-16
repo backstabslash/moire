@@ -76,4 +76,24 @@ test("search finds hits in folded context and in other files", async () => {
   await page.keyboard.press("/");
   await expect(input).toBeFocused();
   await expect(input).toHaveValue("(");
+  await input.press("Escape");
+});
+
+test("opening and closing search leaves the diff lines where they were", async () => {
+  await page.locator(".file", { hasText: "a.ts" }).click();
+  await page.keyboard.press("f");
+  await page.locator(".diff-scroller").evaluate((el) => {
+    el.scrollTop = 300;
+    el.dispatchEvent(new Event("scroll"));
+  });
+  const line = page.locator(".cell.b", { hasText: "export const v30 = 30;" });
+  const top = async () => (await line.boundingBox())!.y;
+  const before = await top();
+  await page.keyboard.press("Control+f");
+  await expect(page.locator(".search")).toBeVisible();
+  expect(await top()).toBe(before);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".search")).toHaveCount(0);
+  expect(await top()).toBe(before);
+  await page.keyboard.press("f");
 });

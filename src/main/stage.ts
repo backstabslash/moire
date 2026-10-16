@@ -1,17 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readlink, rename, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { FileDiff, StageAction, StageAllRequest, StageRequest, UndoResult } from "../shared/types";
-import { diff, git, gitBuffer, gitError, gitInput, literal } from "./git";
+import { diff, git, gitBuffer, gitError, gitInput, gitToFile, literal } from "./git";
 import { splice, StaleError } from "./splice";
 
-interface Blob {
+export interface Blob {
   mode: string;
   sha: string;
 }
 
-interface Step {
+export interface Step {
   path: string;
   index?: [Blob | null, Blob | null];
   worktree?: [Blob | null, Blob | null];
@@ -24,6 +24,8 @@ interface UndoEntry {
   label: string;
   steps: Step[];
   head?: string | null;
+  // Folders a copy created, shallowest first, removed again on undo when empty.
+  dirs?: string[];
 }
 
 interface IndexState {
@@ -42,7 +44,7 @@ const VERB: Record<StageAction, string> = { stage: "Staged", unstage: "Unstaged"
 
 let queue: Promise<unknown> = Promise.resolve();
 
-function serial<T>(fn: () => Promise<T>): Promise<T> {
+export function serial<T>(fn: () => Promise<T>): Promise<T> {
   const run = queue.then(fn, fn);
   queue = run.catch(() => {});
   return run;
@@ -222,6 +224,7 @@ async function actLines(root: string, action: StageAction, file: FileDiff, selec
   if (file.binary || file.tooLarge || untrackedRename || typeChanged) throw new Error(`${name} can only be ${VERB[action].toLowerCase()} whole`);
   if (file.hunks.some((h) => h.lines.some((l) => l.text.includes("\uFFFD")))) throw new Error(`${name} isn't UTF-8 text, so it can only be changed whole`);
   if (entry?.mode === "120000") throw new Error(`${name} is a symlink and can only be ${VERB[action].toLowerCase()} whole`);
+  if (entry?.mode === "160000") throw new Error(`${name} is a submodule and can only be ${VERB[action].toLowerCase()} whole`);
   if (action === "discard") {
     const full = join(root, file.path);
     // The diff shows the file as git would store it, which only matches the bytes on disk when git converts nothing.
@@ -269,6 +272,7 @@ async function runUndo(root: string): Promise<UndoResult | null> {
   }
   await restoreIndex(root, indexSteps);
   for (const step of entry.steps) if (step.worktree) await setWorktree(root, step.path, step.worktree[0]);
+  for (const dir of (entry.dirs ?? []).toReversed()) await rmdir(join(root, dir)).catch(() => {});
   await writeLog(root, store, log.toSpliced(i, 1), log);
   return { label: entry.label };
 }
@@ -321,7 +325,7 @@ async function indexEntry(root: string, path: string): Promise<Blob | null> {
   return entry.blob;
 }
 
-async function worktreeEntry(root: string, path: string, keep: boolean): Promise<Blob | null> {
+export async function worktreeEntry(root: string, path: string, keep: boolean): Promise<Blob | null> {
   const full = join(root, path);
   const st = await lstat(full).catch(() => null);
   if (!st) return null;
@@ -350,14 +354,24 @@ async function restoreIndex(root: string, steps: Step[]) {
   await locked(() => gitInput(root, ["update-index", "-z", "--index-info"], lines.map((l) => `${l}\0`).join("")));
 }
 
-async function setWorktree(root: string, path: string, blob: Blob | null) {
+export async function setWorktree(root: string, path: string, blob: Blob | null) {
   const full = join(root, path);
-  const content = blob && (await gitBuffer(root, ["cat-file", "blob", blob.sha]));
-  await rm(full, { force: true });
-  if (!blob || !content) return;
+  if (!blob) return void (await rm(full, { force: true }));
+  if (blob.mode === "120000") {
+    const target = (await gitBuffer(root, ["cat-file", "blob", blob.sha])).toString("utf8");
+    await rm(full, { force: true });
+    await mkdir(dirname(full), { recursive: true });
+    return void (await symlink(target, full));
+  }
   await mkdir(dirname(full), { recursive: true });
-  if (blob.mode === "120000") await symlink(content.toString("utf8"), full);
-  else await writeFile(full, content, { mode: blob.mode === "100755" ? 0o755 : 0o644 });
+  const tmp = `${full}.${randomUUID()}`;
+  try {
+    await gitToFile(root, ["cat-file", "blob", blob.sha], tmp, blob.mode === "100755" ? 0o755 : 0o644);
+    await rename(tmp, full);
+  } catch (e) {
+    await rm(tmp, { force: true });
+    throw e;
+  }
 }
 
 async function locked<T>(fn: () => Promise<T>): Promise<T> {
@@ -419,7 +433,7 @@ async function readLog(store: Store): Promise<UndoEntry[]> {
   }
 }
 
-async function record(root: string, entry: Omit<UndoEntry, "id">) {
+export async function record(root: string, entry: Omit<UndoEntry, "id">) {
   const store = await storeFor(root);
   const log = await readLog(store);
   await writeLog(root, store, [...log, { id: randomUUID(), ...entry }], log);

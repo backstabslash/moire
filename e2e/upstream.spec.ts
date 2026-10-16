@@ -67,6 +67,18 @@ test("shows nothing without an upstream, then commits to push as of the last fet
   await page.keyboard.press("1");
 });
 
+test("5 goes back to the branches last compared, and pressed again offers them for a change", async () => {
+  await page.keyboard.press("5");
+  await expect(page.locator(".picker-btn")).toHaveText("Branch vs branch");
+  await expect(page.locator(".slot").first()).toContainText("origin/main");
+  await page.keyboard.press("5");
+  await expect(page.getByLabel("Base branch")).toHaveValue("origin/main");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".picker-pop")).toHaveCount(0);
+  await page.keyboard.press("1");
+  await expect(page.locator(".picker-btn")).toHaveText("Unstaged");
+});
+
 test("a push clears the count, and a fetch shows what's new upstream", async () => {
   git("push", "-q");
   await expect(sync()).toHaveCount(0);

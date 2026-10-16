@@ -81,12 +81,35 @@ describe("RepoWatcher", () => {
     writeFileSync(join(r.root, "build", "deep", "er", "x.js"), "y\n");
     expect(await r.settle()).toBe(0);
   });
+  it("sees files come and go in ignored folders open in the tree, but not their edits", async () => {
+    const r = await watching();
+    watcher!.setOpen(["build/"]);
+    await sleep(100);
+    r.write("build/new.js", "x\n");
+    expect(await r.settle()).toBe(1);
+    r.write("build/new.js", "y\n");
+    expect(await r.settle()).toBe(1);
+    watcher!.setOpen([]);
+    await sleep(100);
+    r.write("build/other.js", "x\n");
+    expect(await r.settle()).toBe(1);
+  });
+
   it("sees fetches and updates to remote branches", async () => {
     const r = await watching();
     mkdirSync(join(r.root, ".git", "refs", "remotes", "origin"), { recursive: true });
     writeFileSync(join(r.root, ".git", "FETCH_HEAD"), "");
     expect(await r.settle()).toBe(1);
     writeFileSync(join(r.root, ".git", "refs", "remotes", "origin", "main"), r.git("rev-parse", "HEAD") + "\n");
+    expect(await r.settle()).toBe(2);
+  });
+
+  it("sees agent notes written into the git folder", async () => {
+    const r = await watching();
+    mkdirSync(join(r.root, ".git", "moire"));
+    writeFileSync(join(r.root, ".git", "moire", "notes.json"), "{}");
+    expect(await r.settle()).toBe(1);
+    writeFileSync(join(r.root, ".git", "moire", "notes.json"), '{"notes": []}');
     expect(await r.settle()).toBe(2);
   });
 });

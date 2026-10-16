@@ -1,9 +1,10 @@
 import { type MouseEvent, type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import type { CompareMode, FileDiff, FileTree as Listing, RepoInfo, RepoState, Upstream } from "../../../shared/types";
 import { fuzzyMatch, orderPaths } from "../model/files";
+import { type Grouping, type PairedGroup, pairFiles } from "../model/paired";
 import { parentDirs } from "../model/tree";
 import { fileRow, FileTree, type Folders, type ListState } from "./FileTree";
-import { Key } from "./Key";
+import { Key, keyText, useKeymap } from "./Key";
 
 const MATCH_LIMIT = 500;
 export const SIDE_WIDTH = { initial: 240, min: 180, max: 560 };
@@ -23,14 +24,19 @@ interface Group {
   paths: string[];
 }
 
+const sameList = (a: string[] | string | undefined, b: string[]) => Array.isArray(a) && a.length === b.length && a.every((p, i) => p === b[i]);
+
 interface Props {
   repo: RepoInfo;
   upstream: Upstream | null;
   view: FilesView;
   onView(view: FilesView): void;
+  grouping: Grouping;
+  onGrouping(grouping: Grouping): void;
   files: FileDiff[];
   changed: FileDiff[];
   tree: Listing | null;
+  refreshTick: number;
   active: string | null;
   hitCounts: ReadonlyMap<string, number> | null;
   fresh: { paths: ReadonlySet<string>; at: number } | null;
@@ -52,9 +58,12 @@ export function Sidebar({
   upstream,
   view,
   onView,
+  grouping,
+  onGrouping,
   files,
   changed,
   tree,
+  refreshTick,
   active,
   hitCounts,
   fresh,
@@ -78,6 +87,24 @@ export function Sidebar({
     setFolders({ root: repo.root, active, open, opened: kept.opened });
   }
 
+  const openIgnored = [...folders.opened].flatMap(([dir, entries]) => (typeof entries !== "string" && folders.open.has(dir) ? [dir] : [])).join("\0");
+  useEffect(() => {
+    void window.moire.watchFolders(repo.root, openIgnored ? openIgnored.split("\0") : []);
+  }, [repo.root, openIgnored]);
+
+  // The watcher skips ignored folders except for files coming and going in open ones, so those are listed again on each refresh.
+  useEffect(() => {
+    const root = repo.root;
+    for (const [dir, entries] of folders.opened) {
+      if (typeof entries === "string" || !folders.open.has(dir)) continue;
+      window.moire.listDir(root, dir).then(
+        (next) =>
+          setFolders((cur) => (cur.root === root && !sameList(cur.opened.get(dir), next) ? { ...cur, opened: new Map(cur.opened).set(dir, next) } : cur)),
+        () => {},
+      );
+    }
+  }, [refreshTick]);
+
   const byPath = useMemo(() => new Map(changed.map((f) => [f.path, f])), [changed]);
   const ignored = useMemo(() => new Set(tree?.ignored), [tree]);
   const allPaths = useMemo(() => {
@@ -88,8 +115,10 @@ export function Sidebar({
   const matches = useMemo(() => (view === "all" && filter ? allPaths.filter((p) => fuzzyMatch(filter, p)) : null), [view, filter, allPaths]);
   const listed = useMemo(() => (view === "changed" ? files.map((f) => f.path) : (matches ?? [])), [view, files, matches]);
 
+  const paired = useMemo(() => (view === "changed" && grouping === "paired" ? pairFiles(files, changed) : null), [view, grouping, files, changed]);
   const groups = useMemo(() => {
     const out: Group[] = [];
+    if (paired) return out;
     for (const path of view === "all" ? listed.slice(0, MATCH_LIMIT) : listed) {
       const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
       const last = out[out.length - 1];
@@ -97,7 +126,8 @@ export function Sidebar({
       else out.push({ dir, paths: [path] });
     }
     return out;
-  }, [view, listed]);
+  }, [view, listed, paired]);
+  const groupKey = keyText(useKeymap(), "grouping");
 
   const activeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -148,7 +178,18 @@ export function Sidebar({
           </button>
           <RepoBadges repo={repo} up={upstream} onMode={onMode} />
         </span>
-        <span className="count">{count}</span>
+        <span className="side-count">
+          <span className="count">{count}</span>
+          {view === "changed" && (
+            <button
+              className="grouping"
+              title={`${grouping === "paired" ? "Paired: grouped by module, with tests and styles under their source" : "By folder"}\nClick or press ${groupKey} to switch`}
+              onClick={() => onGrouping(grouping === "paired" ? "folder" : "paired")}
+            >
+              {grouping === "paired" ? "Paired" : "By folder"}
+            </button>
+          )}
+        </span>
       </div>
       <div className="seg side-view" role="group" aria-label="Files shown">
         <button aria-pressed={view === "changed"} onClick={() => onView("changed")}>
@@ -190,6 +231,7 @@ export function Sidebar({
                 {g.paths.map((path) => fileRow(list, path, byPath.get(path), { ignored: ignored.has(path) }))}
               </div>
             ))}
+        {paired && <PairedList groups={paired} list={list} />}
         {view === "all" && listed.length > MATCH_LIMIT && <div className="no-match">{listed.length - MATCH_LIMIT} more. Narrow the filter to see them.</div>}
         {filter && !listed.length && <div className="no-match">No files match.</div>}
       </nav>
@@ -210,6 +252,37 @@ function fetched(at: number | null): string {
   const s = (Date.now() - at) / 1000;
   const [unit, size] = UNITS.find(([, size]) => s >= size) ?? ["second", 1];
   return `As of the last fetch, ${unit === "second" ? "just now" : relative.format(-Math.round(s / size), unit)}.`;
+}
+
+function PairedList({ groups, list }: { groups: PairedGroup[]; list: ListState }) {
+  return groups.map((g) => (
+    <div className="group" key={g.tier ? g.label : g.folders[0]}>
+      {g.tier ? (
+        <div className="tier">
+          {g.label}
+          <span>{g.rows.length}</span>
+        </div>
+      ) : (
+        <div className="dir module" title={g.folders.join("\n")}>
+          <bdi>{g.label}</bdi>
+          {g.mixed && <span className="roots">src and tests</span>}
+        </div>
+      )}
+      {g.rows.map((r) =>
+        "slot" in r ? (
+          <div className="slot-empty" key={`slot:${r.lead}`}>
+            <span>
+              <span className="tie" />
+              {r.slot}
+            </span>
+            <span className="why">no test change</span>
+          </div>
+        ) : (
+          fileRow(list, r.file.path, r.file, { hint: r.hint, suffix: r.suffix })
+        ),
+      )}
+    </div>
+  ));
 }
 
 function RepoBadges({ repo, up, onMode }: { repo: RepoInfo; up: Upstream | null; onMode(mode: CompareMode): void }) {

@@ -8,7 +8,7 @@ import { isLaunchRequest, type LaunchRequest, launchRequest, loginPath, mergePat
 import { log } from "./log";
 import { setupMenu } from "./menu";
 import { handlePreviewProtocol, registerPreviewScheme } from "./preview";
-import { checkForUpdates, runningAsAppImage } from "./update";
+import { runningAsAppImage, startUpdates } from "./update";
 import { registerZoomIpc, setupZoom } from "./zoom";
 
 function createWindow(repo: Promise<RepoInfo | null>) {
@@ -61,8 +61,8 @@ function createWindow(repo: Promise<RepoInfo | null>) {
 async function openRequest(req: LaunchRequest) {
   const repo = launchRepo(req, false);
   const info = await repo.catch(() => undefined);
-  const existing = info ? windowShowing(info.root) : info === null ? BrowserWindow.getAllWindows()[0] : null;
-  if (!existing) return createWindow(info === null ? launchRepo(req, true) : repo);
+  const existing = info && windowShowing(info.root);
+  if (!existing) return createWindow(repo);
   if (existing.isMinimized()) existing.restore();
   existing.focus();
   if (process.platform === "darwin") app.focus({ steal: true });
@@ -118,7 +118,7 @@ function start(request: LaunchRequest) {
     handlePreviewProtocol();
     setupMenu();
     createWindow(launchRepo(dropped ? { path: dropped, cwd: request.cwd } : request, true));
-    checkForUpdates();
+    startUpdates();
   });
   app.on("window-all-closed", () => app.quit());
 }

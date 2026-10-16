@@ -544,13 +544,14 @@ kbd {
 
 .branch-form {
   display: grid;
-  grid-template-columns: 24px 1fr;
+  grid-template-columns: 24px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   padding: 2px 14px 8px;
 }
 
 .branch-form select {
+  min-width: 0;
   height: 30px;
   padding: 0 8px;
   border: 1px solid var(--rule);
@@ -958,23 +959,21 @@ kbd {
   min-width: 0;
 }
 
+/* the branch drops to a second line before the repo name gets cut */
 .side-head .repo {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
+  gap: 2px 6px;
   min-width: 0;
   text-align: left;
-  white-space: nowrap;
 }
 
 .side-head .repo > * {
-  min-width: 3ch;
+  max-width: 100%;
   overflow: hidden;
+  white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-/* the repo name gives way before the branch does */
-.side-head .repo > span {
-  flex-shrink: 100;
 }
 
 .repo-state {
@@ -1023,7 +1022,6 @@ kbd {
 .side-head .repo small {
   color: var(--graphite);
   font: 400 12px var(--code);
-  margin-left: 6px;
 }
 
 .side-head .repo:hover {
@@ -1050,6 +1048,111 @@ kbd {
   text-overflow: ellipsis;
   direction: rtl;
   text-align: left;
+}
+
+.files .dir.module {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  direction: ltr;
+}
+
+.files .dir.module bdi {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.files .dir .roots {
+  flex: none;
+  font: 400 11.5px var(--ui);
+}
+
+.files .tier {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 12px 16px 3px;
+  color: var(--graphite);
+  font: 500 13px var(--ui);
+}
+
+.files .group:first-child > .tier {
+  padding-top: 2px;
+}
+
+.files .tier span {
+  color: var(--faint);
+  font: 400 11.5px var(--code);
+}
+
+.file .name[data-hint]::after {
+  content: " " attr(data-hint);
+  color: var(--faint);
+}
+
+/* hidden rather than left out, so the row's text is still the file name */
+.file .stem {
+  display: none;
+}
+
+.file.sib {
+  padding-left: 22px;
+}
+
+.file.sib .name {
+  color: var(--graphite);
+}
+
+/* a register mark hanging a sibling off its source */
+.tie {
+  display: inline-block;
+  width: 9px;
+  height: 8px;
+  margin: 0 5px 0 1px;
+  border: solid var(--rule);
+  border-width: 0 0 1px 1px;
+  vertical-align: 3px;
+}
+
+.slot-empty {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  padding: 3px 16px 5px 22px;
+  color: var(--faint);
+  font: italic 400 12px var(--code);
+}
+
+.slot-empty > span:first-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.with-marks .slot-empty {
+  padding-right: 37px;
+}
+
+.slot-empty .why {
+  font: 400 11.5px var(--ui);
+}
+
+.side-count {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.side-head .grouping {
+  color: var(--graphite);
+  font: 400 11.5px var(--ui);
+}
+
+.side-head .grouping:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .file {
@@ -1335,11 +1438,17 @@ svg.mark-partial .half {
   position: relative;
 }
 
-.main:has(> .since) {
+.main:has(> .since),
+.main:has(> .encoding) {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
-.since {
+.main:has(> .since):has(> .encoding) {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.since,
+.encoding {
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
@@ -1351,7 +1460,16 @@ svg.mark-partial .half {
   box-shadow: inset 3px 0 0 var(--focus);
 }
 
-.since p {
+.encoding {
+  height: auto;
+  min-height: 40px;
+  padding-block: 9px;
+  background: var(--frame);
+  box-shadow: inset 3px 0 0 var(--graphite);
+}
+
+.since p,
+.encoding p {
   margin: 0;
 }
 
@@ -1429,6 +1547,40 @@ svg.mark-partial .half {
   color: var(--ink);
 }
 
+/* With copy buttons in the head, the side's label gives way before the file name does. */
+.pane-h > b {
+  flex-shrink: 0;
+  max-width: 40%;
+}
+
+.pane-copy {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pane-copy + .actions {
+  margin-left: 0;
+}
+
+.pane-h .pane-copy .sel-count {
+  color: var(--focus);
+  font: 500 12.5px var(--code);
+}
+
+.pane-copy button {
+  padding: 4px 8px;
+  color: var(--graphite);
+  font: 500 13px var(--ui);
+  white-space: nowrap;
+}
+
+.pane-copy button:hover {
+  color: var(--ink);
+}
+
 .mini-h {
   border-left: 1px solid var(--rule);
   display: grid;
@@ -1502,6 +1654,13 @@ svg.mark-partial .half {
   border-left: 1px solid var(--rule);
 }
 
+/* A text drag stays on the side it started on, and never picks up the diff's own labels. */
+.diff :is(.hunk-head, .fold, .note, .absent, button),
+.diff[data-pick="a"] :is(.cell.b, .pb),
+.diff[data-pick="b"] :is(.cell.a, .pa) {
+  user-select: none;
+}
+
 .cell {
   position: relative;
   padding: 0 10px 0 calc(8px + 2ch);
@@ -1568,12 +1727,17 @@ svg.mark-partial .half {
   font-weight: 600;
 }
 
-.cell::after {
+/* On the text, not the cell, so a row stretched to match the other side gets no marks below its own lines. */
+.cell > .text {
+  position: relative;
+}
+
+.cell > .text::after {
   content: "";
   position: absolute;
   top: var(--row);
   bottom: 0;
-  left: calc(8px + var(--hang, 0ch));
+  left: -2ch;
   width: 1ch;
   background: var(--faint);
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='21'%3E%3Cpath d='M1.5 6v5.5h4.5M4 9l2.5 2.5L4 14' fill='none' stroke='black' stroke-width='1.2'/%3E%3C/svg%3E")
@@ -1664,6 +1828,13 @@ svg.mark-partial .half {
   flex: none;
   font: 400 12px var(--code);
   color: var(--faint);
+  cursor: pointer;
+}
+
+.hh-range:hover {
+  color: var(--ink);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
 }
 
 .hh-ctx {
@@ -2232,6 +2403,19 @@ svg.mark-partial .half {
   border-color: var(--graphite);
 }
 
+.status .update {
+  padding: 1px 8px;
+  border: 1px solid var(--b);
+  border-radius: 3px;
+  color: var(--b-ink);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.status .update:hover {
+  background: var(--b-line);
+}
+
 .status .keys {
   margin-left: auto;
   display: flex;
@@ -2682,4 +2866,428 @@ mark.hit.is-current span[style] {
 
 .keys-foot button:hover {
   color: var(--ink);
+}
+
+/* files in: the drop target takes the B tint, the colour of incoming lines */
+.drop-foot {
+  display: grid;
+  gap: 3px;
+  padding: 11px 16px 14px;
+  border-top: 2px solid var(--b);
+  background: var(--b-line);
+}
+
+.drop-foot .drop-to {
+  font: 500 13px var(--code);
+  color: var(--b-ink);
+  word-break: break-all;
+}
+
+.drop-foot .drop-note {
+  font-size: 12.5px;
+  color: var(--graphite);
+}
+
+.drop-foot.is-ignored {
+  border-top-color: var(--faint);
+  background: var(--frame-2);
+}
+
+.drop-foot.is-ignored .drop-to {
+  color: var(--graphite);
+}
+
+.drop-foot.is-none {
+  border-top-color: var(--rule);
+  background: var(--frame);
+}
+
+.drop-btns {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.drop-foot .btn,
+.clash-bar .btn {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.drop-slots {
+  position: fixed;
+  inset: 52px 0 30px var(--side, 240px);
+  z-index: 5;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  background: color-mix(in srgb, var(--plate) 90%, transparent);
+}
+
+.drop-slots h2 {
+  margin: 0 0 6px;
+  font: 500 19px var(--ui);
+}
+
+.drop-slot {
+  display: grid;
+  gap: 2px;
+  width: min(460px, 80%);
+  padding: 14px 18px;
+  border: 1.5px dashed var(--rule);
+  border-radius: 6px;
+  background: var(--plate);
+}
+
+.drop-slot b {
+  font: 500 15px var(--ui);
+}
+
+.drop-slot code {
+  color: var(--graphite);
+  font: 400 13px var(--code);
+}
+
+.drop-slot.is-hot {
+  border-style: solid;
+  border-color: var(--b);
+  background: var(--b-line);
+}
+
+.drop-slot.is-hot code {
+  color: var(--b-ink);
+}
+
+.drop-slots p {
+  margin: 6px 0 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+.drop-slots * {
+  pointer-events: none;
+}
+
+.drop-slots .drop-slot {
+  pointer-events: auto;
+}
+
+/* a clash is reviewed as a diff: the repository's file (A) against the incoming one (B) */
+.clash-bar {
+  grid-row: 3;
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--frame);
+}
+
+.clash-q {
+  margin-right: auto;
+}
+
+.clash-q code {
+  font: 500 0.92em var(--code);
+}
+
+.clash-q small {
+  margin-left: 8px;
+  color: var(--graphite);
+  font-size: 13px;
+}
+
+.clash-bar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 6px;
+  color: var(--graphite);
+  font-size: 13px;
+}
+
+.clash-bar input {
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+.clash-bar .btn.primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--plate);
+}
+
+.clash-bar ~ .main .hh-actions {
+  display: none;
+}
+
+.clash-wait {
+  grid-row: 4;
+  grid-column: 2;
+  display: grid;
+  place-items: center;
+  color: var(--graphite);
+}
+
+.app.has-notes {
+  grid-template-columns: var(--side, 240px) minmax(0, 1fr) 330px;
+}
+
+.notes-panel {
+  grid-row: 2 / 5;
+  grid-column: 3;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--frame);
+  border-left: 1px solid var(--rule);
+}
+
+.notes-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 14px 16px 10px;
+}
+
+.notes-head b {
+  font-weight: 500;
+}
+
+.notes-head .count,
+.uncovered .count {
+  font: 400 12px var(--code);
+  color: var(--graphite);
+}
+
+.notes-close {
+  margin-left: auto;
+  color: var(--graphite);
+  font-size: 13px;
+}
+
+.notes-close:hover {
+  color: var(--ink);
+}
+
+.notes-summary {
+  margin: 0 16px 12px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.notes-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 8px 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.chapters,
+.stops {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chapter {
+  margin-top: 8px;
+  border-radius: 3px;
+}
+
+.chapter.is-current {
+  background: var(--plate);
+  box-shadow:
+    inset 3px 0 0 var(--focus),
+    0 0 0 1px var(--rule);
+}
+
+.chapter-head {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 2px 6px;
+  width: 100%;
+  padding: 8px 8px 9px 4px;
+  border-radius: 3px;
+  text-align: left;
+}
+
+.chapter:not(.is-current) .chapter-head:hover {
+  background: var(--frame-2);
+}
+
+.note-no {
+  grid-row: 1 / 3;
+  text-align: right;
+  font: 500 12px/20px var(--code);
+  color: var(--faint);
+}
+
+.chapter.is-current .note-no {
+  color: var(--focus);
+}
+
+.chapter-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  align-items: baseline;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.note-warn {
+  font: 600 12px var(--ui);
+  color: var(--a-ink);
+}
+
+.chapter-done {
+  font: 400 12px var(--ui);
+  color: var(--faint);
+}
+
+.note-text {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.chapter.is-done .chapter-title,
+.chapter.is-done .note-text {
+  color: var(--faint);
+}
+
+.chapter-body {
+  padding: 0 8px 10px 32px;
+}
+
+.stop {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: 3px;
+  text-align: left;
+}
+
+.stop:hover {
+  background: var(--frame);
+}
+
+.stop.is-current {
+  background: color-mix(in srgb, var(--focus) 12%, var(--plate));
+}
+
+.stop-where {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font: 400 12px/20px var(--code);
+  color: var(--graphite);
+}
+
+.stop.is-current .stop-where {
+  color: var(--focus);
+}
+
+.stop.is-elsewhere .stop-where {
+  color: var(--faint);
+}
+
+.stop-note {
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+.chapter-stage {
+  margin: 8px 0 0 8px;
+}
+
+.uncovered {
+  display: grid;
+  margin-top: 16px;
+  padding: 10px 4px 0 30px;
+  border-top: 1px solid var(--rule);
+  font-size: 13px;
+}
+
+.uncovered b {
+  margin-bottom: 4px;
+  font-weight: 500;
+  color: var(--a-ink);
+}
+
+.uncovered button {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font: 400 12.5px/20px var(--code);
+  text-align: left;
+}
+
+.uncovered button:hover {
+  background: var(--frame-2);
+}
+
+.notes-panel code {
+  font: 400 0.88em var(--code);
+  padding: 0 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--rule) 45%, transparent);
+}
+
+.notes-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--rule);
+  font-size: 12.5px;
+  color: var(--graphite);
+}
+
+.notes-foot kbd {
+  margin: 0;
+}
+
+.notes-foot span {
+  margin-left: 6px;
+}
+
+.row.noted > .ln.b::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 1px;
+  width: 4px;
+  border-right: 2px solid var(--rule);
+}
+
+.row.noted-top > .ln.b::after {
+  top: 3px;
+  border-top: 2px solid var(--rule);
+}
+
+.row.noted-bot > .ln.b::after {
+  bottom: 3px;
+  border-bottom: 2px solid var(--rule);
+}
+
+.row.in-chapter > .ln.b::after {
+  border-color: var(--focus);
+}
+
+.row.split.note-now > .cell.b,
+.row.uni.note-now > .cell {
+  background-image: linear-gradient(color-mix(in srgb, var(--focus) 11%, transparent), color-mix(in srgb, var(--focus) 11%, transparent));
 }

@@ -109,7 +109,7 @@ export function desktopEntry(root, noSandbox) {
   return [
     "[Desktop Entry]",
     "Type=Application",
-    "Name=moire",
+    "Name=Moire",
     "Comment=Review code changes in a git repo",
     `Exec=${quote(join(root, "current", "moire"))}${noSandbox ? " --no-sandbox" : ""} %U`,
     `Icon=${join(root, "current", "resources", "icon.png")}`,
@@ -266,8 +266,9 @@ async function installLinux(asset, version, label) {
   symlinkSync(version, next);
   renameSync(next, join(root, "current"));
   // The previous version stays in case a window from it is still open.
-  for (const old of readdirSync(root)) {
-    if (!old.startsWith(".") && old !== "current" && old !== version && old !== previous) rmSync(join(root, old), { recursive: true, force: true });
+  for (const old of readdirSync(root, { withFileTypes: true })) {
+    const name = old.name;
+    if (old.isDirectory() && !name.startsWith(".") && name !== version && name !== previous) rmSync(join(root, name), { recursive: true, force: true });
   }
 
   const noSandbox = runsWithoutSandbox();

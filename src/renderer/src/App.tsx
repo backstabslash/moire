@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { buildKeymap, command, type CommandId, lookup } from "../../shared/keymap";
-import type { CompareMode, FileContents, FileDiff, Hunk, LineRef, RepoInfo, StageAction, Upstream } from "../../shared/types";
+import type { CompareMode, FileContents, FileDiff, Hunk, LineRef, NoteRange, NotesFile, RepoInfo, StageAction, Upstream } from "../../shared/types";
 import { CommitBox } from "./components/CommitBox";
 import { CommitHead } from "./components/CommitHead";
 import { type Blink, DiffView, type DiffViewHandle, type Preview } from "./components/DiffView";
 import { NoChanges, NoRepo } from "./components/EmptyState";
+import { EncodingNotice } from "./components/EncodingNotice";
 import { FileMenu, type MenuAction, type MenuAt } from "./components/FileMenu";
+import { ClashBar, ClashView, DropFoot, DropSlots, DropStyle, ghostTree } from "./components/FilesIn";
 import { Key, keyText, MAC, setKeymap, useKeymap } from "./components/Key";
 import { KeysHelp } from "./components/KeysHelp";
+import { NotesPanel } from "./components/NotesPanel";
 import { RepoPicker } from "./components/RepoPicker";
 import { SearchBar } from "./components/SearchBar";
 import { StagedNotice, StageProgress } from "./components/StageProgress";
@@ -15,18 +18,22 @@ import { type FilesView, SIDE_WIDTH, Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { DARK_IDS, LIGHT_IDS, THEME_IDS, type ThemeId, toneOf } from "./components/ThemePicker";
 import { Toast, type ToastMsg } from "./components/Toast";
-import { type PickerState, Toolbar } from "./components/Toolbar";
+import { type LastPicked, type PickerState, Toolbar } from "./components/Toolbar";
 import { highlight, warm } from "./highlight/client";
 import type { TokLines } from "./highlight/types";
-import { fileKey as fileKeyOf, fuzzyMatch, hashString, orderFiles, remember } from "./model/files";
+import { fileKey as fileKeyOf, fuzzyMatch, hashString, remember } from "./model/files";
 import { langFor } from "./model/lang";
+import { type Grouping, orderBy } from "./model/paired";
 import { previewOf } from "./model/preview";
-import { buildRows, followHunk, type Layout, type Row, type Scope } from "./model/rows";
-import { copyCode, copyMarkdown } from "./model/copy";
+import { buildRows, followHunk, type Layout, notUtf8, type Row, type Scope, splitLines } from "./model/rows";
+import { type Placed, chapterRefs, placeRange, uncovered } from "../../shared/chapters";
+import { lineKeys, type Mark, rowOfLine, stopsOf } from "./model/notes";
+import { copyCode, copyMarkdown, copySide } from "./model/copy";
 import { strokeOf, sameKey } from "./model/keyboard";
-import { carryKeys, changedRefs, hunkRefs, lineKey } from "./model/selection";
+import { carryKeys, changedRefs, hunkChange, hunkRefs, lineKey } from "./model/selection";
 import { type Hit, hitKeys, hitRow } from "./model/search";
 import { useDiff } from "./useDiff";
+import { isIgnored, useFilesIn } from "./useFilesIn";
 import { useSearch } from "./useSearch";
 import { useSelection } from "./useSelection";
 import { useStored, useStoredNumber } from "./useStored";
@@ -40,6 +47,7 @@ const SEQUENCE_MS = 1000;
 const HOLD_MS = 100;
 // Below this many pixels for the diff, split panes wrap most lines, so split view steps aside.
 const SPLIT_MIN = 1000;
+const NOTES_WIDTH = 330;
 const REMEMBERED_REPOS = 50;
 
 interface Shown {
@@ -74,12 +82,20 @@ export function App() {
   const [booting, setBooting] = useState(true);
   const [simpleMode, setSimpleMode] = useStored<SimpleMode>("mode", "unstaged", ["unstaged", "staged", "all"]);
   const [special, setSpecial] = useState<CompareMode | null>(null);
+  const [lastPicked, setLastPicked] = useState<LastPicked>({});
   const wantMode = useMemo<CompareMode>(() => special ?? { kind: simpleMode }, [special, simpleMode]);
   const [layout, setLayout] = useStored<Layout>("layout", "split", ["split", "unified"]);
   const [sideWidth, setSideWidth] = useStoredNumber("sidebar", SIDE_WIDTH.initial, SIDE_WIDTH.min, SIDE_WIDTH.max);
   const [winWidth, setWinWidth] = useState(innerWidth);
   const side = Math.min(sideWidth, Math.max(SIDE_WIDTH.min, Math.round(winWidth / 2)));
-  const narrow = winWidth - side < SPLIT_MIN;
+  const [notesFile, setNotesFile] = useState<NotesFile | null>(null);
+  const [notesPref, setNotesPref] = useStored<"on" | "off">("notes", "on", ["on", "off"]);
+  const [stopAt, setStopAt] = useState<number | null>(null);
+  const agentNotes = notesFile?.notes?.chapters.length ? notesFile.notes : null;
+  const notesOpen = !!agentNotes && notesPref === "on";
+  const stops = useMemo(() => (agentNotes ? stopsOf(agentNotes) : []), [agentNotes]);
+  const currentStop = stopAt !== null && stopAt < stops.length ? stopAt : null;
+  const narrow = winWidth - side - (notesOpen ? NOTES_WIDTH : 0) < SPLIT_MIN;
   const [splitAnyway, setSplitAnyway] = useState(false);
   if (splitAnyway && !narrow) setSplitAnyway(false);
   const autoUnified = layout === "split" && narrow && !splitAnyway;
@@ -128,8 +144,9 @@ export function App() {
   const [filesView, setFilesView] = useStored<FilesView>("files", "changed", ["changed", "all"]);
   const browsing = useRef(filesView === "all");
   browsing.current = filesView === "all";
+  const [grouping, setGrouping] = useStored<Grouping>("grouping", "paired", ["paired", "folder"]);
   const hidden = useCallback((m: CompareMode, f: FileDiff) => m.kind === "all" && hideStaged === "on" && f.staged === "full", [hideStaged]);
-  const visible = (m: CompareMode, files: FileDiff[]) => orderFiles(files).filter((f) => !hidden(m, f));
+  const visible = (m: CompareMode, files: FileDiff[]) => orderBy(grouping, files).filter((f) => !hidden(m, f));
   const { mode, diff, loadedAt, fresh, refreshTick, refresh, reset, busy, acting, startActing, settle } = useDiff(repo, wantMode, {
     async prefetch(root, m, result) {
       const open = result.files.find((f) => f.path === activeRef.current);
@@ -175,7 +192,7 @@ export function App() {
   );
   const want = changedFile ?? browsedFile;
   const wantKey = useMemo(() => (want ? fileKeyOf(modeKey, want) : null), [want, modeKey]);
-  const files = useMemo(() => orderFiles(diff?.files ?? []), [diff]);
+  const files = useMemo(() => orderBy(grouping, diff?.files ?? []), [diff, grouping]);
   shownFiles.current = files.map((f) => f.path);
   const browsedSearch = useMemo(() => (browsedFile && browsedData ? { file: browsedFile, contents: browsedData } : null), [browsedFile, browsedData]);
   const search = useSearch(repo, mode, modeKey, files, active, browsedSearch, (e) => setError(message(e)));
@@ -190,6 +207,31 @@ export function App() {
       stale = true;
     };
   }, [repo, refreshTick]);
+
+  const notesProblem = useRef("");
+  // The working notes tell the story of what's uncommitted, a commit keeps its own, and branch comparisons have none.
+  const notesFor = mode.kind === "commit" ? mode.sha : mode.kind === "branches" ? null : "working";
+  useEffect(() => {
+    setStopAt(null);
+  }, [notesFor]);
+  useEffect(() => {
+    if (!repo) return;
+    if (notesFor === null) return setNotesFile(null);
+    let stale = false;
+    window.moire.notes(repo.root, notesFor === "working" ? undefined : notesFor).then(
+      (next) => {
+        if (stale) return;
+        setNotesFile((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
+        const problem = next.problem ?? "";
+        if (problem && problem !== notesProblem.current) setToast({ text: problem, undo: false });
+        notesProblem.current = problem;
+      },
+      (e) => !stale && setError(message(e)),
+    );
+    return () => {
+      stale = true;
+    };
+  }, [repo, refreshTick, notesFor]);
 
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -366,6 +408,7 @@ export function App() {
   }, [file, focusHunk]);
 
   const previewable = useMemo(() => (file ? previewOf(file) : null), [file]);
+  const undecoded = useMemo(() => !!file && notUtf8(file, fileContents), [file, fileContents]);
   const diffVersion = diff?.version ?? "";
   const preview: Preview | null =
     repo && fileKey && previewable && (previewable.forced || previewPref === "on")
@@ -385,8 +428,21 @@ export function App() {
     [file, fileContents, shownLayout, scope, expanded, blinkHunk],
   );
   const hunkRows = useMemo(() => rows.flatMap((r, i) => (r.t === "hunk" ? [i] : [])), [rows]);
+  const bLines = useMemo(() => splitLines(fileContents?.b ?? null), [fileContents]);
+  const fileMarks = useMemo(() => {
+    if (!agentNotes || !file) return null;
+    const marks: Mark[] = [];
+    stops.forEach(({ chapter, range }, stop) => {
+      const r = agentNotes.chapters[chapter].ranges[range];
+      if (r.path !== file.path) return;
+      const at = placeRange(r, bLines);
+      if (at && at !== "lost") marks.push({ ...at, chapter, stop });
+    });
+    return marks.length ? marks : null;
+  }, [agentNotes, stops, file, bLines]);
 
   const pendingReveal = useRef<Hit | null>(null);
+  const [, setRevealing] = useState(0);
   const reveal = file && pendingReveal.current?.path === file.path ? pendingReveal.current : null;
   const revealRow = reveal ? hitRow(rows, reveal) : -1;
   if (reveal && revealRow < 0) {
@@ -444,6 +500,28 @@ export function App() {
     return () => abort.abort();
   }, [wantKey, wantReady, listed]);
 
+  const pendingNote = useRef<number | null>(null);
+  const [noteTick, setNoteTick] = useState(0);
+  useEffect(() => {
+    const at = pendingNote.current;
+    const stop = at === null ? null : stops[at];
+    const range = stop && agentNotes?.chapters[stop.chapter].ranges[stop.range];
+    if (!stop || !range || !file || file.path !== range.path || (range.code && !fileContents && !file.binary)) return;
+    const placed = placeRange(range, bLines);
+    const index = placed && placed !== "lost" ? rowOfLine(rows, placed.start) : (hunkRows[0] ?? 0);
+    if (placed && placed !== "lost" && index < 0) {
+      const keys = lineKeys(rows, file.hunks, placed.start);
+      pendingNote.current = keys.length && !keys.every((k) => expanded.has(k)) ? at : null;
+      if (pendingNote.current !== null) setExpanded((cur) => new Set([...cur, ...keys]));
+      return;
+    }
+    pendingNote.current = null;
+    if (placed === "lost") notify(`Chapter ${stop.chapter + 1}'s lines in ${range.path.split("/").pop()} changed since it was written`);
+    const row = rows[index];
+    if (row && "hunk" in row && row.hunk >= 0) setFocusHunk(row.hunk);
+    requestAnimationFrame(() => viewRef.current?.scrollToRow(index, "start"));
+  }, [rows, file, fileContents, noteTick]);
+
   const allHidden = files.length > 0 && files.every((f) => hidden(mode, f));
   const hideStagedFiles = (hide: boolean) => {
     setHideStaged(hide ? "on" : "off");
@@ -461,10 +539,11 @@ export function App() {
   const commitInput = useRef<HTMLTextAreaElement>(null);
   const focusCommit = useRef(false);
 
-  const { selection, select, extend, clear, carry } = useSelection(rows);
+  const { selection, col: selCol, whole, hunks: pickedHunks, select, selectAll, pick, extend, clear, carry } = useSelection(rows);
   const [selectedIn, setSelectedIn] = useState({ key: fileKey, view: shownView, rows });
   if (selectedIn.rows !== rows) {
-    if (selectedIn.key !== fileKey) carry(selectedIn.view === shownView && selection.size ? carryKeys(selectedIn.rows, rows, selection) : null);
+    if (selectedIn.key !== fileKey && !(whole && selectedIn.view === shownView))
+      carry(selectedIn.view === shownView && selection.size ? carryKeys(selectedIn.rows, rows, selection) : null);
     setSelectedIn({ key: fileKey, view: shownView, rows });
   }
 
@@ -480,11 +559,21 @@ export function App() {
     search.setOpen(false);
     searchInput.current?.blur();
   }, [search.setOpen]);
+  // The search bar takes room above the diff, so the scroll moves by its height and the lines stay put.
+  const searchHeight = useRef(0);
+  useLayoutEffect(() => {
+    const height = search.open ? (searchInput.current?.closest<HTMLElement>(".search")?.offsetHeight ?? 0) : 0;
+    const el = viewRef.current?.scroller();
+    if (el) el.scrollTop += height - searchHeight.current;
+    searchHeight.current = height;
+  }, [search.open]);
 
   useEffect(() => {
     if (!search.revealTick || !search.current) return;
     pendingReveal.current = search.current;
+    // The hit's folds open while rendering, so a hit in the open file needs a render of its own.
     if (search.current.path !== active) setActive(search.current.path);
+    else setRevealing((n) => n + 1);
   }, [search.revealTick]);
 
   useEffect(() => {
@@ -500,11 +589,17 @@ export function App() {
 
   const actions = mode.kind === "unstaged" || mode.kind === "staged" ? mode.kind : null;
   const notify = useCallback((text: string, undo = false) => setToast({ text, undo }), []);
+  const writable = diff?.b.kind === "worktree";
+  const filesIn = useFilesIn({ repo, writable, tree, view: filesView, onView: showFiles, open: active, notify, startActing, settle });
+  const dropDir = filesIn.clash?.plan.dir ?? filesIn.drag?.target ?? null;
+  const dropIgnored = dropDir !== null && isIgnored(tree, dropDir);
+  const sideTree = useMemo(() => ghostTree(tree, filesIn.clash), [tree, filesIn.clash]);
 
   // Stage and unstage presses that land while one runs wait their turn; each acts on what's focused when it starts.
   const queued = useRef<{ action: StageAction; root: string; mode: "unstaged" | "staged" }[]>([]);
   const act = async (action: StageAction, target: number | "file" | null, press?: (typeof queued.current)[number]) => {
     if (!repo || !file || !actions) return;
+    if (whole && target === null) target = "file";
     if (press && (press.root !== repo.root || press.mode !== actions)) {
       queued.current = [];
       return;
@@ -521,7 +616,9 @@ export function App() {
       const changed = changedRefs(file, selection);
       if (target === null && selection.size && !changed.length) return notify("No changed lines selected");
       const picked = changed.filter((r) => target === null || r.hunk === target);
-      lines = picked.length ? picked : hunkRefs(file, target ?? focusHunk);
+      // A selection that stands for whole hunks only holds one side of each, and half a hunk is never what was meant.
+      const widened = whole || pickedHunks ? [...new Set(picked.map((r) => r.hunk))].flatMap((h) => hunkRefs(file, h)) : picked;
+      lines = widened.length ? widened : hunkRefs(file, target ?? focusHunk);
     }
     startActing();
     try {
@@ -596,7 +693,22 @@ export function App() {
     return () => window.removeEventListener("keyup", onUp);
   }, []);
 
+  const sideLines = useMemo(() => ({ a: copySide(fileContents, "a")?.count ?? null, b: copySide(fileContents, "b")?.count ?? null }), [fileContents]);
+  const copiedFile = (name: string | undefined, count: number) => notify(`Copied ${name}, ${count} ${count === 1 ? "line" : "lines"}`);
+  const copyWhole = (side: "a" | "b") => {
+    const picked = copySide(fileContents, side);
+    if (!file || !picked) return notify("This side has no text to copy");
+    const name = (side === "a" ? (file.oldPath ?? file.path) : file.path).split("/").pop();
+    window.moire.copy(picked.text).then(
+      () => copiedFile(name, picked.count),
+      (e) => notify(message(e)),
+    );
+  };
+  const copyWholeRef = useRef(copyWhole);
+  copyWholeRef.current = copyWhole;
+  const onCopySide = useCallback((side: "a" | "b") => copyWholeRef.current(side), []);
   const copy = (format: "code" | "markdown", hunk?: number) => {
+    if (format === "code" && hunk === undefined && whole) return copyWhole(whole);
     let picked = hunk === undefined ? selection : new Set([...selection].filter((key) => key.startsWith(`${hunk}:`)));
     const focused = file?.hunks[focusHunk];
     if (!picked.size && format === "markdown" && focused) picked = new Set(focused.lines.map((_, i) => lineKey(focusHunk, i)));
@@ -613,6 +725,15 @@ export function App() {
   const copyRef = useRef(copy);
   copyRef.current = copy;
   const onCopy = useCallback((format: "code" | "markdown", hunk: number) => copyRef.current(format, hunk), []);
+  const onCopyLines = useCallback(() => copyRef.current("code"), []);
+  const pickHunk = useCallback(
+    (hunk: number) => {
+      if (!file) return;
+      const { side, keys } = hunkChange(file, hunk);
+      pick(keys, shownLayout === "split" ? side : "u", true);
+    },
+    [file, shownLayout, pick],
+  );
 
   const undo = useCallback(async () => {
     if (!repo) return;
@@ -648,6 +769,83 @@ export function App() {
     }
     settle();
   }, [repo, notify, startActing, settle]);
+
+  const notesHelp = () =>
+    notify(
+      notesFor === "working"
+        ? `No agent notes yet. An agent writes them to ${notesFile?.path ?? ".git/moire/notes.json"}`
+        : `No agent notes for this ${notesFor ? "commit" : "comparison"}`,
+    );
+  const rangeAt = (index: number) => {
+    const stop = stops[index];
+    return stop && agentNotes?.chapters[stop.chapter].ranges[stop.range];
+  };
+  const shownPaths = useMemo(() => new Set(files.map((f) => f.path)), [files]);
+  const goToStop = (index: number) => {
+    const range = rangeAt(index);
+    if (!range) return;
+    setStopAt(index);
+    setNotesPref("on");
+    if (filesView !== "all" && !shownPaths.has(range.path)) return notify(`${range.path} has no changes in this view`);
+    pendingNote.current = index;
+    setNoteTick((t) => t + 1);
+    if (range.path !== active) setActive(range.path);
+  };
+  // Steps over ranges in files with nothing left to review here, such as a chapter already staged.
+  const stepNote = (delta: number) => {
+    if (!agentNotes) return notesHelp();
+    let next = currentStop === null ? (delta > 0 ? 0 : stops.length - 1) : currentStop + delta;
+    while (next >= 0 && next < stops.length && filesView !== "all" && !shownPaths.has(rangeAt(next)!.path)) next += delta;
+    if (next < 0 || next >= stops.length) return notify(delta > 0 ? "That was the last chapter" : "That was the first chapter");
+    goToStop(next);
+  };
+  const chapterTargets = (chapter: number) =>
+    files.flatMap((f): { file: FileDiff; lines: LineRef[] | null }[] => {
+      // The open file is placed against what's shown; the rest against the work tree, as read with the notes.
+      const place = (r: NoteRange, c: number, i: number) =>
+        f.path === file?.path && bLines ? placeRange(r, bLines) : (notesFile?.placed?.[c]?.[i] ?? placeRange(r, null));
+      const found = (p: Placed | "lost" | null): p is Placed | null => p !== "lost";
+      const inFile = (c: number) => (agentNotes?.chapters[c].ranges ?? []).flatMap((r, i) => (r.path === f.path ? [place(r, c, i)] : []));
+      const mine = inFile(chapter);
+      if (!mine.length) return [];
+      if (mine.includes(null)) return [{ file: f, lines: null }];
+      const all = (agentNotes?.chapters ?? []).flatMap((_, c) => inFile(c)).filter(found);
+      const lines = chapterRefs(f, mine.filter(found), all);
+      return lines.length ? [{ file: f, lines }] : [];
+    });
+  // Only against the work tree: in the staged view or a commit, a chapter missing from the diff isn't done, just elsewhere.
+  const againstWorktree = mode.kind === "unstaged" || mode.kind === "all";
+  const doneChapters = useMemo(
+    () => new Set(againstWorktree ? (agentNotes?.chapters.flatMap((_, c) => (chapterTargets(c).length ? [] : [c])) ?? []) : []),
+    [againstWorktree, agentNotes, notesFile, files, file, bLines],
+  );
+  const notCovered = useMemo(() => (agentNotes ? uncovered(files, agentNotes, notesFile?.placed) : []), [agentNotes, notesFile, files]);
+  const stageChapter = async (chapter: number) => {
+    if (!repo || actions !== "unstaged" || acting.current) return;
+    const targets = chapterTargets(chapter);
+    if (!targets.length) return notify("Nothing left to stage in this chapter");
+    startActing();
+    try {
+      for (const t of targets) await window.moire.act(repo.root, { mode: "unstaged", action: "stage", file: t.file, lines: t.lines });
+      const n = targets.length;
+      notify(`Staged chapter ${chapter + 1} in ${n} ${n === 1 ? "file" : "files"}${n > 1 ? `. ${k("undo")} undoes one file at a time.` : ""}`);
+      advanceFrom.current = chapter;
+    } catch (e) {
+      notify(message(e));
+    }
+    clear();
+    settle();
+  };
+  // Once the staged lines have left the diff, move on to the next chapter with changes left here.
+  const advanceFrom = useRef<number | null>(null);
+  useEffect(() => {
+    const from = advanceFrom.current;
+    if (from === null || busy) return;
+    advanceFrom.current = null;
+    const next = stops.findIndex((s, i) => s.chapter > from && !doneChapters.has(s.chapter) && shownPaths.has(rangeAt(i)!.path));
+    if (next >= 0) goToStop(next);
+    else setStopAt(null);
+  }, [busy]);
 
   const selectFile = useCallback(
     (delta: number, focus: "first" | "last" | null = null) => {
@@ -692,10 +890,13 @@ export function App() {
     (info: RepoInfo | null) => {
       if (!info) return;
       setSpecial(null);
+      setLastPicked({});
       reset();
       setFilters({ changed: "", all: "" });
       setActive(null);
       setCommitted(null);
+      setNotesFile(null);
+      setStopAt(null);
       setRepo(info);
     },
     [reset],
@@ -767,9 +968,16 @@ export function App() {
     const run: Record<MenuAction, () => Promise<unknown>> = {
       copy: () => window.moire.copy(path).then(done(`Copied ${path}`)),
       "copy-abs": () => window.moire.copy(`${repo.root}/${path}`).then(done(`Copied ${repo.root}/${path}`)),
+      "copy-contents": async () => {
+        const picked = copySide(await window.moire.fileContents(repo.root, { kind: "unstaged" }, { path, status: "unchanged" }), "b");
+        if (!picked) return notify(`${name} is binary, over 2 MB or not on disk, so there's no text to copy`);
+        await window.moire.copy(picked.text);
+        copiedFile(name, picked.count);
+      },
       reveal: () => window.moire.revealFile(repo.root, path),
       editor: () => window.moire.openInEditor(repo.root, path, line).then((editor) => notify(`Opened in ${editor}`)),
       open: () => window.moire.openWithDefault(repo.root, path).then(done(`Opened ${name}`)),
+      "copy-here": () => filesIn.pickInto(menu.path),
     };
     run[action]().catch(fail);
   };
@@ -783,6 +991,7 @@ export function App() {
         setSimpleMode(m.kind);
       } else {
         setSpecial(m);
+        setLastPicked((p) => ({ ...p, [m.kind]: m }));
       }
     },
     [setSimpleMode],
@@ -800,6 +1009,10 @@ export function App() {
     prevHit: () => search.step(-1),
     filterFiles: () => filterInput.current?.focus(),
     allFiles: () => showFiles(filesView === "all" ? "changed" : "all"),
+    grouping: () => setGrouping(grouping === "paired" ? "folder" : "paired"),
+    nextNote: () => stepNote(1),
+    prevNote: () => stepNote(-1),
+    notes: () => (agentNotes ? setNotesPref(notesOpen ? "off" : "on") : notesHelp()),
     recentRepos: () => setRepoPicker(true),
     openRepo: pickRepo,
     stage: () =>
@@ -821,12 +1034,18 @@ export function App() {
     cancel: () => (blink ? setBlink(null) : selection.size ? clear() : closeSearch()),
     copyMarkdown: () => copyRef.current("markdown"),
     copyCode: () => copyRef.current("code"),
+    selectAll: () => {
+      if (!file || !rows.some((r) => r.t === "split" || r.t === "uni")) return;
+      window.getSelection()?.removeAllRanges();
+      selectAll(viewRef.current?.side?.() ?? (file.status === "deleted" ? "a" : "b"));
+    },
+    pasteFiles: () => void filesIn.paste(),
     compare: () => setPicker("main"),
     unstaged: () => setMode({ kind: "unstaged" }),
     staged: () => setMode({ kind: "staged" }),
     all: () => setMode({ kind: "all" }),
-    commit: () => setPicker("commit"),
-    branches: () => setPicker("branches"),
+    commit: () => (special?.kind !== "commit" && lastPicked.commit ? setMode(lastPicked.commit) : setPicker("commit")),
+    branches: () => (special?.kind !== "branches" && lastPicked.branches ? setMode(lastPicked.branches) : setPicker("branches")),
     layout: () => chooseLayout(shownLayout === "split" ? "unified" : "split"),
     fullFile: () => setScope(scope === "full" ? "changed" : "full"),
     preview: () => (previewable && !previewable.forced ? togglePreview() : notify("Only Markdown and SVG files switch between preview and diff")),
@@ -939,6 +1158,7 @@ export function App() {
       theme={theme}
       cvd={cvd === "on"}
       picker={picker}
+      lastPicked={lastPicked}
       onPicker={setPicker}
       onMode={setMode}
       onLayout={chooseLayout}
@@ -946,6 +1166,8 @@ export function App() {
       onTheme={setTheme}
       onCvd={(on) => setCvd(on ? "on" : "off")}
       onSearch={openSearch}
+      notes={agentNotes ? { open: notesOpen } : null}
+      onNotes={() => setNotesPref(notesOpen ? "off" : "on")}
     />
   );
   const keysHelp = help && <KeysHelp onClose={closeHelp} onEdit={() => runCommand("editKeys")} />;
@@ -964,7 +1186,7 @@ export function App() {
   }
 
   return (
-    <div className="app" aria-busy={busy}>
+    <div className={`app${notesOpen ? " has-notes" : ""}`} aria-busy={busy}>
       {toolbar}
       {diff ? (
         <>
@@ -987,9 +1209,12 @@ export function App() {
             upstream={upstream}
             view={filesView}
             onView={showFiles}
+            grouping={grouping}
+            onGrouping={setGrouping}
             files={listed}
             changed={files}
-            tree={tree}
+            tree={sideTree}
+            refreshTick={refreshTick}
             active={active}
             hitCounts={search.counts}
             fresh={fresh}
@@ -1004,7 +1229,8 @@ export function App() {
             width={side}
             onWidth={setSideWidth}
           >
-            {diff.progress && diff.progress.total > 0 && (
+            <DropFoot drag={filesIn.drag} clash={filesIn.clash} writable={writable} ignored={dropIgnored} onCancel={filesIn.cancel} />
+            {!filesIn.drag && !filesIn.clash && diff.progress && diff.progress.total > 0 && (
               <StageProgress
                 staged={diff.progress.staged}
                 total={diff.progress.total}
@@ -1014,7 +1240,7 @@ export function App() {
                 stageAll={actions === "unstaged" && files.length ? { label: allLabel("Stage"), busy, run: stageAll } : null}
               />
             )}
-            {mode.kind === "staged" && (
+            {!filesIn.drag && !filesIn.clash && mode.kind === "staged" && (
               <CommitBox
                 inputRef={commitInput}
                 message={draft}
@@ -1035,10 +1261,16 @@ export function App() {
               />
             )}
           </Sidebar>
-          {!file && (!files.length || allHidden) && (
+          {!file && !filesIn.clash && (!files.length || allHidden) && (
             <NoChanges mode={mode} {...emptyCopy} onBranches={() => setPicker("branches")} onAllFiles={() => showFiles("all")} />
           )}
-          {file && (
+          {filesIn.clash && (
+            <>
+              <ClashBar clash={filesIn.clash} onDecide={filesIn.decide} onCancel={filesIn.cancel} />
+              <ClashView key={filesIn.clash.clashes[filesIn.clash.at].dest} clash={filesIn.clash} layout={shownLayout} scope={scope} />
+            </>
+          )}
+          {file && !filesIn.clash && (
             <DiffView
               key={`${modeKey}:${file.path}`}
               ref={viewRef}
@@ -1057,6 +1289,10 @@ export function App() {
               tokens={fileTokens}
               focusHunk={focusHunk}
               selection={selection}
+              selCol={selCol}
+              wholeHunks={!!whole || pickedHunks}
+              selLines={whole ? (sideLines[whole] ?? selection.size) : selection.size}
+              sideLines={sideLines}
               hits={search.inFile}
               currentHit={search.current}
               find={search.find}
@@ -1066,22 +1302,50 @@ export function App() {
               onSelect={select}
               onAct={onAct}
               onCopy={onCopy}
+              onCopyLines={onCopyLines}
+              onCopySide={onCopySide}
+              onPickHunk={pickHunk}
+              onTextSelect={clear}
               onDiscardFile={discardFile}
               preview={preview}
               onTogglePreview={previewable && !previewable.forced ? togglePreview : null}
               blink={blink}
               onBlink={toggleBlink}
               onMenu={openMenu}
-              notice={file.changedSinceStaged && <StagedNotice newEdits={diff.a.kind === "index"} onMode={setMode} />}
+              notice={
+                <>
+                  {file.changedSinceStaged && <StagedNotice newEdits={diff.a.kind === "index"} onMode={setMode} />}
+                  {!preview && undecoded && <EncodingNotice staging={!!actions && file.status !== "unchanged"} />}
+                </>
+              }
+              notes={notesOpen && fileMarks ? { marks: fileMarks, chapter: currentStop === null ? null : stops[currentStop].chapter, stop: currentStop } : null}
+            />
+          )}
+          {notesOpen && agentNotes && (
+            <NotesPanel
+              notes={agentNotes}
+              stops={stops}
+              stop={currentStop}
+              shown={shownPaths}
+              done={doneChapters}
+              uncovered={notCovered}
+              onStop={goToStop}
+              onStage={actions === "unstaged" ? (c) => void stageChapter(c) : null}
+              onOpen={setActive}
+              onClose={() => setNotesPref("off")}
             />
           )}
         </>
       ) : (
         <div className="loading" />
       )}
-      <StatusBar loadedAt={loadedAt} files={files} error={error} actions={actions} zoom={zoom} onCommand={runCommand} />
+      <DropSlots drag={filesIn.drag} slots={filesIn.slots} writable={writable} />
+      <DropStyle drag={filesIn.drag} clash={filesIn.clash} ignored={dropIgnored} />
+      <StatusBar loadedAt={loadedAt} files={files} error={error} actions={actions} zoom={zoom} notes={!!agentNotes} onCommand={runCommand} />
       <Toast toast={toast} onUndo={undo} />
-      {menu && <FileMenu at={menu} onDisk={files.find((f) => f.path === menu.path)?.status !== "deleted"} onPick={pickMenu} onClose={closeMenu} />}
+      {menu && (
+        <FileMenu at={menu} onDisk={files.find((f) => f.path === menu.path)?.status !== "deleted"} copyHere={writable} onPick={pickMenu} onClose={closeMenu} />
+      )}
       {repoPicker && <RepoPicker current={repo.root} onOpen={openRecent} onBrowse={pickRepo} onClose={closeRepoPicker} />}
       {keysHelp}
     </div>

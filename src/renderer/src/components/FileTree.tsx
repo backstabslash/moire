@@ -25,7 +25,13 @@ export interface ListState {
   onMenu(path: string, event: MouseEvent): void;
 }
 
-export function fileRow(list: ListState, path: string, f: FileDiff | undefined, opts: { depth?: number; ignored?: boolean } = {}) {
+export function fileRow(
+  list: ListState,
+  path: string,
+  f: FileDiff | undefined,
+  opts: { depth?: number; ignored?: boolean; hint?: string; suffix?: string } = {},
+) {
+  const name = path.split("/").pop()!;
   const isFresh = !!f && !!list.fresh?.paths.has(path);
   const isActive = path === list.active;
   const cls = [
@@ -39,6 +45,7 @@ export function fileRow(list: ListState, path: string, f: FileDiff | undefined, 
     f?.staged === "full" && "is-staged",
     !f && "is-unchanged",
     opts.ignored && "is-ignored",
+    opts.suffix && "sib",
   ];
   const mode = f && modeNote(f);
   const mark = f?.changedSinceStaged ? "changed" : f?.staged === "full" || f?.staged === "partial" ? f.staged : null;
@@ -53,10 +60,22 @@ export function fileRow(list: ListState, path: string, f: FileDiff | undefined, 
       style={opts.depth !== undefined ? { paddingLeft: 32 + opts.depth * INDENT } : undefined}
       aria-current={isActive}
       title={title}
+      data-path={path}
+      draggable={f?.status !== "deleted"}
       onClick={() => list.onSelect(path)}
       onContextMenu={(e) => list.onMenu(path, e)}
     >
-      <span className="name">{path.split("/").pop()}</span>
+      <span className="name" data-hint={opts.hint}>
+        {opts.suffix ? (
+          <>
+            <span className="tie" />
+            <span className="stem">{name.slice(0, name.length - opts.suffix.length)}</span>
+            {opts.suffix}
+          </>
+        ) : (
+          name
+        )}
+      </span>
       <span className="kind" title={f ? KIND[f.status][1] : undefined}>
         {f ? KIND[f.status][0] : ""}
       </span>
@@ -142,6 +161,7 @@ export function FileTree({ listing, changed, list, folders, onFolders }: Props) 
           className={`tree-dir${d.ignored ? " is-ignored" : ""}${d.path === list.menu ? " is-menu" : ""}`}
           style={{ paddingLeft: 16 + depth * INDENT }}
           aria-expanded={isOpen}
+          data-dir={d.path}
           title={`${d.path}${d.ignored ? "\nIgnored by git" : ""}`}
           onClick={() => toggle(d)}
           onContextMenu={(e) => list.onMenu(d.path, e)}

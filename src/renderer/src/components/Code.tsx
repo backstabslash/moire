@@ -28,7 +28,7 @@ export function hangingIndent(text: string): React.CSSProperties | undefined {
   if (text.length <= WRAP_HINT_MIN || !indent) return undefined;
   let cols = 0;
   for (const ch of text.slice(0, indent)) cols += ch === "\t" ? TAB_WIDTH : 1;
-  return { paddingLeft: `calc(8px + ${cols + 2}ch)`, textIndent: `-${cols + 2}ch`, "--hang": `${cols}ch` } as React.CSSProperties;
+  return { paddingLeft: `calc(8px + ${cols + 2}ch)`, textIndent: `-${cols + 2}ch` };
 }
 
 export function withoutJoins(text: string): string {

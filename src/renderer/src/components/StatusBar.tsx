@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { FileDiff } from "../../../shared/types";
+import type { FileDiff, UpdateNotice } from "../../../shared/types";
 import { type CommandId, COMMANDS, keyLabel } from "../../../shared/keymap";
 import { keyText, MAC, useKeymap } from "./Key";
 import { Mark } from "./Mark";
@@ -19,10 +19,11 @@ interface Props {
   actions: "unstaged" | "staged" | null;
   zoom: number;
   hints?: boolean;
+  notes?: boolean;
   onCommand(id: CommandId): void;
 }
 
-export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true, onCommand }: Props) {
+export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true, notes = false, onCommand }: Props) {
   const keymap = useKeymap();
   const hint = (ids: CommandId[], text: string, run = ids[0]) => {
     const bound = ids.filter((id) => keymap.keys[id].length);
@@ -36,6 +37,11 @@ export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true,
       </button>
     );
   };
+  const [update, setUpdate] = useState<UpdateNotice | null>(null);
+  useEffect(() => {
+    void window.moire.updateNotice().then(setUpdate);
+    return window.moire.onUpdateNotice(setUpdate);
+  }, []);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 5000);
@@ -75,6 +81,7 @@ export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true,
           <span className="keys-list">
             {hint(["nextHunk", "prevHunk"], "hunk")}
             {hint(["prevFile", "nextFile"], "file", "nextFile")}
+            {notes && hint(["prevNote", "nextNote"], "note", "nextNote")}
             {hint(["blinkHold"], "blink", "blink")}
             {actions && hint(["stage"], actions === "staged" ? "unstage" : "stage")}
             {actions === "unstaged" && hint(["discard"], "discard")}
@@ -89,6 +96,15 @@ export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true,
         )}
         {hint(["help"], "all keys")}
       </span>
+      {update && (
+        <button
+          className="update"
+          title={update.manual ? `${update.manual} Opens the release page.` : `Restarts moire on version ${update.version}`}
+          onClick={() => void window.moire.applyUpdate()}
+        >
+          {update.manual ? `Get moire ${update.version}` : "Restart to update"}
+        </button>
+      )}
     </footer>
   );
 }

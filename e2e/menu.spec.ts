@@ -55,7 +55,7 @@ test.afterEach(() => {
 test("right-clicking a file copies its paths", async () => {
   await page.getByTitle(/^site\/index\.html/).click({ button: "right" });
   await expect(menu()).toContainText("site/index.html");
-  await expect(items()).toHaveText(["Copy relative path", "Copy absolute path", /^Show in /, "Open in editor", "Open with default app"]);
+  await expect(items()).toHaveText(["Copy relative path", "Copy absolute path", "Copy contents", /^Show in /, "Open in editor", "Open with default app"]);
   await expect(page.locator(".file.is-menu .name")).toHaveText("index.html");
   await shot("menu-light");
   await page.keyboard.press("Escape");
@@ -88,7 +88,7 @@ test("opens documents with the default app, but not programs", async () => {
 
 test("a deleted file only offers its paths, Escape closes, and the pane header has the same menu", async () => {
   await page.getByTitle(/^site\/old\.html/).click({ button: "right" });
-  await expect(items().and(page.locator(":disabled"))).toHaveText([/^Show in /, "Open in editor", "Open with default app"]);
+  await expect(items().and(page.locator(":disabled"))).toHaveText(["Copy contents", /^Show in /, "Open in editor", "Open with default app"]);
   await page.keyboard.press("Escape");
   await expect(menu()).toBeHidden();
 
@@ -101,7 +101,7 @@ test("a deleted file only offers its paths, Escape closes, and the pane header h
 test("a folder in the tree copies its path without the trailing slash", async () => {
   await page.keyboard.press("a");
   await page.locator(".tree-dir", { hasText: "site" }).click({ button: "right" });
-  await expect(items()).toHaveText(["Copy relative path", "Copy absolute path", /^Show in /]);
+  await expect(items()).toHaveText(["Copy relative path", "Copy absolute path", /^Show in /, "Copy files here…"]);
   await items().first().click();
   expect(await clipboard()).toBe("site");
 });

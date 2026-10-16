@@ -40,6 +40,7 @@ describe("linux install", () => {
   it("points the desktop entry and command at the current version", () => {
     const entry = desktopEntry("/home/u/.local/share/moire", false);
     expect(entry).toContain('Exec="/home/u/.local/share/moire/current/moire" %U');
+    expect(entry).toContain("Name=Moire");
     expect(entry).toContain("StartupWMClass=moire");
     expect(binScript("/home/u/.local/share/moire", true)).toContain('exec "/home/u/.local/share/moire/current/moire" --no-sandbox "$@"');
   });

@@ -13,10 +13,14 @@ export class RepoWatcher {
   private watchers = new Map<string, FSWatcher>();
   private gitDirs = new Set<string>();
   private remotes = "";
+  private notes = "";
   // Directories with no files yet, which ls-files can't report.
   private adopted = new Set<string>();
   private adopting = new Set<Promise<void>>();
   private pending = new Set<string>();
+  // Ignored folders open in the file tree. They're listed rather than diffed, so only entries coming and going count.
+  private open = new Set<string>();
+  private listed = false;
   private gitTouched = false;
   private quiet: NodeJS.Timeout | null = null;
   private maxWait: NodeJS.Timeout | null = null;
@@ -32,10 +36,16 @@ export class RepoWatcher {
     const common = resolve(this.root, commonDir.trim());
     this.gitDirs = new Set([gitDir.trim(), common, join(common, "refs"), join(common, "refs", "heads")]);
     this.remotes = join(common, "refs", "remotes");
+    this.notes = join(gitDir.trim(), "moire");
     await this.sync();
     if (RECURSIVE) return;
     const empty = await git(this.root, ["ls-files", "--others", "--exclude-standard", "--directory", "-z"]);
     await this.adopt(empty.split("\0").flatMap((p) => (p.endsWith("/") ? [join(this.root, p.slice(0, -1))] : [])));
+  }
+
+  setOpen(dirs: string[]): void {
+    this.open = new Set(dirs.filter((d) => !d.split("/").includes("..")).map((d) => join(this.root, d.replace(/\/+$/, ""))));
+    if (!RECURSIVE) void this.sync().catch(() => {});
   }
 
   close(): void {
@@ -51,6 +61,7 @@ export class RepoWatcher {
     const remotes = await readdir(this.remotes, { withFileTypes: true }).catch(() => null);
     if (remotes) dirs.add(this.remotes);
     for (const r of remotes ?? []) if (r.isDirectory()) dirs.add(join(this.remotes, r.name));
+    if ((await lstat(this.notes).catch(() => null))?.isDirectory()) dirs.add(this.notes);
     if (RECURSIVE) {
       dirs.add(this.root);
     } else {
@@ -59,6 +70,7 @@ export class RepoWatcher {
         git(this.root, ["ls-files", "--others", "--exclude-standard", "-z"]),
       ]);
       dirs.add(this.root);
+      for (const dir of this.open) dirs.add(dir);
       for (const path of `${tracked}\0${untracked}`.split("\0")) {
         for (let dir = dirname(path); path && dir !== "." && !dirs.has(join(this.root, dir)); dir = dirname(dir)) dirs.add(join(this.root, dir));
       }
@@ -86,7 +98,7 @@ export class RepoWatcher {
     if (this.watchers.has(dir)) return;
     try {
       const recursive = RECURSIVE && dir === this.root;
-      const w = watch(dir, { recursive }, (_event, name) => this.event(dir, name?.toString() ?? null));
+      const w = watch(dir, { recursive }, (event, name) => this.event(dir, name?.toString() ?? null, event));
       w.on("error", () => {
         w.close();
         this.watchers.delete(dir);
@@ -131,14 +143,15 @@ export class RepoWatcher {
     }
   }
 
-  private event(dir: string, name: string | null) {
+  private event(dir: string, name: string | null, kind = "change") {
     const full = name ? join(dir, name) : dir;
+    if (kind === "rename" && this.open.has(dirname(full))) this.listed = true;
     const inGit = [...this.gitDirs].find((g) => full === g || full.startsWith(g + sep));
     if (inGit) {
       const rel = relative(inGit, full);
       const refs =
         dir === join(inGit, "refs") || ["heads", "remotes"].some((kind) => dir === join(inGit, "refs", kind) || rel.startsWith(join("refs", kind) + sep));
-      const state = GIT_STATE.has(rel) || refs;
+      const state = GIT_STATE.has(rel) || refs || rel === "moire" || rel.startsWith("moire" + sep);
       if (!state) return;
       this.gitTouched = true;
     } else {
@@ -161,10 +174,11 @@ export class RepoWatcher {
     this.quiet = this.maxWait = null;
     const paths = [...this.pending];
     const gitTouched = this.gitTouched;
+    const listed = this.listed;
     this.pending.clear();
-    this.gitTouched = false;
+    this.gitTouched = this.listed = false;
     await Promise.all(this.adopting);
-    if (!gitTouched && (await allIgnored(this.root, paths))) return;
+    if (!gitTouched && !listed && (await allIgnored(this.root, paths))) return;
     if (this.closed) return;
     this.onChange();
     await this.sync().catch(() => {});

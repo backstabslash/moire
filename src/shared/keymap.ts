@@ -27,6 +27,8 @@ export const COMMANDS = {
   prevHit: { keys: ["N"], label: "Previous result", group: "Navigate" },
   filterFiles: { keys: ["p", "Mod+p"], label: "Filter files", group: "Navigate", anywhere: true },
   allFiles: { keys: ["a"], label: "Changed or all files", group: "Navigate" },
+  nextNote: { keys: ["."], label: "Next agent note", group: "Navigate" },
+  prevNote: { keys: [","], label: "Previous agent note", group: "Navigate" },
   recentRepos: { keys: ["o"], label: "Recent repositories", group: "Navigate", noRepo: true },
   openRepo: { keys: ["Mod+o"], label: "Open repository…", group: "Navigate", noRepo: true, anywhere: true },
 
@@ -45,6 +47,8 @@ export const COMMANDS = {
 
   copyMarkdown: { keys: ["c"], label: "Copy as Markdown", group: "Copy" },
   copyCode: { keys: ["Mod+c"], label: "Copy lines", group: "Copy" },
+  selectAll: { keys: ["Mod+a"], label: "Select all lines", group: "Copy" },
+  pasteFiles: { keys: ["Mod+v"], label: "Paste files into the folder", group: "Copy", once: true },
 
   compare: { keys: [], label: "Choose what to compare", group: "View" },
   unstaged: { keys: ["1"], label: "Unstaged", group: "View" },
@@ -53,7 +57,9 @@ export const COMMANDS = {
   commit: { keys: ["4"], label: "Commit…", group: "View" },
   branches: { keys: ["5"], label: "Branch vs branch…", group: "View" },
   layout: { keys: ["v"], label: "Split or unified", group: "View" },
+  grouping: { keys: ["l"], label: "Paired or by folder", group: "View" },
   fullFile: { keys: ["f"], label: "Full file", group: "View" },
+  notes: { keys: ["I"], label: "Agent notes", group: "View" },
   preview: { keys: ["m"], label: "Preview or diff", group: "View" },
   theme: { keys: ["t"], label: "Light or dark theme", group: "View" },
   zoomIn: { keys: ["Mod+="], label: "Zoom in", group: "View", noRepo: true, fixed: true },

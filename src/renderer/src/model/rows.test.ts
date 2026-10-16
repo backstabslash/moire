@@ -3,7 +3,7 @@ import type { FileDiff, Hunk } from "../../../shared/types";
 import { copyCode, copyMarkdown } from "./copy";
 import { fuzzyMatch } from "./files";
 import { modeNote } from "./modes";
-import { align, buildRows, followHunk, type Row } from "./rows";
+import { align, buildRows, followHunk, notUtf8, type Row } from "./rows";
 import { compile, type SearchOptions, searchFile } from "./search";
 
 const opts = { layout: "split" as const, scope: "changed" as const, expanded: new Set<string>() };
@@ -89,6 +89,16 @@ describe("buildRows", () => {
   });
 });
 
+describe("notUtf8", () => {
+  it("spots bytes UTF-8 couldn't decode, in changed lines or the rest of the file", () => {
+    const latin = { ...hunk, lines: hunk.lines.map((l) => (l.kind === "add" ? { ...l, text: "caf�" } : l)) };
+    expect(notUtf8(file([hunk]), { a: oldText, b: newText, tooLarge: false })).toBe(false);
+    expect(notUtf8(file([latin]), null)).toBe(true);
+    expect(notUtf8(file([hunk]), { a: oldText, b: `${newText}na�ve\n`, tooLarge: false })).toBe(true);
+    expect(notUtf8(file([], { status: "unchanged" }), { a: null, b: "�", tooLarge: false })).toBe(true);
+  });
+});
+
 describe("followHunk", () => {
   const at = (oldStart: number, text: string): Hunk => ({ ...hunk, oldStart, lines: [{ kind: "add", text, newNo: oldStart }] });
 
@@ -116,6 +126,13 @@ describe("align", () => {
     expect(pairs[1][1]?.words?.length).toBeGreaterThan(0);
   });
 
+  it("marks the edited words of a long prose line", () => {
+    const prose = "The draft validates and renders every payload from one plan file, with a summary and a Slack text. ".repeat(7);
+    const [[a, b]] = align([side(19, `${prose}Run draft/shield-build/tests/test_plan.py.`)], [side(19, `${prose}Run draft/tests/test_plan.py.`)]);
+    expect(a?.words).toEqual([[prose.length + 10, prose.length + 23]]);
+    expect(b?.words).toEqual([]);
+  });
+
   it("pairs unrelated lines by position, like a rewrite", () => {
     const pairs = align([side(1, "alpha beta"), side(2, "gamma")], [side(1, "totally different"), side(2, "x")]);
     expect(pairs.map(([a, b]) => [a?.no, b?.no])).toEqual([
@@ -138,8 +155,17 @@ describe("copying selected lines", () => {
     const sel = new Set(["g1", "0:4", "0:6", "0:7"]);
     expect(copyMarkdown(file([hunk]), contents, new Set(), sel, sides).text).toBe(
       "src/a.ts line 1 (working tree)\n```typescript\nline 1\n```\n\n" +
-        "src/a.ts line 5 (working tree)\n```diff\n+line five\n```\n\n" +
+        "src/a.ts line 5 (added, working tree)\n```typescript\nline five\n```\n\n" +
         "src/a.ts lines 7–8 (working tree)\n```typescript\nline 7\nline 8\n```\n",
+    );
+  });
+
+  it("keeps a diff block only when the signs say something", () => {
+    const mixed = copyMarkdown(file([hunk]), contents, new Set(), new Set(["0:4", "0:5"]), sides).text;
+    expect(mixed).toBe("src/a.ts lines 5–6 (working tree)\n```diff\n+line five\n line 6\n```\n");
+    const fresh = { ...file([hunk]), status: "untracked" as const };
+    expect(copyMarkdown(fresh, contents, new Set(), new Set(["0:4"]), sides).text).toBe(
+      "src/a.ts line 5 (new file, working tree)\n```typescript\nline five\n```\n",
     );
   });
 

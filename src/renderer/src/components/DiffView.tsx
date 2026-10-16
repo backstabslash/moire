@@ -1,17 +1,19 @@
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { forwardRef, memo, useImperativeHandle, useLayoutEffect, useMemo, useRef } from "react";
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
+import { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CommandId } from "../../../shared/keymap";
 import type { CompareMode, FileDiff, SideInfo, StageAction } from "../../../shared/types";
 import type { TokLines } from "../highlight/types";
+import { type RowPos, textBetween } from "../model/copy";
 import { modeNote } from "../model/modes";
 import type { Layout, Row, Side } from "../model/rows";
 import type { PreviewKind } from "../model/preview";
+import { type Mark, newLineOf, noteClass } from "../model/notes";
 import type { Find, Hit } from "../model/search";
-import { type Col, changedRefs } from "../model/selection";
+import { type Col, changedRefs, hunkRefs } from "../model/selection";
 import type { Range } from "../model/words";
 import type { SelectHow } from "../useSelection";
 import { Code, hangingIndent, withoutJoins } from "./Code";
-import { Key, keyText, useKeymap } from "./Key";
+import { Key, keyText, MAC, useKeymap } from "./Key";
 import { Minimap } from "./Minimap";
 import { ImagePreview, MarkdownPreview } from "./Preview";
 
@@ -19,10 +21,14 @@ const ROW = 21;
 const HUNK_HEAD = 36;
 const FOLD = 28;
 const RESTORE_MS = 300;
+// A gutter drag this close to the scroller's top or bottom scrolls it, faster toward the edge.
+const EDGE = 40;
+const EDGE_SPEED = 30;
 
 export interface DiffViewHandle {
   scrollToRow(index: number, align?: "start" | "center" | "auto"): void;
   scroller(): HTMLDivElement | null;
+  side?(): "a" | "b";
 }
 
 interface Props {
@@ -35,6 +41,11 @@ interface Props {
   tokens: [TokLines | null, TokLines | null] | null;
   focusHunk: number;
   selection: ReadonlySet<string>;
+  selCol: Col | null;
+  // The selection stands for every hunk it touches, so staging acts on those hunks whole.
+  wholeHunks: boolean;
+  selLines: number;
+  sideLines: { a: number | null; b: number | null };
   hits: ReadonlyMap<string, Range[]> | null;
   currentHit: Hit | null;
   find: Find | null;
@@ -44,6 +55,10 @@ interface Props {
   onSelect(key: string, col: Col, how: SelectHow): void;
   onAct(action: StageAction, target: number | "file"): void;
   onCopy(format: "code" | "markdown", hunk: number): void;
+  onCopyLines(): void;
+  onCopySide(side: "a" | "b"): void;
+  onPickHunk(hunk: number): void;
+  onTextSelect(): void;
   onDiscardFile(): void;
   preview: Preview | null;
   onTogglePreview: (() => void) | null;
@@ -51,6 +66,7 @@ interface Props {
   onBlink(hunk: number): void;
   onMenu(path: string, event: React.MouseEvent): void;
   notice?: React.ReactNode;
+  notes?: { marks: Mark[]; chapter: number | null; stop: number | null } | null;
 }
 
 export interface Blink {
@@ -76,6 +92,10 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     tokens,
     focusHunk,
     selection,
+    selCol,
+    wholeHunks,
+    selLines,
+    sideLines,
     hits,
     currentHit,
     find,
@@ -85,6 +105,10 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     onSelect,
     onAct,
     onCopy,
+    onCopyLines,
+    onCopySide,
+    onPickHunk,
+    onTextSelect,
     onDiscardFile,
     preview,
     onTogglePreview,
@@ -92,18 +116,82 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     onBlink,
     onMenu,
     notice,
+    notes,
   } = props;
   const layout = preview?.kind === "image" ? "split" : preview || file.status === "unchanged" ? "unified" : props.layout;
   const onlyB = file.status === "added" || file.status === "untracked" || file.status === "unchanged";
   const scrollRef = useRef<HTMLDivElement>(null);
+  const diffRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<DiffViewHandle>(null);
+  // Rows holding the ends of a text selection stay mounted, or the selection would lose them.
+  const pinned = useRef<number[]>([]);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => (rows[i].t === "hunk" ? HUNK_HEAD : rows[i].t === "fold" ? FOLD : rows[i].t === "note" ? 120 : ROW),
     getItemKey: (i) => rows[i].key,
     overscan: 24,
+    rangeExtractor: (range) => {
+      const shown = defaultRangeExtractor(range);
+      const extra = pinned.current.filter((i) => i < range.count && !shown.includes(i));
+      return extra.length ? [...shown, ...extra].sort((x, y) => x - y) : shown;
+    },
   });
+  const [pick, setPick] = useState<"a" | "b">(file.status === "deleted" ? "a" : "b");
+  const pickSide = (side: "a" | "b") => {
+    if (diffRef.current) diffRef.current.dataset.pick = side;
+    setPick(side);
+  };
+
+  const textSelect = useRef(onTextSelect);
+  textSelect.current = onTextSelect;
+  useEffect(() => {
+    const onChange = () => {
+      const sel = window.getSelection();
+      const diff = diffRef.current;
+      if (!sel || sel.isCollapsed || !diff?.contains(sel.anchorNode)) return void (pinned.current = []);
+      pinned.current = [rowOf(sel.anchorNode), rowOf(sel.focusNode)].filter((i) => i >= 0);
+      textSelect.current();
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => document.removeEventListener("selectionchange", onChange);
+  }, []);
+
+  const stopEdge = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    return () => stopEdge.current?.();
+  }, []);
+  const edgeScroll = (col: Col, start: React.MouseEvent) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stopEdge.current?.();
+    let [x, y] = [start.clientX, start.clientY];
+    let frame = 0;
+    const move = (e: MouseEvent) => {
+      [x, y] = [e.clientX, e.clientY];
+    };
+    const step = () => {
+      const box = el.getBoundingClientRect();
+      const into = y < box.top + EDGE ? y - box.top - EDGE : y > box.bottom - EDGE ? y - box.bottom + EDGE : 0;
+      if (into) {
+        el.scrollTop += Math.sign(into) * Math.ceil(Math.min(1, Math.abs(into) / EDGE) * EDGE_SPEED);
+        const at = document.elementFromPoint(Math.min(box.right - 1, Math.max(box.left + 1, x)), Math.min(box.bottom - 1, Math.max(box.top + 1, y)));
+        const line = at?.closest(".vrow")?.querySelector<HTMLElement>(`[data-line][data-col="${col}"]`);
+        if (line) onSelect(line.dataset.line!, col, "drag");
+      }
+      frame = requestAnimationFrame(step);
+    };
+    const stop = () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", stop);
+      stopEdge.current = null;
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", stop);
+    frame = requestAnimationFrame(step);
+    stopEdge.current = stop;
+  };
 
   // Rows get measured as they render, so a few passes before the first paint land the start row exactly.
   const settling = useRef(initialRow ? 4 : 0);
@@ -171,7 +259,8 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
       if (align === "auto" && offset === scrollRef.current?.scrollTop) return;
       scrollRef.current?.scrollTo({ top: Math.max(0, align === "start" ? offset - 40 : offset) });
     },
-    scroller: () => scrollRef.current,
+    scroller: () => previewRef.current?.scroller() ?? scrollRef.current,
+    side: () => pick,
   }));
 
   const digits = useMemo(() => {
@@ -185,19 +274,41 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
 
   const selCount = useMemo(() => {
     const counts = new Map<number, number>();
-    for (const { hunk } of changedRefs(file, selection)) counts.set(hunk, (counts.get(hunk) ?? 0) + 1);
+    for (const { hunk } of changedRefs(file, selection)) counts.set(hunk, wholeHunks ? hunkRefs(file, hunk).length : (counts.get(hunk) ?? 0) + 1);
     return counts;
-  }, [file, selection]);
+  }, [file, selection, wholeHunks]);
   const picked = useMemo(() => new Set([...selection].filter((k) => !k.startsWith("g")).map((k) => Number(k.split(":")[0]))), [selection]);
 
   const gutter = (e: React.MouseEvent, how: SelectHow) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>("[data-line]");
     if (!el) return;
+    const col = el.dataset.col as Col;
     if (how !== "drag") {
       if (e.button !== 0) return;
       e.preventDefault();
+      window.getSelection()?.removeAllRanges();
+      if (col !== "u") pickSide(col);
+      edgeScroll(col, e);
     }
-    onSelect(el.dataset.line!, el.dataset.col as Col, how);
+    onSelect(el.dataset.line!, col, how);
+  };
+  const mouseDown = (e: React.MouseEvent) => {
+    const side = sideOf(e.target as HTMLElement);
+    if (side && e.button === 0) pickSide(side);
+    gutter(e, e.shiftKey ? "shift" : (MAC ? e.metaKey : e.ctrlKey) ? "toggle" : "click");
+  };
+  const copyText = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    const sel = window.getSelection();
+    if (!sel?.rangeCount || sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    const col: Col = layout === "split" ? pick : "u";
+    const from = rowPos(e.currentTarget, range.startContainer, range.startOffset, col, true);
+    const to = rowPos(e.currentTarget, range.endContainer, range.endOffset, col, false);
+    const native = sel.toString();
+    const text = from && to ? textBetween(rows, col, from, to) : withoutJoins(native);
+    if (text === native) return;
+    e.preventDefault();
+    e.clipboardData.setData("text/plain", text);
   };
 
   const fileAction = (actions || onTogglePreview) && (
@@ -225,9 +336,22 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
       <div className="panes-head" onContextMenu={(e) => onMenu(file.path, e)}>
         {layout === "split" ? (
           <>
-            <PaneHead tag="a" name={file.status === "added" || file.status === "untracked" ? "" : oldName} side={a} />
+            <PaneHead tag="a" name={file.status === "added" || file.status === "untracked" ? "" : oldName} side={a}>
+              <PaneCopy
+                lines={selCol === "a" ? selLines : 0}
+                label={sideLines.a === null ? null : "Copy old version"}
+                onLines={onCopyLines}
+                onFile={() => onCopySide("a")}
+              />
+            </PaneHead>
             <PaneHead tag="b" name={file.status === "deleted" ? "" : file.path} side={b}>
               {modeWords && <span className="pane-mode">{modeWords}</span>}
+              <PaneCopy
+                lines={selCol !== "a" ? selLines : 0}
+                label={sideLines.b === null ? null : "Copy file"}
+                onLines={onCopyLines}
+                onFile={() => onCopySide("b")}
+              />
               {fileAction}
             </PaneHead>
           </>
@@ -238,6 +362,12 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
             <b>{file.path.split("/").pop()}</b>
             <span>{file.status === "unchanged" ? `${b.label}, ${file.path}, unchanged` : file.path}</span>
             {modeWords && <span className="pane-mode">{modeWords}</span>}
+            <PaneCopy
+              lines={selLines}
+              label={sideLines.b !== null ? "Copy file" : sideLines.a !== null ? "Copy old version" : null}
+              onLines={onCopyLines}
+              onFile={() => onCopySide(sideLines.b !== null ? "b" : "a")}
+            />
             {fileAction}
           </div>
         )}
@@ -267,15 +397,12 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
       {!preview && (
         <div className="scroller diff-scroller" ref={scrollRef} onScroll={record} onWheel={() => (restore.current = null)}>
           <div
+            ref={diffRef}
             className={`diff${onlyB ? " only-b" : file.status === "deleted" ? " only-a" : ""}`}
+            data-pick={pick}
             style={{ height: virtualizer.getTotalSize(), "--digits": digits } as React.CSSProperties}
-            onCopy={(e) => {
-              const text = window.getSelection()?.toString() ?? "";
-              if (withoutJoins(text) === text) return;
-              e.preventDefault();
-              e.clipboardData.setData("text/plain", withoutJoins(text));
-            }}
-            onMouseDown={(e) => gutter(e, e.shiftKey ? "shift" : "click")}
+            onCopy={copyText}
+            onMouseDown={mouseDown}
             onMouseOver={(e) => e.buttons === 1 && gutter(e, "drag")}
           >
             {virtualizer.getVirtualItems().map((item) => {
@@ -292,16 +419,18 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
                     row={row}
                     tokens={tokens}
                     focused={isFocused(row, focusHunk)}
-                    sel={selected(row, selection, selCount)}
+                    sel={selected(row, selection, selCount, selCol)}
                     found={findIn(row, hits, currentHit?.path === file.path ? currentHit : null)}
                     actions={actions}
                     copyable={row.t === "hunk" && picked.has(row.hunk)}
                     blinking={!!blink && "hunk" in row && row.hunk === blink.hunk}
+                    note={notes ? noteClass(newLineOf(row), notes.marks, notes.chapter, notes.stop) : ""}
                     onExpand={onExpand}
                     onFocusHunk={onFocusHunk}
                     onAct={onAct}
                     onCopy={onCopy}
                     onBlink={onBlink}
+                    onPickHunk={onPickHunk}
                   />
                 </div>
               );
@@ -355,11 +484,60 @@ function inFocus(row: Row, focusHunk: number) {
   return row.t !== "hunk" && "hunk" in row && row.hunk === focusHunk;
 }
 
-function selected(row: Row, selection: ReadonlySet<string>, counts: Map<number, number>): number {
+// Context lines share a key on both sides, so the selection's column says which side shows it.
+function selected(row: Row, selection: ReadonlySet<string>, counts: Map<number, number>, col: Col | null): number {
   if (row.t === "hunk") return counts.get(row.hunk) ?? 0;
   if (!selection.size || (row.t !== "split" && row.t !== "uni")) return 0;
   const has = (side?: Side) => !!side?.sel && selection.has(side.sel);
-  return row.t === "split" ? (has(row.a) ? 1 : 0) | (has(row.b) ? 2 : 0) : has(row.line) ? 1 : 0;
+  return row.t === "split" ? (has(row.a) && col !== "b" ? 1 : 0) | (has(row.b) && col !== "a" ? 2 : 0) : has(row.line) ? 1 : 0;
+}
+
+function rowOf(node: Node | null): number {
+  const el = node instanceof Element ? node : node?.parentElement;
+  return Number(el?.closest<HTMLElement>(".vrow")?.dataset.index ?? -1);
+}
+
+function sideOf(el: HTMLElement): "a" | "b" | null {
+  const cell = el.closest(".cell");
+  if (!cell) return null;
+  if (cell.classList.contains("a") || cell.classList.contains("del") || cell.closest(".pa")) return "a";
+  if (cell.classList.contains("b") || cell.classList.contains("add") || cell.closest(".pb")) return "b";
+  return null;
+}
+
+// Where a selection boundary falls, as a row and an offset into that row's line on the picked side.
+function rowPos(diff: HTMLElement, node: Node, offset: number, col: Col, start: boolean): RowPos | null {
+  let el = node instanceof Element ? node : node.parentElement;
+  if (el === diff) el = diff.children[start ? offset : offset - 1] ?? null;
+  const index = el ? rowOf(el) : -1;
+  if (index < 0) return null;
+  const cell = el!.closest<HTMLElement>(".cell");
+  const text = cell?.querySelector(".text");
+  if (!cell || !text || (col !== "u" && sideOf(cell) !== col)) return { index };
+  if (!text.contains(node)) return node === cell && offset === 0 ? { index, offset: 0 } : { index };
+  const before = document.createRange();
+  before.setStart(text, 0);
+  before.setEnd(node, offset);
+  return { index, offset: withoutJoins(before.toString()).length };
+}
+
+function PaneCopy({ lines, label, onLines, onFile }: { lines: number; label: string | null; onLines(): void; onFile(): void }) {
+  if (!lines && !label) return null;
+  return (
+    <div className="pane-copy">
+      {lines ? (
+        <>
+          <span className="sel-count">{`${lines} ${lines === 1 ? "line" : "lines"}`}</span>
+          <button onClick={onLines}>
+            Copy lines
+            <Key id="copyCode" />
+          </button>
+        </>
+      ) : (
+        <button onClick={onFile}>{label}</button>
+      )}
+    </div>
+  );
 }
 
 function PaneHead({ tag, name, side, children }: { tag: "a" | "b"; name: string; side: SideInfo; children?: React.ReactNode }) {
@@ -382,11 +560,13 @@ interface RowProps {
   actions: "unstaged" | "staged" | null;
   copyable: boolean;
   blinking: boolean;
+  note: string;
   onExpand(key: string): void;
   onFocusHunk(hunk: number): void;
   onAct(action: StageAction, target: number | "file"): void;
   onCopy(format: "code" | "markdown", hunk: number): void;
   onBlink(hunk: number): void;
+  onPickHunk(hunk: number): void;
 }
 
 const A_LINES = [1.5, 4.5, 7.5].map((y) => `M0 ${y}H1200`).join("");
@@ -402,7 +582,7 @@ function Grating({ shifted }: { shifted: boolean }) {
 }
 
 const RowView = memo(function RowView(props: RowProps) {
-  const { row, tokens, focused, sel, found, actions, copyable, blinking, onExpand, onFocusHunk, onAct, onCopy, onBlink } = props;
+  const { row, tokens, focused, sel, found, actions, copyable, blinking, note, onExpand, onFocusHunk, onAct, onCopy, onBlink, onPickHunk } = props;
   const keymap = useKeymap();
   const hint = (id: CommandId) => (keyText(keymap, id) ? ` (${keyText(keymap, id)})` : "");
   const hold = keyText(keymap, "blinkHold");
@@ -483,7 +663,17 @@ const RowView = memo(function RowView(props: RowProps) {
       }
       return (
         <div className={`hunk-head${focused ? " is-focus" : ""}${sel ? " has-sel" : ""}`} onClick={() => onFocusHunk(row.hunk)}>
-          <span className="hh-range">{row.label}</span>
+          <span
+            className="hh-range"
+            title="Select this hunk's changed lines"
+            onClick={(e) => {
+              e.stopPropagation();
+              onFocusHunk(row.hunk);
+              onPickHunk(row.hunk);
+            }}
+          >
+            {row.label}
+          </span>
           <span className="hh-ctx">{row.ctx}</span>
           <span className="hh-stat">
             <span className="s-add">+{row.adds}</span> <span className="s-del">−{row.dels}</span>
@@ -547,7 +737,7 @@ const RowView = memo(function RowView(props: RowProps) {
         );
       }
       return (
-        <div className={`row split${row.faded ? " is-staged" : ""}`}>
+        <div className={`row split${row.faded ? " is-staged" : ""}${note ? ` ${note}` : ""}`}>
           <SplitCell side="a" line={row.a} kind={row.kind} tokens={tokens?.[0]} sel={!!(sel & 1)} hits={found.a} current={found.curA} />
           <SplitCell side="b" line={row.b} kind={row.kind} tokens={tokens?.[1]} sel={!!(sel & 2)} hits={found.b} current={found.curB} />
         </div>
@@ -557,7 +747,7 @@ const RowView = memo(function RowView(props: RowProps) {
       const toks = row.kind === "del" ? tokens?.[0] : tokens?.[1];
       const line = row.line.sel ? { "data-line": row.line.sel, "data-col": "u" } : {};
       return (
-        <div className={`row uni${row.faded ? " is-staged" : ""}`}>
+        <div className={`row uni${row.faded ? " is-staged" : ""}${note ? ` ${note}` : ""}`}>
           <div className={`ln a ${cls}`} {...line}>
             {row.a ?? ""}
           </div>
@@ -565,14 +755,16 @@ const RowView = memo(function RowView(props: RowProps) {
             {row.b ?? ""}
           </div>
           <div className={`cell ${cls}`} style={hangingIndent(row.line.text)}>
-            <Code
-              text={row.line.text}
-              tokens={toks?.[row.line.no - 1]}
-              words={row.line.words}
-              mark={row.kind === "del" ? "w-del" : "w-add"}
-              hits={found.a}
-              current={found.curA}
-            />
+            <div className="text">
+              <Code
+                text={row.line.text}
+                tokens={toks?.[row.line.no - 1]}
+                words={row.line.words}
+                mark={row.kind === "del" ? "w-del" : "w-add"}
+                hits={found.a}
+                current={found.curA}
+              />
+            </div>
           </div>
         </div>
       );
@@ -606,7 +798,9 @@ function SplitCell({ side, line, kind, tokens, sel, hits, current }: CellProps) 
         {line.no}
       </div>
       <div className={`cell ${side} ${cls}`} style={hangingIndent(line.text)}>
-        <Code text={line.text} tokens={tokens?.[line.no - 1]} words={line.words} mark={side === "a" ? "w-del" : "w-add"} hits={hits} current={current} />
+        <div className="text">
+          <Code text={line.text} tokens={tokens?.[line.no - 1]} words={line.words} mark={side === "a" ? "w-del" : "w-add"} hits={hits} current={current} />
+        </div>
       </div>
     </>
   );
@@ -619,7 +813,9 @@ function PlateSide({ side, line, kind, tokens, hits, current }: Omit<CellProps, 
     <div className={`p${side}`}>
       <div className={`ln ${cls}`}>{line.no}</div>
       <div className={`cell ${cls}`} style={hangingIndent(line.text)}>
-        <Code text={line.text} tokens={tokens?.[line.no - 1]} words={line.words} mark={side === "a" ? "w-del" : "w-add"} hits={hits} current={current} />
+        <div className="text">
+          <Code text={line.text} tokens={tokens?.[line.no - 1]} words={line.words} mark={side === "a" ? "w-del" : "w-add"} hits={hits} current={current} />
+        </div>
       </div>
     </div>
   );
