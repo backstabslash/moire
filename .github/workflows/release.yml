@@ -84,6 +84,6 @@ jobs:
             git log -1 --format=%B "$TAG" > notes.md
           fi
           cat notes.md
-      - run: gh release edit "$TAG" --draft=false --latest --notes-file notes.md
+      - run: gh release edit "$TAG" --draft=false --latest --title "moire ${TAG#v}" --notes-file notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

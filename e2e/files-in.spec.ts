@@ -126,6 +126,9 @@ test("a file dragged over the sidebar opens All files and tints the target folde
   await shot("files-in-slots-light");
 
   await dragTo('.tree-dir[data-dir="docs/"]');
+  await page.mouse.move(40, 300);
+  await page.mouse.move(60, 320);
+  await expect(foot()).toContainText("docs/");
   await endDrag("drop");
   await expect(toast()).toHaveText("Can't read this file. Try Copy files here… or paste it.");
   await expect(page.getByRole("navigation", { name: "Changed files" })).toBeVisible();

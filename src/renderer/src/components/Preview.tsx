@@ -112,7 +112,8 @@ export const MarkdownPreview = forwardRef<DiffViewHandle, MarkdownProps>(functio
         const r = el.getBoundingClientRect();
         const top = r.top - base;
         const hunks = hunksOf(el);
-        if (el.classList.contains("md-chg")) next.push({ kind: "chg", top, height: r.height, hunks });
+        // A change that renders nothing, like an emptied comment, still gets a tick where it sits.
+        if (el.classList.contains("md-chg")) next.push(r.height ? { kind: "chg", top, height: r.height, hunks } : { kind: "cut", top, height: 0, hunks });
         if (el.classList.contains("md-cut")) next.push({ kind: "cut", top: top - CUT_GAP, height: 0, hunks });
         if (el.classList.contains("md-cut-end")) next.push({ kind: "cut", top: top + r.height + CUT_GAP, height: 0, hunks });
       }

@@ -1,19 +1,21 @@
-# moire
+<p align="center">
+  <img src="build/icons/128x128.png" width="96" alt="Moire">
+</p>
 
-[![CI](https://github.com/backstabslash/moire/actions/workflows/ci.yml/badge.svg)](https://github.com/backstabslash/moire/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/backstabslash/moire?color=blue)](https://github.com/backstabslash/moire/releases/latest)
-[![npm](https://img.shields.io/npm/v/@backstabslash/moire?label=npx&color=blue)](https://www.npmjs.com/package/@backstabslash/moire)
-[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-555)](#install)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+<p align="center"><b>Your agent touched 40 files. Read why, keep the good lines, throw out the rest.</b></p>
 
-**Your agent touched 40 files. Read why, keep the good lines, throw back the rest.**
+<p align="center">
+  <a href="https://github.com/backstabslash/moire/actions/workflows/ci.yml"><img src="https://github.com/backstabslash/moire/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/backstabslash/moire/releases/latest"><img src="https://img.shields.io/github/v/release/backstabslash/moire?color=blue" alt="Latest Release"></a>
+  <a href="https://www.npmjs.com/package/@backstabslash/moire"><img src="https://img.shields.io/npm/v/@backstabslash/moire?label=npx&color=blue" alt="npm"></a>
+  <a href="#install"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-555" alt="Platforms"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+</p>
 
-moire is a desktop diff viewer for git, built for reviewing what a coding agent changed. The agent explains its work as chapters beside the diff. You step through them, stage what's right and discard what isn't, down to a single line.
+Moire is a desktop diff viewer for git, built for reviewing what a coding agent changed. The agent explains its work as chapters beside the diff. You step through them, stage what's right and discard what isn't, down to a single line.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="demo/demo-dark.gif">
-  <img alt="moire stepping through an agent's notes on a rate limiter rewrite: reading a chapter and its warning, staging the chapter, blinking a hunk, discarding a stray debug line, then writing the commit" src="demo/demo-light.gif">
-</picture>
+![Moire stepping through an agent's notes on a rate limiter rewrite: reading a chapter and its warning, staging the chapter, blinking a hunk, discarding a stray debug line, then writing the commit](demo/demo-light.gif#gh-light-mode-only)
+![Moire stepping through an agent's notes on a rate limiter rewrite: reading a chapter and its warning, staging the chapter, blinking a hunk, discarding a stray debug line, then writing the commit](demo/demo-dark.gif#gh-dark-mode-only)
 
 ### Read the agent's notes
 
@@ -25,7 +27,7 @@ npx skills add backstabslash/moire -g
 
 It works with Claude Code, Codex, Cursor and other agents that read skills.
 
-### Keep what's right, throw back the rest
+### Keep what's right, throw out the rest
 
 - Stage a whole chapter once you've read it, or stage, unstage and discard files, hunks and single lines, with undo
 - Commit from the staged view
@@ -46,11 +48,11 @@ It works with Claude Code, Codex, Cursor and other agents that read skills.
 npx @backstabslash/moire
 ```
 
-installs the latest release, then opens the repo in the current directory. After that moire updates itself in the background and offers a restart when a new version is ready. On Linux it adds moire to your app menu and a `moire` command to `~/.local/bin`; on macOS it installs to `~/Applications`. moire needs `git` 2.26 or newer on your PATH.
+installs the latest release, then opens the repo in the current directory. After that Moire updates itself in the background and offers a restart when a new version is ready. On Linux it adds Moire to your app menu and a `moire` command to `~/.local/bin`; on macOS it installs to `~/Applications`. Moire needs `git` 2.26 or newer on your PATH.
 
 Or download from [Releases](https://github.com/backstabslash/moire/releases):
 
-- **Linux** (x64): AppImage, `.deb` or `.rpm`. The AppImage updates itself; the `.deb` and `.rpm` also install a `moire` command, and moire links to each new release for you to install.
+- **Linux** (x64): AppImage, `.deb` or `.rpm`. The AppImage updates itself; the `.deb` and `.rpm` also install a `moire` command, and Moire links to each new release for you to install.
 - **macOS**: `.dmg` for Apple silicon or Intel. Builds aren't notarized yet, so the first time macOS blocks the app. Open System Settings → Privacy & Security and click Open Anyway.
 
 ## Use
@@ -60,7 +62,7 @@ moire                 # the repo in the current folder, else the last one
 moire path/to/repo
 ```
 
-`moire` returns right away and opens a new window if moire is already running. The npx install adds the command on macOS too; with the `.dmg` alone, use `open -na moire --args "$PWD"`. Inside the app, `o` lists recent repos and the repo's other worktrees.
+`moire` returns right away and opens a new window if Moire is already running. The npx install adds the command on macOS too; with the `.dmg` alone, use `open -na moire --args "$PWD"`. Inside the app, `o` lists recent repos and the repo's other worktrees.
 
 <details>
 <summary>Keyboard shortcuts</summary>

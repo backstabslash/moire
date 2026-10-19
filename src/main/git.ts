@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import { lstat, open, readdir, readFile, readlink, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -81,10 +81,16 @@ export function gitError(e: unknown): string {
   return text.replace(/^Command failed:[^\n]*\n?/, "").trim() || text;
 }
 
+// Git may exit before reading its input; its exit status reports failures, not EPIPE.
+function feed(child: ChildProcess, input: string | Buffer) {
+  child.stdin!.on("error", () => {});
+  child.stdin!.end(input);
+}
+
 export function gitInput(root: string, args: string[], input: string | Buffer): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = execFile("git", gitArgs(root, args), { maxBuffer: MAX_BUFFER, env }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
-    child.stdin!.end(input);
+    feed(child, input);
   });
 }
 
@@ -413,7 +419,7 @@ async function pairRenames(root: string, base: string | null, files: FileDiff[],
     new Promise<string>((resolve, reject) => {
       const opts = { maxBuffer: MAX_BUFFER, env: { ...env, GIT_INDEX_FILE: index, GIT_LITERAL_PATHSPECS: "1" } };
       const child = execFile("git", gitArgs(root, args), opts, (err, stdout) => (err ? reject(err) : resolve(stdout)));
-      child.stdin!.end(input);
+      feed(child, input);
     });
   try {
     const entries = await git(root, ["ls-files", "-s", "-z", "--", ...literal(gone)]);
@@ -782,7 +788,7 @@ function readBlobs(root: string, specs: string[]): Promise<(Buffer | null)[]> {
       }
       resolve(result);
     });
-    child.stdin.end(specs.map((s) => `${s}\n`).join(""));
+    feed(child, specs.map((s) => `${s}\n`).join(""));
   });
 }
 

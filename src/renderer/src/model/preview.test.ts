@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import type { FileDiff, Hunk } from "../../../shared/types";
 import { renderMarkdown } from "./markdown";
@@ -163,17 +164,77 @@ describe("renderMarkdown", () => {
     expect(html).toContain('class="md-chg" data-hunks="0 1"');
   });
 
-  it("escapes raw HTML and shows images from outside the repo as their alt text", () => {
+  it("drops scripts and shows images from outside the repo as their alt text", () => {
     const html = renderMarkdown(
       "<script>alert(1)</script>\n\n![logo](img/a.png) ![remote <b>](https://e.x/b.png) ![planted](moire://blob/?root=/tmp/x)\n",
       null,
       (src) => (src.startsWith("img/") ? `moire://blob/?path=${src}` : null),
     );
-    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("script");
     expect(html).toContain('src="moire://blob/?path=img/a.png"');
     expect(html).toContain('<span class="md-img-off">remote &lt;b&gt;</span>');
     expect(html).toContain('<span class="md-img-off">planted</span>');
     expect(html).not.toContain("https://e.x");
     expect(html).not.toContain("/tmp/x");
+  });
+
+  it("renders raw HTML blocks with change marks, without styles or handlers", () => {
+    const text =
+      '<p align="center">\n  <img src="logo.png" width="96" onerror="alert(1)"> <img src="https://e.x/ci.svg" alt="CI">\n</p>\n\n<b class="x" style="color:red">bold</b>\n';
+    const added: Hunk = {
+      oldStart: 0,
+      oldLines: 0,
+      newStart: 1,
+      newLines: 3,
+      header: "",
+      lines: [1, 2, 3].map((n) => ({ kind: "add" as const, text: "", newNo: n })),
+    };
+    const html = renderMarkdown(text, changeMarks(file("x.md", { hunks: [added] })), (src) => (src.startsWith("https:") ? null : `moire://blob/?path=${src}`));
+    expect(html).toContain('<div data-from="1" data-to="3" class="md-chg" data-hunks="0"><p align="center">');
+    expect(html).toContain('<img src="moire://blob/?path=logo.png" width="96">');
+    expect(html).toContain('<span class="md-img-off">CI</span>');
+    expect(html).toContain("<b>bold</b>");
+    expect(html).not.toMatch(/onerror|style=/);
+  });
+
+  it("keeps inline SVG with a class from crashing the preview", () => {
+    expect(renderMarkdown('<svg class="octicon" width="16"><circle r="5"/></svg> icon\n', null, () => null)).toContain('<svg width="16">');
+  });
+
+  it("shows hidden HTML and marks a changed comment or lone image on its own block", () => {
+    const lines = (...ns: number[]): Hunk => ({
+      oldStart: 0,
+      oldLines: 0,
+      newStart: ns[0],
+      newLines: ns.length,
+      header: "",
+      lines: ns.map((n) => ({ kind: "add" as const, text: "x", newNo: n })),
+    });
+    const text = 'a\n\n<p hidden>sneaky</p>\n\n<!-- note -->\n\n<img src="logo.png">\n\n# T\n';
+    const html = renderMarkdown(text, changeMarks(file("x.md", { hunks: [lines(3), lines(5), lines(7)] })), () => "u");
+    expect(html).toContain('<div data-from="3" data-to="3" class="md-chg" data-hunks="0"><p>sneaky</p>');
+    expect(html).toContain('<div data-from="5" data-to="5" class="md-chg" data-hunks="1">\n</div>');
+    expect(html).toContain('<div data-from="7" data-to="7" class="md-chg" data-hunks="2"><img src="u">\n</div>');
+    expect(html).toContain('<h1 data-from="9" data-to="9">T</h1>');
+  });
+
+  it("drops marks written into the file itself", () => {
+    const html = renderMarkdown('<span class="md-chg" data-hunks="0" data-from="1" data-x="y">x</span>\n', null, () => null);
+    expect(html).toBe('<p data-from="1" data-to="1"><span>x</span></p>\n');
+  });
+
+  it("opens a details block that holds a change, and marks its opening tag on the block inside", () => {
+    const text = "<details>\n<summary>Keys</summary>\n\n- one\n\n</details>\n\n<details>\n<summary>Same</summary>\n\nkept\n\n</details>\n";
+    const opened: Hunk = { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, header: "", lines: [{ kind: "add", text: "<details>", newNo: 1 }] };
+    const html = renderMarkdown(text, changeMarks(file("x.md", { hunks: [opened] })), () => null);
+    expect(html).toMatch(/^<details open="">/);
+    expect(html).toContain('<p class="tight md-chg" data-from="4" data-to="4" data-hunks="0">one</p>');
+    expect(html).toContain("<details>\n<summary>Same</summary>");
+  });
+
+  it("leaves HTML that spans several blocks unwrapped", () => {
+    const html = renderMarkdown("<details>\n<summary>Keys</summary>\n\n- one\n\n</details>\n", null, () => null);
+    expect(html).toMatch(/^<details>\n<summary>Keys<\/summary>\n<ul/);
+    expect(html).toContain("</ul>\n</details>");
   });
 });

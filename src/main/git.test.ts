@@ -11,6 +11,7 @@ import {
   commits,
   diff,
   fileContents,
+  gitInput,
   keepUntrackedCache,
   listDir,
   manyContents,
@@ -353,6 +354,15 @@ describe("branches mode", () => {
     dirs.push(outside);
     await expect(repoInfo(outside)).rejects.toThrow(`${outside} isn't a git repository`);
     await expect(repoInfo(join(outside, "gone"))).rejects.toThrow(`${outside}/gone doesn't exist`);
+  });
+});
+
+describe("input", () => {
+  it("survives git exiting before it reads its input", async () => {
+    const r = makeRepo();
+    r.write("a.txt", "a\n");
+    r.commit("init");
+    await expect(gitInput(r.root, ["rev-parse", "HEAD"], Buffer.alloc(8 * 1024 * 1024))).resolves.toMatch(/^[0-9a-f]{40}\n$/);
   });
 });
 

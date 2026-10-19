@@ -3,6 +3,7 @@ import type { ClashChoice, CopyItem, CopyPlan, FileTree, RepoInfo } from "../../
 import type { FilesView } from "./components/Sidebar";
 
 const OPEN_MS = 500;
+const DRAG_QUIET_MS = 300;
 
 export interface Drag {
   count: number;
@@ -136,6 +137,7 @@ export function useFilesIn(opts: Options) {
     let hover: { dir: string | null; timer: number } = { dir: null, timer: 0 };
     let draggingOwnRowOut = false;
     let lastOut = "";
+    let lastOver = 0;
     const update = (next: Drag | null) => setDrag((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
     const holdOver = (dir: string | null) => {
       if (dir === hover.dir) return;
@@ -157,6 +159,7 @@ export function useFilesIn(opts: Options) {
     const enter = (e: DragEvent) => {
       if (!takes(e)) return;
       e.preventDefault();
+      lastOver = performance.now();
       if (depth++ === 0 && !latest.current.drag) update({ count: e.dataTransfer!.items.length, over: null, target: null });
     };
     // Counting can miss a leave when a hovered row re-renders, so leaving through the window's edge also ends the drag.
@@ -165,11 +168,24 @@ export function useFilesIn(opts: Options) {
       end();
       springBack();
     };
-    // Pages get no mouse events during a drag, so a mouse move means it ended somewhere without telling this window.
+    // A mouse move once drag events stop means the drag ended elsewhere; macOS also sends them mid-drag.
     const moved = () => {
-      if (!latest.current.drag) return;
+      if (!latest.current.drag || performance.now() - lastOver < DRAG_QUIET_MS) return;
       end();
       springBack();
+    };
+    const aim = (e: DragEvent) => {
+      const el = e.target instanceof Element ? e.target : null;
+      let aimed: Pick<Drag, "over" | "target"> = { over: null, target: null };
+      let row: HTMLElement | null = null;
+      if (el?.closest(".sidebar")) {
+        row = el.closest<HTMLElement>(".files [data-dir], .files .file[data-path]");
+        aimed = { over: "side", target: row ? (row.dataset.dir ?? dirOf(row.dataset.path!)) : el.closest(".files") ? "" : null };
+      } else if (el?.closest(".drop-slots, .main, .empty-state, .loading")) {
+        aimed = { over: "main", target: el.closest<HTMLElement>("[data-slot]")?.dataset.slot ?? null };
+      }
+      if (!latest.current.opts.writable) aimed.target = null;
+      return { ...aimed, row };
     };
     const over = (e: DragEvent) => {
       e.preventDefault();
@@ -178,24 +194,16 @@ export function useFilesIn(opts: Options) {
         if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
         return;
       }
-      const { writable, view, onView } = latest.current.opts;
-      const el = e.target instanceof Element ? e.target : null;
-      let next: Drag = { ...drag, over: null, target: null };
-      let row: HTMLElement | null = null;
-      if (el?.closest(".sidebar")) {
-        if (view === "changed") {
-          sprung.current = true;
-          onView("all");
-        }
-        row = el.closest<HTMLElement>(".files [data-dir], .files .file[data-path]");
-        next = { ...drag, over: "side", target: row ? (row.dataset.dir ?? dirOf(row.dataset.path!)) : el.closest(".files") ? "" : null };
-      } else if (el?.closest(".drop-slots, .main, .empty-state, .loading")) {
-        next = { ...drag, over: "main", target: el.closest<HTMLElement>("[data-slot]")?.dataset.slot ?? null };
+      lastOver = performance.now();
+      const { over: where, target, row } = aim(e);
+      const { view, onView } = latest.current.opts;
+      if (where === "side" && view === "changed") {
+        sprung.current = true;
+        onView("all");
       }
       holdOver(row?.closest(".tree-dir")?.getAttribute("aria-expanded") === "false" ? row.dataset.dir! : null);
-      if (!writable) next.target = null;
-      e.dataTransfer!.dropEffect = next.target === null ? "none" : "copy";
-      update(next);
+      e.dataTransfer!.dropEffect = target === null ? "none" : "copy";
+      update({ ...drag, over: where, target });
     };
     const drop = (e: DragEvent) => {
       e.preventDefault();
@@ -204,7 +212,7 @@ export function useFilesIn(opts: Options) {
         return;
       }
       if (!takes(e)) return;
-      const target = latest.current.drag?.target ?? null;
+      const { target } = aim(e);
       end();
       if (target === null) return springBack();
       let paths: string[];
