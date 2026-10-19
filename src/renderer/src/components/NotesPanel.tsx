@@ -2,15 +2,17 @@ import { useEffect, useRef } from "react";
 import type { AgentNotes, NoteRange } from "../../../shared/types";
 import { noteSpans, type Stop } from "../model/notes";
 import { Key } from "./Key";
+import { Lined } from "./Mark";
 
 interface Props {
   notes: AgentNotes;
   stops: Stop[];
   stop: number | null;
-  // Paths with a diff in this view; ranges in other files can't be shown.
-  shown: ReadonlySet<string>;
-  // Chapters with no changes left in this view.
-  done: ReadonlySet<number>;
+  shownPaths: ReadonlySet<string>;
+  otherTab: string | null;
+  doneChapters: ReadonlySet<number>;
+  staged: ReadonlyMap<number, "full" | "partial">;
+  stagedStops: ReadonlyMap<number, "full" | "partial">;
   uncovered: { path: string; count: number }[];
   onStop(index: number): void;
   onStage: ((chapter: number) => void) | null;
@@ -18,7 +20,21 @@ interface Props {
   onClose(): void;
 }
 
-export function NotesPanel({ notes, stops, stop, shown, done, uncovered, onStop, onStage, onOpen, onClose }: Props) {
+export function NotesPanel({
+  notes,
+  stops,
+  stop,
+  shownPaths,
+  otherTab,
+  doneChapters,
+  staged,
+  stagedStops,
+  uncovered,
+  onStop,
+  onStage,
+  onOpen,
+  onClose,
+}: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const current = stop === null ? null : stops[stop];
   useEffect(() => {
@@ -30,9 +46,6 @@ export function NotesPanel({ notes, stops, stop, shown, done, uncovered, onStop,
     <aside className="notes-panel" aria-label="Agent notes">
       <div className="notes-head">
         <b>Agent notes</b>
-        <span className="count">
-          {notes.chapters.length} {notes.chapters.length === 1 ? "chapter" : "chapters"}
-        </span>
         <button className="notes-close" title="Hide agent notes" onClick={onClose}>
           Hide
           <Key id="notes" />
@@ -47,14 +60,15 @@ export function NotesPanel({ notes, stops, stop, shown, done, uncovered, onStop,
         <ol className="chapters">
           {notes.chapters.map((chapter, c) => {
             const open = current?.chapter === c;
+            const finished = doneChapters.has(c) || staged.get(c) === "full";
+            const partly = !finished && staged.get(c) === "partial";
             return (
-              <li key={c} className={`chapter${open ? " is-current" : ""}${done.has(c) ? " is-done" : ""}`}>
+              <li key={c} className={`chapter${open ? " is-current" : ""}${finished ? " is-done" : partly ? " is-partly" : ""}`}>
                 <button className="chapter-head" onClick={() => onStop(first(c))}>
                   <span className="note-no">{c + 1}</span>
                   <span className="chapter-title">
                     {chapter.title}
                     {chapter.warn && <span className="note-warn">Check this</span>}
-                    {done.has(c) && <span className="chapter-done">No changes left</span>}
                   </span>
                   {chapter.text && (
                     <span className="note-text">
@@ -67,15 +81,26 @@ export function NotesPanel({ notes, stops, stop, shown, done, uncovered, onStop,
                     <ul className="stops">
                       {chapter.ranges.map((range, r) => {
                         const index = first(c) + r;
+                        const mark = stagedStops.get(index);
+                        const tip = mark === "full" ? "Staged" : "Partly staged";
                         return (
                           <li key={r}>
                             <button
-                              className={`stop${index === stop ? " is-current" : ""}${shown.has(range.path) ? "" : " is-elsewhere"}`}
-                              title={shown.has(range.path) ? range.path : `${range.path} has no changes in this view`}
+                              className={`stop${index === stop ? " is-current" : ""}${shownPaths.has(range.path) ? "" : " is-elsewhere"}`}
+                              data-tip={
+                                shownPaths.has(range.path)
+                                  ? range.path
+                                  : `${range.path}\n${otherTab ? `Not in this tab. Click to look in ${otherTab}.` : "No changes in this view"}`
+                              }
                               onClick={() => onStop(index)}
                             >
                               <span className="stop-where">
                                 {where(range)}
+                                {mark && (
+                                  <span className="stop-staged" role="img" aria-label={tip} data-tip={tip}>
+                                    <Lined state={mark} />
+                                  </span>
+                                )}
                                 {range.warn && <span className="note-warn">Check this</span>}
                               </span>
                               {range.note && (
@@ -88,7 +113,7 @@ export function NotesPanel({ notes, stops, stop, shown, done, uncovered, onStop,
                         );
                       })}
                     </ul>
-                    {onStage && !done.has(c) && (
+                    {onStage && !doneChapters.has(c) && (
                       <button className="btn chapter-stage" onClick={() => onStage(c)}>
                         Stage this chapter
                       </button>
@@ -103,11 +128,8 @@ export function NotesPanel({ notes, stops, stop, shown, done, uncovered, onStop,
           <div className="uncovered">
             <b>Not in any chapter</b>
             {uncovered.map(({ path, count }) => (
-              <button key={path} title={path} onClick={() => onOpen(path)}>
-                <span>{path.split("/").pop()}</span>
-                <span className="count">
-                  {count} {count === 1 ? "line" : "lines"}
-                </span>
+              <button key={path} data-tip={`${path}\n${count} changed ${count === 1 ? "line" : "lines"}`} onClick={() => onOpen(path)}>
+                {path.split("/").pop()}
               </button>
             ))}
           </div>

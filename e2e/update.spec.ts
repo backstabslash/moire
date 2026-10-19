@@ -51,7 +51,7 @@ for (const theme of ["light", "dark"]) {
 }
 
 test("a copy that can't update itself links to the release and says why", async () => {
-  const page = await open("light", { version: "9.9.9", manual: "Installed from the .deb, so only your package manager can replace it." });
+  const page = await open("light", { version: "9.9.9", manualReason: "Installed from the .deb, so only your package manager can replace it." });
   const button = page.locator(".status .update");
   await expect(button).toHaveText("Get moire 9.9.9");
   await expect(button).toHaveAttribute("title", /package manager.*Opens the release page/);

@@ -7,7 +7,6 @@ import { type ThemeId, ThemePicker } from "./ThemePicker";
 
 export type PickerState = null | "main" | "commit" | "branches";
 type BranchesMode = Extract<CompareMode, { kind: "branches" }>;
-// The commit and branches last compared, so 4 and 5 go back to them instead of asking again.
 export interface LastPicked {
   commit?: Extract<CompareMode, { kind: "commit" }>;
   branches?: BranchesMode;
@@ -40,13 +39,12 @@ interface Props {
   onTheme(theme: ThemeId): void;
   onCvd(on: boolean): void;
   onSearch(): void;
-  // Unset when the repo has no agent notes.
   notes: { open: boolean } | null;
   onNotes(): void;
 }
 
 export function Toolbar(props: Props) {
-  const { root, mode, a, b, layout, scope } = props;
+  const { root, mode, a, b, layout, scope, onPicker } = props;
   const searchKey = keyText(useKeymap(), "search");
   return (
     <header className="toolbar">
@@ -82,7 +80,7 @@ export function Toolbar(props: Props) {
               mode={mode}
               lastPicked={props.lastPicked}
               onMode={props.onMode}
-              onClose={() => props.onPicker(null)}
+              onClose={() => onPicker(null)}
             />
           )}
         </div>
@@ -146,13 +144,15 @@ function PickerPop({ initial, root, mode, lastPicked, onMode, onClose }: PickerP
   const branches = mode.kind === "branches" ? mode : lastPicked.branches;
   const [sub, setSub] = useState<"commit" | "branches" | null>(initial === "commit" || initial === "branches" ? initial : null);
   const popRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     const away = (event: MouseEvent) => {
-      if (!popRef.current?.parentElement?.contains(event.target as Node)) onClose();
+      if (!popRef.current?.parentElement?.contains(event.target as Node)) onCloseRef.current();
     };
     const esc = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
     };
     window.addEventListener("mousedown", away);
     window.addEventListener("keydown", esc);
@@ -160,7 +160,7 @@ function PickerPop({ initial, root, mode, lastPicked, onMode, onClose }: PickerP
       window.removeEventListener("mousedown", away);
       window.removeEventListener("keydown", esc);
     };
-  }, [onClose]);
+  }, []);
 
   const pick = (m: CompareMode) => {
     onMode(m);

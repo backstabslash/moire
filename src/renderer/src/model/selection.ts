@@ -5,6 +5,7 @@ export type Col = "a" | "b" | "u";
 
 export const lineKey = (hunk: number, idx: number) => `${hunk}:${idx}`;
 export const gapKey = (newNo: number) => `g${newNo}`;
+export const hunkOfKey = (key: string): number | null => (key.startsWith("g") ? null : Number(key.split(":")[0]));
 
 export function columnKeys(rows: Row[], col: Col): string[] {
   const out: string[] = [];
@@ -24,7 +25,6 @@ export function keysBetween(rows: Row[], col: Col, from: string, to: string): st
   return keys.slice(Math.min(i, j), Math.max(i, j) + 1);
 }
 
-// Every line shown on one side; unified rows count by kind, since their lines carry no side.
 export function sideKeys(rows: Row[], side: "a" | "b"): string[] {
   const out: string[] = [];
   for (const r of rows) {
@@ -84,7 +84,16 @@ function byText(lines: Map<string, Picked>): Map<string, { key: string; no: numb
   return out;
 }
 
-// Finds each selected line again after the file changed, or returns null once any of them is gone.
+function carryLookAlikesIfCountsKept(
+  wanted: [string, Picked][],
+  ids: string[],
+  candidates: { key: string; no: number }[][],
+  was: Map<string, { key: string; no: number }[]>,
+): Map<string, string> | null {
+  if (ids.some((id, i) => candidates[i].length !== was.get(id)!.length)) return null;
+  return new Map(wanted.map(([key], i) => [key, candidates[i][was.get(ids[i])!.findIndex((c) => c.key === key)].key]));
+}
+
 export function carryKeys(before: Row[], after: Row[], keys: ReadonlySet<string>): Map<string, string> | null {
   const old = pickable(before);
   const [was, now] = [byText(old), byText(pickable(after))];
@@ -93,11 +102,7 @@ export function carryKeys(before: Row[], after: Row[], keys: ReadonlySet<string>
   const ids = wanted.map(([, line]) => `${line.kind}\0${line.text}`);
   const candidates = ids.map((id) => now.get(id) ?? []);
   const unique = candidates.findIndex((c) => c.length === 1);
-  if (unique < 0) {
-    // Only look-alikes: once their count changes, a lone `}` could land on a `}` the agent just added.
-    if (ids.some((id, i) => candidates[i].length !== was.get(id)!.length)) return null;
-    return new Map(wanted.map(([key], i) => [key, candidates[i][was.get(ids[i])!.findIndex((c) => c.key === key)].key]));
-  }
+  if (unique < 0) return carryLookAlikesIfCountsKept(wanted, ids, candidates, was);
   let shift = candidates[unique][0].no - wanted[unique][1].no;
   const used = new Set<string>();
   const out = new Map<string, string>();

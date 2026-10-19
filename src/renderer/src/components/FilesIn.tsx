@@ -105,7 +105,6 @@ const IGNORED_BAND = "background: repeating-linear-gradient(135deg, transparent 
 const IGNORED_TARGET = "box-shadow: inset 3px 0 0 var(--faint);";
 const ROOT = "box-shadow: inset 0 0 0 2px var(--b); background: color-mix(in srgb, var(--b-line) 55%, transparent);";
 
-// Rows match the target by path prefix, which only a stylesheet can say without the tree knowing about drops.
 export function DropStyle({ drag, clash, ignored }: { drag: Drag | null; clash: Clash | null; ignored: boolean }) {
   const css = useMemo(() => {
     const rules: string[] = [];
@@ -115,6 +114,7 @@ export function DropStyle({ drag, clash, ignored }: { drag: Drag | null; clash: 
       const q = attr(target);
       rules.push(`.sidebar .files .tree-dir[data-dir^=${q}], .sidebar .files .file[data-path^=${q}] { ${ignored ? IGNORED_BAND : BAND} }`);
       rules.push(`.sidebar .files .tree-dir[data-dir=${q}] { ${ignored ? IGNORED_TARGET : TARGET} }`);
+      rules.push(`.sidebar .files .tree-seg[data-dir=${q}] { color: var(--b-ink); }`);
     }
     if (clash) {
       const rows = (clashing: boolean) =>
@@ -151,7 +151,6 @@ export function ClashBar({ clash, onDecide, onCancel }: BarProps) {
   const name = nameOf(item.dest);
   const all = rest && others > 0;
 
-  // A decision is pending, so other keys would act on the file hidden behind it.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const onControl = e.target instanceof HTMLElement && !!e.target.closest("button, input");
@@ -274,6 +273,7 @@ export function ClashView({ clash, layout, scope }: ViewProps) {
       blink={null}
       onBlink={noop}
       onMenu={noop}
+      onStub={noop}
     />
   );
 }

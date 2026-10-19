@@ -144,6 +144,7 @@ export function registerIpc(): void {
   ipcMain.handle("update:get", () => (dev && process.env.MOIRE_UPDATE ? (JSON.parse(process.env.MOIRE_UPDATE) as UpdateNotice) : updateNotice()));
   ipcMain.handle("update:apply", (e) => applyUpdate(shown.get(e.sender.id)));
   ipcMain.handle("app:report-issue", () => reportIssue());
+  ipcMain.handle("app:version", () => app.getVersion());
   ipcMain.handle("clipboard:write", (_e, text: string) => clipboard.writeText(text));
   ipcMain.handle("git:diff", (_e, root: string, mode: CompareMode) => diff(root, mode));
   ipcMain.handle("git:file", (_e, root: string, mode: CompareMode, file: Pick<FileDiff, "path" | "oldPath" | "status">) => fileContents(root, mode, file));
@@ -157,7 +158,7 @@ export function registerIpc(): void {
   ipcMain.handle("git:upstream", (_e, root: string) => upstream(root));
   ipcMain.handle("git:act", (_e, root: string, req: StageRequest) => act(root, req));
   ipcMain.handle("git:act-all", (_e, root: string, req: StageAllRequest) => actAll(root, req));
-  ipcMain.handle("git:undo", (_e, root: string) => undo(root));
+  ipcMain.handle("git:undo", (_e, root: string, only?: string) => undo(root, only));
   ipcMain.handle("git:save-discarded", (_e, root: string, id: string) => saveDiscarded(root, id));
   ipcMain.handle("git:drop-discarded", (_e, root: string, id: string) => dropDiscarded(root, id));
   ipcMain.handle("git:commit", (_e, root: string, message: string) => commit(root, message));

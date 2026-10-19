@@ -233,7 +233,6 @@ async function installMac(asset, label) {
     execFileSync("ditto", ["-x", "-k", zip, tmp]);
     // The build isn't signed, and Apple silicon refuses to run code without at least an ad-hoc signature.
     execFileSync("codesign", ["--force", "--deep", "--sign", "-", join(tmp, "moire.app")]);
-    // The previous bundle stays until the next update, in case a window from it is still open.
     rmSync(previous, { recursive: true, force: true });
     if (existsSync(app)) renameSync(app, previous);
     renameSync(join(tmp, "moire.app"), app);
@@ -265,7 +264,6 @@ async function installLinux(asset, version, label) {
   rmSync(next, { force: true });
   symlinkSync(version, next);
   renameSync(next, join(root, "current"));
-  // The previous version stays in case a window from it is still open.
   for (const old of readdirSync(root, { withFileTypes: true })) {
     const name = old.name;
     if (old.isDirectory() && !name.startsWith(".") && name !== version && name !== previous) rmSync(join(root, name), { recursive: true, force: true });
@@ -277,7 +275,6 @@ async function installLinux(asset, version, label) {
   writeBin(bin, root, binScript(root, noSandbox));
 }
 
-/** Removes what install() put in the home folder, and returns what it removed and where user data stays. */
 export function uninstall() {
   const { remove, bin, owner, data } = installedPaths(process.platform, process.env, homedir());
   const removed = remove.filter((p) => existsSync(p));
@@ -292,11 +289,7 @@ export function launchCommand(platform, home, env, noSandbox, repo) {
   return { cmd: join(linuxPaths(env, home).root, "current", "moire"), args: [...(noSandbox ? ["--no-sandbox"] : []), repo] };
 }
 
-/**
- * Starts moire and waits a moment, so a launch that fails right away can be reported.
- * @param {string} repo
- * @returns {Promise<string | null>} what the app printed, if it failed
- */
+/** @param {string} repo @returns {Promise<string | null>} */
 export async function launch(repo) {
   const { cmd, args } = launchCommand(process.platform, homedir(), process.env, runsWithoutSandbox(), repo);
   // A file rather than a pipe, since the app keeps writing to stderr after the launcher exits.

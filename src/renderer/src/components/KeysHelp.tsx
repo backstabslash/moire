@@ -1,10 +1,21 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { COMMAND_IDS, COMMANDS, GROUPS, strokeLabel } from "../../../shared/keymap";
 import { MAC, useKeymap } from "./Key";
 
-export function KeysHelp({ onClose, onEdit }: { onClose(): void; onEdit(): void }) {
+interface Props {
+  hints: boolean;
+  onHints(on: boolean): void;
+  onClose(): void;
+  onEdit(): void;
+}
+
+export function KeysHelp({ hints, onHints, onClose, onEdit }: Props) {
   const keymap = useKeymap();
   const ref = useRef<HTMLDivElement>(null);
+  const [version, setVersion] = useState("");
+  useEffect(() => {
+    void window.moire.version().then(setVersion);
+  }, []);
 
   useEffect(() => {
     const away = (event: MouseEvent) => {
@@ -41,10 +52,14 @@ export function KeysHelp({ onClose, onEdit }: { onClose(): void; onEdit(): void 
         ))}
       </div>
       <div className="keys-foot">
+        <label className="keys-hints">
+          <input type="checkbox" checked={hints} onChange={(e) => onHints(e.target.checked)} />
+          <span>Show shortcuts on buttons</span>
+        </label>
+        <span className="keys-version">{version && `moire ${version}`}</span>
         <span>Click or drag line numbers to select lines, Shift-click to extend.</span>
         <span className="keys-links">
           <button onClick={onEdit}>Edit keyboard shortcuts…</button>
-          {/* Linux windows have no menu bar to reach these from. */}
           <button onClick={() => void window.moire.reportIssue()}>Report an issue…</button>
           <button onClick={() => void window.moire.checkForUpdates()}>Check for updates…</button>
         </span>

@@ -23,7 +23,7 @@ Flow: renderer → `window.moire` (preload) → `ipcMain` (`src/main/ipc.ts`) �
 - `pnpm test`: unit tests, including real git in throwaway repos
 - `pnpm test:e2e`: builds, then runs Playwright; `npx playwright test` skips the build, so only use it right after one
 - `MOIRE_SHOTS=/tmp/shots pnpm test:e2e`: also saves screenshots from the specs that take them
-- `pnpm demo`: builds, then records `demo/demo.gif` (in the README) and `demo/demo.mp4` from a scripted run on a throwaway repo. Re-run it after UI changes
+- `pnpm demo`: builds, then records `demo/demo-light.gif` and `demo/demo-dark.gif` (in the README, picked by the reader's color scheme) and `demo/demo.mp4` from a scripted run on a throwaway repo. Re-run it after UI changes
 - `pnpm dist --linux AppImage deb --publish never`: local packages in `dist/` (rpm also needs `rpmbuild`)
 - Release: bump `version` in package.json, then push `git tag -a v<version> --cleanup=verbatim -F notes.md`; `.github/workflows/release.yml` builds Linux and macOS and publishes the release with the tag message as notes
 - Launcher release, only when `launcher/` changes: bump `launcher/package.json`, push tag `launcher-v<version>`; `.github/workflows/launcher.yml` publishes to npm

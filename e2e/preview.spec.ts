@@ -52,6 +52,8 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "icon.svg"), svg("#cc2250"));
   writeFileSync(join(repo, "plan.md"), plan("write a test", "\nAn old note.\n"));
   writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
+  writeFileSync(join(repo, "64x64.png"), png(64, 64, [204, 34, 80]));
+  writeFileSync(join(repo, "data.bin"), Buffer.from([0, 1, 2, 0, 255]));
   git("add", "-A");
   git("commit", "-qm", "init");
   writeFileSync(join(repo, "img/logo.png"), png(60, 30, [10, 140, 160]));
@@ -151,4 +153,21 @@ test("switching themes recolours code without highlighting again", async () => {
   await page.keyboard.press("t");
   await expect(keyword).toHaveCSS("color", "rgb(23, 32, 42)");
   await page.keyboard.press("t");
+});
+
+test("All files shows an unchanged image as one picture, and other binaries as a note", async () => {
+  await page.keyboard.press("a");
+  const nav = page.getByRole("navigation", { name: "All files" });
+  await nav.locator('[data-tip^="64x64.png"]').click();
+  await loaded(page.locator(".img-side.b img"));
+  await expect(page.locator(".img-side")).toHaveCount(1);
+  await expect(page.locator(".img-side.b figcaption")).toHaveText(/^64 × 64, \d+ B$/);
+  await expect(page.locator(".pane-h")).toHaveCount(1);
+  await shot("preview-unchanged-dark");
+
+  await nav.locator('[data-tip^="data.bin"]').click();
+  await expect(page.locator(".note")).toHaveText("Binary file, contents not shown.");
+  await expect(page.locator(".img-compare")).toHaveCount(0);
+  await shot("preview-binary-dark");
+  await page.keyboard.press("a");
 });

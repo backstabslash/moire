@@ -136,13 +136,13 @@ describe("staging special files", () => {
 
     expect(await r.run("unstaged", "stage", f, null)).toBe("Staged new.txt");
     expect(r.git("diff", "--cached", "-M", "--name-status")).toMatch(/^R\d+\told.txt\tnew.txt$/);
-    expect(await undo(r.root)).toEqual({ label: "Staged new.txt" });
+    expect(await undo(r.root)).toMatchObject({ label: "Staged new.txt" });
     expect(r.git("diff", "--cached", "--name-status")).toBe("");
 
     await r.run("unstaged", "discard", (await r.file("unstaged", "new.txt"))!, null);
     expect(existsSync(join(r.root, "new.txt"))).toBe(false);
     expect(readFileSync(join(r.root, "old.txt"), "utf8")).toBe(body(20));
-    expect(await undo(r.root)).toEqual({ label: "Discarded new.txt" });
+    expect(await undo(r.root)).toMatchObject({ label: "Discarded new.txt" });
     expect(existsSync(join(r.root, "old.txt"))).toBe(false);
     expect(readFileSync(join(r.root, "new.txt"), "utf8")).toBe(edited);
   });
@@ -188,6 +188,18 @@ describe("safety", () => {
     const f = (await r.file("unstaged", "a.txt"))!;
     r.write("a.txt", body(10).replace("line 5", "FIVE"));
     await expect(r.run("unstaged", "stage", f, null)).rejects.toThrow("a.txt changed since you looked");
+    expect(r.git("diff", "--cached")).toBe("");
+  });
+
+  it("refuses when a file with too many changes to show changed since", async () => {
+    const r = setup();
+    r.write("big.txt", "start\n");
+    r.commit("init");
+    r.write("big.txt", `${"x".repeat(99)}\n`.repeat(30000));
+    const f = (await r.file("unstaged", "big.txt"))!;
+    expect(f).toMatchObject({ tooLarge: true, hunks: [] });
+    r.write("big.txt", `${"x".repeat(99)}\n`.repeat(30000) + "SECRET=1\n");
+    await expect(r.run("unstaged", "stage", f, null)).rejects.toThrow("big.txt changed since you looked");
     expect(r.git("diff", "--cached")).toBe("");
   });
 
@@ -240,11 +252,28 @@ describe("undo", () => {
     await r.run("unstaged", "discard", (await r.file("unstaged", "scratch.txt"))!, null);
     expect(existsSync(join(r.root, "scratch.txt"))).toBe(false);
 
-    expect(await undo(r.root)).toEqual({ label: "Discarded scratch.txt" });
+    expect(await undo(r.root)).toMatchObject({ label: "Discarded scratch.txt" });
     expect(readFileSync(join(r.root, "scratch.txt"), "utf8")).toBe("notes\n");
-    expect(await undo(r.root)).toEqual({ label: "Discarded 2 lines in a.txt" });
+    expect(await undo(r.root)).toMatchObject({ label: "Discarded 2 lines in a.txt" });
     expect(readFileSync(join(r.root, "a.txt"), "utf8")).toBe(edited);
     expect(await undo(r.root)).toBeNull();
+  });
+
+  it("undoes a given entry only while it's the newest", async () => {
+    const r = setup();
+    r.write("a.txt", "a\n");
+    r.write("b.txt", "a\n");
+    r.commit("init");
+    r.write("a.txt", "b\n");
+    r.write("b.txt", "b\n");
+    await act(r.root, { mode: "unstaged", action: "stage", file: (await r.file("unstaged", "a.txt"))!, lines: null, undoId: "first" });
+    await r.run("unstaged", "stage", (await r.file("unstaged", "b.txt"))!, null);
+    await expect(undo(r.root, "first")).rejects.toThrow('"Staged b.txt" came after it');
+    expect(r.git("show", ":b.txt")).toBe("b");
+    expect(await undo(r.root)).toMatchObject({ label: "Staged b.txt" });
+    expect(await undo(r.root, "first")).toEqual({ label: "Staged a.txt", id: "first" });
+    await expect(undo(r.root, "first")).rejects.toThrow("already undone");
+    expect(r.git("show", ":a.txt")).toBe("a");
   });
 
   it("undoes staging, and refuses once the file moved on", async () => {
@@ -253,7 +282,7 @@ describe("undo", () => {
     r.commit("init");
     r.write("a.txt", "b\n");
     await r.run("unstaged", "stage", (await r.file("unstaged", "a.txt"))!, null);
-    expect(await undo(r.root)).toEqual({ label: "Staged a.txt" });
+    expect(await undo(r.root)).toMatchObject({ label: "Staged a.txt" });
     expect(r.git("show", ":a.txt")).toBe("a");
 
     await r.run("unstaged", "stage", (await r.file("unstaged", "a.txt"))!, null);
@@ -270,7 +299,7 @@ describe("undo", () => {
     r.commit("init");
     r.write("a\tb.txt", "b\n");
     await r.run("unstaged", "stage", (await r.file("unstaged", "a\tb.txt"))!, null);
-    expect(await undo(r.root)).toEqual({ label: "Staged a\tb.txt" });
+    expect(await undo(r.root)).toMatchObject({ label: "Staged a\tb.txt" });
     expect(r.git("diff", "--cached")).toBe("");
   });
 
@@ -322,7 +351,7 @@ describe("undo", () => {
     const backup = execFileSync("git", ["-C", r.root, "hash-object", "--stdin"], { input: "precious\n", encoding: "utf8" }).trim();
     expect(r.git("ls-tree", "refs/moire/discards")).toContain(backup);
     r.git("gc", "-q", "--prune=now");
-    expect(await undo(r.root)).toEqual({ label: "Discarded a.txt" });
+    expect(await undo(r.root)).toMatchObject({ label: "Discarded a.txt" });
     expect(readFileSync(join(r.root, "a.txt"), "utf8")).toBe("precious\n");
     expect(r.git("for-each-ref", "refs/moire")).toBe("");
   });
@@ -362,7 +391,7 @@ describe("undo", () => {
     await dropDiscarded(r.root, refused.id);
     expect(r.git("for-each-ref", "refs/moire")).toBe("");
     expect(existsSync(join(r.root, "a.txt.orig"))).toBe(false);
-    expect(await undo(r.root)).toEqual({ label: "Staged b.txt" });
+    expect(await undo(r.root)).toMatchObject({ label: "Staged b.txt" });
     expect(await undo(r.root)).toBeNull();
   });
 });
@@ -380,9 +409,9 @@ describe("undo history", () => {
       await r.run("unstaged", "stage", (await r.file("unstaged", "a.txt"))!, null);
     }
     expect(logOf(one).map((e) => e.label)).toEqual(["Staged a.txt"]);
-    expect(await undo(one.root)).toEqual({ label: "Staged a.txt" });
+    expect(await undo(one.root)).toMatchObject({ label: "Staged a.txt" });
     expect(await undo(one.root)).toBeNull();
-    expect(await undo(two.root)).toEqual({ label: "Staged a.txt" });
+    expect(await undo(two.root)).toMatchObject({ label: "Staged a.txt" });
   });
 
   it("keeps a worktree's history and backups apart, safe from gc in the main checkout", async () => {
@@ -398,7 +427,7 @@ describe("undo history", () => {
     expect(await undo(r.root)).toBeNull();
     expect(r.git("for-each-ref", "--format=%(refname)", "refs/moire")).toBe(`refs/moire/worktrees/${basename(wt)}/discards`);
     r.git("gc", "-q", "--prune=now");
-    expect(await undo(wt)).toEqual({ label: "Discarded a.txt" });
+    expect(await undo(wt)).toMatchObject({ label: "Discarded a.txt" });
     expect(readFileSync(join(wt, "a.txt"), "utf8")).toBe("worktree edit\n");
   });
 
@@ -443,7 +472,7 @@ describe("undo history", () => {
     );
     await adoptLegacyUndo(r.root, legacy);
     expect(JSON.parse(readFileSync(legacy, "utf8"))).toEqual([other]);
-    expect(await undo(r.root)).toEqual({ label: "Staged a.txt" });
+    expect(await undo(r.root)).toMatchObject({ label: "Staged a.txt" });
     expect(r.git("diff", "--cached")).toBe("");
   });
 });
@@ -510,6 +539,61 @@ describe("files staged, then changed again", () => {
   });
 });
 
+describe("files as a full refresh returns them", () => {
+  it("stages and unstages single lines of a partly staged file", async () => {
+    const r = setup();
+    const long = Array.from({ length: 60 }, (_, i) => `    expect(res.progress).toEqual({ staged: ${i}, total: 3 });\n`);
+    r.write("g.ts", long.join(""));
+    r.commit("init");
+    r.write("g.ts", long.map((l, i) => (i % 12 === 4 ? l.replace(" });", ", lines: { staged: 4, total: 9 } });") : l)).join(""));
+    r.git("add", "g.ts");
+    for (let i = 0; i < 3; i++) {
+      const f = (await r.file("staged", "g.ts"))!;
+      await r.run("staged", "unstage", f, hunkLines(f, i));
+    }
+    for (const [mode, action, pick] of [
+      ["unstaged", "stage", 1],
+      ["unstaged", "stage", 0],
+      ["staged", "unstage", 1],
+      ["unstaged", "stage", 2],
+      ["staged", "unstage", 0],
+      ["unstaged", "stage", 1],
+    ] as const) {
+      const f = (await r.file(mode, "g.ts"))!;
+      if (mode === "unstaged") expect(f.staged).toBe("partial");
+      await expect(r.run(mode, action, f, [allLines(f)[pick]])).resolves.toMatch(/ 1 line in g\.ts$/);
+    }
+  });
+
+  it("acts on every kind of file in both views", async () => {
+    const r = setup();
+    r.write("partly.txt", body(30));
+    r.write("again.txt", body(10));
+    r.write("old.txt", body(10));
+    r.write("pnpm-lock.yaml", "lockfileVersion: 9\n");
+    r.commit("init");
+    r.write("partly.txt", body(30).replace("line 2\n", "two\n").replace("line 25\n", "twenty-five\n"));
+    r.write("again.txt", body(10).replace("line 2\n", "two\n"));
+    r.write("pnpm-lock.yaml", "lockfileVersion: 10\n");
+    r.git("add", "-A");
+    await r.file("unstaged", "again.txt");
+    r.write("again.txt", body(10).replace("line 2\n", "two\n").replace("line 9\n", "nine\n"));
+    const f = (await r.file("staged", "partly.txt"))!;
+    await r.run("staged", "unstage", f, hunkLines(f, 1));
+    renameSync(join(r.root, "old.txt"), join(r.root, "new.txt"));
+    r.write("new.txt", body(10).replace("line 3\n", "three\n"));
+    r.write("untracked.txt", "fresh\n");
+    for (const mode of ["unstaged", "staged"] as const) {
+      const files = (await diff(r.root, { kind: mode })).files;
+      expect(files.length).toBeGreaterThan(2);
+      for (const file of files) {
+        await expect(r.run(mode, mode === "staged" ? "unstage" : "stage", file)).resolves.toBeTruthy();
+        await undo(r.root);
+      }
+    }
+  });
+});
+
 describe("whole files and views", () => {
   it("stages every file in the view as one undo step, and unstages them the same way", async () => {
     const r = setup();
@@ -522,13 +606,13 @@ describe("whole files and views", () => {
     const files = (await diff(r.root, { kind: "unstaged" })).files;
     expect(await actAll(r.root, { mode: "unstaged", files })).toBe("Staged 3 files");
     expect(r.git("diff", "--cached", "--name-status")).toBe("M\ta.txt\nD\tgone.txt\nA\tnew.txt");
-    expect(await undo(r.root)).toEqual({ label: "Staged 3 files" });
+    expect(await undo(r.root)).toMatchObject({ label: "Staged 3 files" });
     expect(r.git("diff", "--cached")).toBe("");
 
     await actAll(r.root, { mode: "unstaged", files: (await diff(r.root, { kind: "unstaged" })).files });
     expect(await actAll(r.root, { mode: "staged", files: (await diff(r.root, { kind: "staged" })).files })).toBe("Unstaged 3 files");
     expect(r.git("diff", "--cached")).toBe("");
-    expect(await undo(r.root)).toEqual({ label: "Unstaged 3 files" });
+    expect(await undo(r.root)).toMatchObject({ label: "Unstaged 3 files" });
     expect(r.git("diff", "--cached", "--name-only")).toBe("a.txt\ngone.txt\nnew.txt");
   });
 
@@ -599,7 +683,7 @@ describe("merge conflicts", () => {
     expect(await r.run("unstaged", "stage", (await r.file("unstaged", "c.txt"))!, null)).toBe("Staged c.txt");
     expect(r.git("ls-files", "-u")).toBe("");
     expect(r.git("show", ":c.txt")).toBe("ours and theirs");
-    expect(await undo(r.root)).toEqual({ label: "Staged c.txt" });
+    expect(await undo(r.root)).toMatchObject({ label: "Staged c.txt" });
     expect(r.git("ls-files", "-s", "c.txt")).toBe(stages);
     expect(readFileSync(join(r.root, "c.txt"), "utf8")).toBe("ours and theirs\n");
   });

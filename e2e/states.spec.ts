@@ -51,7 +51,7 @@ test("with everything staged, Unstaged says so and leads on to the commit", asyn
   git("add", "-A");
   await expect(page.locator(".empty-state h2")).toHaveText("All 2 changes are staged.");
   await expect(page.locator(".sidebar")).toBeVisible();
-  await expect(page.locator(".stage-progress")).toContainText("2 of 2 staged");
+  await expect(page.locator(".stage-progress")).toContainText("All staged");
   await shot("all-staged");
 
   await page.locator(".empty-actions").getByRole("button", { name: "Commit" }).click();

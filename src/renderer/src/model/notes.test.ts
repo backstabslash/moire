@@ -5,7 +5,6 @@ import { buildRows } from "./rows";
 
 const text = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
 
-// Line 10 replaced, line 20 deleted, a line added after 25.
 const hunks: Hunk[] = [
   {
     oldStart: 10,
@@ -41,7 +40,7 @@ describe("stopsOf", () => {
 });
 describe("rows for a range", () => {
   const one: FileDiff = { ...file, hunks: [hunks[0]] };
-  const contents = { a: text.join("\n"), b: text.map((l, i) => (i === 9 ? "line ten" : l)).join("\n"), tooLarge: false };
+  const contents = { a: text.join("\n"), b: text.map((l, i) => (i === 9 ? "line ten" : l)).join("\n"), hidden: false };
 
   it("finds changed lines and the fold hiding context lines", () => {
     for (const layout of ["split", "unified"] as const) {

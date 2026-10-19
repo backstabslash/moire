@@ -1,7 +1,8 @@
-import { type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction, useMemo } from "react";
+import { type CSSProperties, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction, useMemo } from "react";
 import type { FileDiff, FileStatus, FileTree as Listing } from "../../../shared/types";
 import { modeNote } from "../model/modes";
 import { buildTree, type Dir } from "../model/tree";
+import { Registered } from "./Mark";
 
 const KIND: Record<FileStatus, [string, string]> = {
   added: ["A", "Added"],
@@ -13,7 +14,7 @@ const KIND: Record<FileStatus, [string, string]> = {
   unchanged: ["", ""],
 };
 const MARKS = { full: "Staged", partial: "Partly staged", changed: "Staged, then changed again" };
-const INDENT = 12;
+const depthStyle = (depth: number) => ({ "--depth": depth }) as CSSProperties;
 
 export interface ListState {
   active: string | null;
@@ -46,20 +47,28 @@ export function fileRow(
     !f && "is-unchanged",
     opts.ignored && "is-ignored",
     opts.suffix && "sib",
+    opts.depth !== undefined && "in-tree",
   ];
   const mode = f && modeNote(f);
   const mark = f?.changedSinceStaged ? "changed" : f?.staged === "full" || f?.staged === "partial" ? f.staged : null;
   const title = f
-    ? `${f.oldPath ? `${f.oldPath} → ${path}` : path}${mode ? `\n${mode.words[0].toUpperCase()}${mode.words.slice(1)}` : ""}${f.noise ? `\n${f.noise}, folded` : ""}`
+    ? [
+        f.oldPath ? `${f.oldPath} → ${path}` : path,
+        [KIND[f.status][1], mark && MARKS[mark].toLowerCase()].filter(Boolean).join(", "),
+        mode && `${mode.words[0].toUpperCase()}${mode.words.slice(1)}`,
+        f.noise && `${f.noise}, folded`,
+      ]
+        .filter(Boolean)
+        .join("\n")
     : `${path}${opts.ignored ? "\nIgnored by git" : "\nNo changes"}`;
   return (
     <button
       key={isFresh ? `${path}:${list.fresh!.at}` : path}
       ref={isActive ? list.activeRef : undefined}
       className={cls.filter(Boolean).join(" ")}
-      style={opts.depth !== undefined ? { paddingLeft: 32 + opts.depth * INDENT } : undefined}
+      style={opts.depth !== undefined ? depthStyle(opts.depth) : undefined}
       aria-current={isActive}
-      title={title}
+      data-tip={title}
       data-path={path}
       draggable={f?.status !== "deleted"}
       onClick={() => list.onSelect(path)}
@@ -76,20 +85,14 @@ export function fileRow(
           name
         )}
       </span>
-      <span className="kind" title={f ? KIND[f.status][1] : undefined}>
-        {f ? KIND[f.status][0] : ""}
-      </span>
+      <span className="kind">{f ? KIND[f.status][0] : ""}</span>
       <span className="nums">
         {list.hitCounts?.has(path) && (
           <span className="hit-count" title="Search hits">
             {list.hitCounts.get(path)}
           </span>
         )}
-        {mode && (
-          <span className="mode-tag" title={mode.words}>
-            {mode.tag}
-          </span>
-        )}
+        {mode && <span className="mode-tag">{mode.tag}</span>}
         {f?.binary ? (
           <span>bin</span>
         ) : (
@@ -99,26 +102,8 @@ export function fileRow(
           </>
         )}
       </span>
-      {mark && <Mark state={mark} />}
+      {f?.staged === "partial" && <Registered state="partial" label={MARKS.partial} />}
     </button>
-  );
-}
-
-function Mark({ state }: { state: keyof typeof MARKS }) {
-  return state === "changed" ? (
-    <span className="mark mark-changed" title={MARKS[state]} />
-  ) : (
-    <svg className={`mark mark-${state}`} viewBox="0 0 12 12" aria-label={MARKS[state]}>
-      <title>{MARKS[state]}</title>
-      {state === "full" ? (
-        <path d="M2 6.4l2.6 2.6L10 3.4" />
-      ) : (
-        <>
-          <circle cx="6" cy="6" r="4" />
-          <path className="half" d="M6 2a4 4 0 0 0 0 8z" />
-        </>
-      )}
-    </svg>
   );
 }
 
@@ -141,11 +126,12 @@ export function FileTree({ listing, changed, list, folders, onFolders }: Props) 
   const { root, open, opened } = folders;
   const tree = useMemo(() => buildTree(listing, changed, opened), [listing, changed, opened]);
 
-  const toggle = (dir: Dir) => {
+  const toggle = (singleChildRun: Dir[], isOpen: boolean) => {
     const next = new Set(open);
-    if (next.delete(dir.path)) return onFolders((cur) => ({ ...cur, open: next }));
-    onFolders((cur) => ({ ...cur, open: next.add(dir.path) }));
-    if (!dir.ignored) return;
+    for (const d of singleChildRun) next[isOpen ? "delete" : "add"](d.path);
+    onFolders((cur) => ({ ...cur, open: next }));
+    const dir = singleChildRun[singleChildRun.length - 1];
+    if (isOpen || !dir.ignored) return;
     const store = (entries: string[] | string) =>
       onFolders((cur) => (cur.root === root ? { ...cur, opened: new Map(cur.opened).set(dir.path, entries) } : cur));
     window.moire.listDir(root, dir.path).then(store, () => store("Can't read this folder."));
@@ -153,21 +139,35 @@ export function FileTree({ listing, changed, list, folders, onFolders }: Props) 
 
   const rows: ReactNode[] = [];
   const walk = (dir: Dir, depth: number) => {
-    for (const d of dir.dirs) {
-      const isOpen = open.has(d.path);
+    for (const top of dir.dirs) {
+      const singleChildRun = [top];
+      for (let c = top; c.dirs.length === 1 && !c.files.length && !c.ignored && !c.dirs[0].ignored;) singleChildRun.push((c = c.dirs[0]));
+      const d = singleChildRun[singleChildRun.length - 1];
+      const isOpen = singleChildRun.every((c) => open.has(c.path));
       rows.push(
         <button
           key={d.path}
           className={`tree-dir${d.ignored ? " is-ignored" : ""}${d.path === list.menu ? " is-menu" : ""}`}
-          style={{ paddingLeft: 16 + depth * INDENT }}
+          style={depthStyle(depth)}
           aria-expanded={isOpen}
           data-dir={d.path}
-          title={`${d.path}${d.ignored ? "\nIgnored by git" : ""}`}
-          onClick={() => toggle(d)}
+          data-tip={`${d.path}${d.ignored ? "\nIgnored by git" : ""}`}
+          onClick={() => toggle(singleChildRun, isOpen)}
           onContextMenu={(e) => list.onMenu(d.path, e)}
         >
-          <span className="name">{d.name}</span>
-          {d.changes > 0 && (
+          <span className="name">
+            <bdi>
+              {singleChildRun.slice(0, -1).map((c) => (
+                <span key={c.path} className="tree-seg" data-dir={c.path}>
+                  {c.name}
+                  <i>/</i>
+                </span>
+              ))}
+              {d.name}
+              <i>/</i>
+            </bdi>
+          </span>
+          {d.changes > 0 && !isOpen && (
             <span className="tree-count" title={`${d.changes} changed ${d.changes === 1 ? "file" : "files"}`}>
               {d.changes}
             </span>
@@ -178,7 +178,7 @@ export function FileTree({ listing, changed, list, folders, onFolders }: Props) 
       const error = opened.get(d.path);
       if (typeof error === "string") {
         rows.push(
-          <div key={`${d.path}:error`} className="no-match" style={{ paddingLeft: 32 + depth * INDENT }}>
+          <div key={`${d.path}:error`} className="no-match tree-note" style={depthStyle(depth + 1)}>
             {error}
           </div>,
         );

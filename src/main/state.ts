@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { app } from "electron";
 
@@ -20,5 +20,7 @@ export function loadState(): State {
 }
 
 export function saveState(patch: State): void {
-  writeFileSync(file(), JSON.stringify({ ...loadState(), ...patch }, null, 2));
+  const tmp = `${file()}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ ...loadState(), ...patch }, null, 2));
+  renameSync(tmp, file());
 }

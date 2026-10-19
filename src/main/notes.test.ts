@@ -219,6 +219,6 @@ describe("readNotes", () => {
     const { r, write } = await setup(["a.ts"]);
     r.write("a.ts", "new\none\nadded\n");
     write({ chapters: [{ title: "A", ranges: [{ path: "a.ts", lines: [2, 2], code: "added" }, "a.ts", { path: "../x", lines: [1, 1] }] }] });
-    expect((await readNotes(r.root)).placed).toEqual([[{ start: 3, end: 3 }, null, { start: 1, end: 1 }]]);
+    expect((await readNotes(r.root)).placed).toEqual([[{ start: 3, end: 3 }, "all", { start: 1, end: 1 }]]);
   });
 });

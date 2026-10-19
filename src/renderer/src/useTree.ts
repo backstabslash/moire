@@ -21,6 +21,5 @@ export function useTree(repo: RepoInfo | null, mode: CompareMode, modeKey: strin
       stale = true;
     };
   }, [repo, modeKey, refreshTick, enabled]);
-  // The previous mode's listing stays up until this one loads, so the tree never blanks.
   return enabled && tree && tree.root === repo?.root ? tree.data : null;
 }

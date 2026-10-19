@@ -311,7 +311,7 @@ select {
 }
 
 :focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
 
@@ -319,6 +319,10 @@ kbd {
   font: 400 11px/1 var(--code);
   color: var(--faint);
   margin-left: 6px;
+}
+
+[data-hints="off"] kbd:not(:is(.status, .keys-help, .notes-foot) kbd) {
+  display: none !important;
 }
 
 .app {
@@ -550,7 +554,14 @@ kbd {
   padding: 2px 14px 8px;
 }
 
+.branch-form select,
+.branch-form ::picker(select) {
+  appearance: base-select;
+}
+
 .branch-form select {
+  display: flex;
+  align-items: center;
   min-width: 0;
   height: 30px;
   padding: 0 8px;
@@ -558,6 +569,57 @@ kbd {
   border-radius: 3px;
   background: var(--plate);
   font: 400 12.5px var(--code);
+}
+
+.branch-form select:open {
+  border-color: var(--graphite);
+}
+
+.branch-form select::picker-icon {
+  margin-left: auto;
+  color: var(--graphite);
+  font-size: 9px;
+}
+
+.branch-form ::picker(select) {
+  max-height: 320px;
+  margin-top: 2px;
+  padding: 4px 0;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--plate);
+  color: var(--ink);
+  box-shadow: 0 12px 28px -16px rgb(23 32 42 / 0.5);
+}
+
+.branch-form option {
+  padding: 4px 10px;
+  font: 400 12.5px var(--code);
+}
+
+.branch-form option::checkmark {
+  display: none;
+}
+
+.branch-form option:hover,
+.branch-form option:focus-visible {
+  outline: none;
+  background: var(--frame-2);
+}
+
+.branch-form option:checked {
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--ink);
+}
+
+.branch-form optgroup {
+  padding-top: 4px;
+  color: var(--graphite);
+  font: 500 12px var(--ui);
+}
+
+.branch-form optgroup option {
+  color: var(--ink);
 }
 
 .branch-form .btn {
@@ -750,7 +812,7 @@ kbd {
 
 .file.is-menu,
 .tree-dir.is-menu {
-  box-shadow: inset 0 0 0 1px var(--focus);
+  box-shadow: inset 0 0 0 1px var(--graphite);
 }
 
 .file-menu {
@@ -894,7 +956,7 @@ kbd {
 .commit-filter:focus,
 .commit-box textarea:focus {
   outline: none;
-  border-color: var(--focus);
+  border-color: var(--graphite);
 }
 
 .file-filter {
@@ -959,7 +1021,6 @@ kbd {
   min-width: 0;
 }
 
-/* the branch drops to a second line before the repo name gets cut */
 .side-head .repo {
   display: flex;
   flex-wrap: wrap;
@@ -1016,7 +1077,7 @@ kbd {
 
 .side-resize:hover,
 .side-resize:active {
-  background: linear-gradient(var(--focus), var(--focus)) center / 2px 100% no-repeat;
+  background: linear-gradient(var(--graphite), var(--graphite)) center / 2px 100% no-repeat;
 }
 
 .side-head .repo small {
@@ -1027,6 +1088,10 @@ kbd {
 .side-head .repo:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.side-head .count:empty {
+  display: none;
 }
 
 .side-head .count {
@@ -1062,15 +1127,7 @@ kbd {
   text-overflow: ellipsis;
 }
 
-.files .dir .roots {
-  flex: none;
-  font: 400 11.5px var(--ui);
-}
-
 .files .tier {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
   padding: 12px 16px 3px;
   color: var(--graphite);
   font: 500 13px var(--ui);
@@ -1080,17 +1137,11 @@ kbd {
   padding-top: 2px;
 }
 
-.files .tier span {
-  color: var(--faint);
-  font: 400 11.5px var(--code);
-}
-
 .file .name[data-hint]::after {
   content: " " attr(data-hint);
   color: var(--faint);
 }
 
-/* hidden rather than left out, so the row's text is still the file name */
 .file .stem {
   display: none;
 }
@@ -1103,7 +1154,6 @@ kbd {
   color: var(--graphite);
 }
 
-/* a register mark hanging a sibling off its source */
 .tie {
   display: inline-block;
   width: 9px;
@@ -1115,26 +1165,12 @@ kbd {
 }
 
 .slot-empty {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 9px;
-  padding: 3px 16px 5px 22px;
+  padding: 3px 12px 5px 22px;
   color: var(--faint);
   font: italic 400 12px var(--code);
-}
-
-.slot-empty > span:first-child {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.with-marks .slot-empty {
-  padding-right: 37px;
-}
-
-.slot-empty .why {
-  font: 400 11.5px var(--ui);
 }
 
 .side-count {
@@ -1159,9 +1195,9 @@ kbd {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 9px;
+  gap: 6px;
   width: 100%;
-  padding: 5px 16px;
+  padding: 5px 12px 5px 16px;
   color: var(--ink);
   text-align: left;
   font: 400 12.5px var(--code);
@@ -1185,7 +1221,7 @@ kbd {
 .file.is-active.is-menu {
   box-shadow:
     inset 3px 0 0 var(--ink),
-    inset 0 0 0 1px var(--focus);
+    inset 0 0 0 1px var(--graphite);
 }
 
 .file .kind {
@@ -1220,7 +1256,7 @@ kbd {
   display: flex;
   gap: 6px;
   font-size: 11.5px;
-  min-width: 50px;
+  min-width: 34px;
   justify-content: flex-end;
 }
 
@@ -1248,27 +1284,89 @@ kbd {
   padding: 0 8px;
 }
 
+.tree-dir,
+.file.in-tree,
+.tree-note {
+  --indent: 12px;
+  position: relative;
+  padding-block: 4px;
+  line-height: 15px;
+  padding-left: calc(16px + var(--depth) * var(--indent));
+}
+
+.tree-dir::before,
+.file.in-tree::before,
+.tree-note::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 20px;
+  width: calc(var(--depth) * var(--indent));
+  background: repeating-linear-gradient(90deg, var(--rule) 0 1px, transparent 1px var(--indent));
+  pointer-events: none;
+}
+
+.file.in-tree:not(.is-unchanged, .is-ignored)::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: calc(7px + var(--depth) * var(--indent));
+  width: 3px;
+  background: var(--graphite);
+  pointer-events: none;
+}
+
+.file.in-tree:has(.s-add)::after {
+  background: var(--b);
+}
+
+.file.in-tree:has(.s-del)::after {
+  background: var(--a);
+}
+
+.file.in-tree:has(.s-add):has(.s-del)::after {
+  background: linear-gradient(var(--a) 50%, var(--b) 50%);
+}
+
+.file.in-tree.is-staged::after {
+  opacity: 0.45;
+}
+
 .tree-dir {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 5px 16px;
+  padding-right: 12px;
   color: var(--graphite);
   text-align: left;
   font: 400 12.5px var(--code);
 }
 
-.tree-dir::before {
-  content: "";
-  justify-self: center;
-  border-block: 4px solid transparent;
-  border-left: 5px solid currentColor;
+.tree-dir .tree-count {
+  grid-column: 3;
 }
 
-.tree-dir[aria-expanded="true"]::before {
-  transform: rotate(90deg);
+.with-marks .tree-dir {
+  padding-right: 30px;
+}
+
+.tree-dir[aria-expanded="true"] {
+  color: var(--ink);
+}
+
+.tree-dir[aria-expanded="true"]::after {
+  content: "";
+  grid-column: 2;
+  grid-row: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.tree-dir .name i {
+  font-style: inherit;
+  color: var(--faint);
 }
 
 .tree-dir:hover {
@@ -1279,11 +1377,13 @@ kbd {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
 }
 
 .tree-count {
   font-size: 11px;
-  color: var(--focus);
+  color: var(--ink);
 }
 
 .file.is-unchanged .name {
@@ -1300,32 +1400,39 @@ kbd {
   grid-column: 2;
 }
 
-.file .mark {
+.file .reg {
   justify-self: center;
   width: 12px;
   height: 12px;
 }
 
-svg.mark {
+.reg {
+  flex: none;
+  clip-path: circle(50%);
+  background: var(--plate);
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+
+.reg path {
   fill: none;
-  stroke: var(--graphite);
-  stroke-width: 1.6;
+  stroke-width: 1.1;
 }
 
-svg.mark-partial {
+.reg-a {
+  stroke: var(--a);
+}
+
+.reg-b {
+  stroke: var(--b);
+}
+
+.reg-full {
+  background: var(--b-line);
+}
+
+.reg-full path {
+  stroke: var(--b-ink);
   stroke-width: 1.3;
-}
-
-svg.mark-partial .half {
-  fill: var(--graphite);
-  stroke: none;
-}
-
-.file .mark-changed {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--focus);
 }
 
 .file.is-staged .name,
@@ -1352,9 +1459,10 @@ svg.mark-partial .half {
 
 .stage-progress-line b {
   font-weight: 500;
+  white-space: nowrap;
 }
 
-.stage-progress-line label {
+.stage-progress-line .hide-staged {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1362,7 +1470,7 @@ svg.mark-partial .half {
   font-size: 13px;
 }
 
-.stage-progress-line input {
+.stage-progress-line .hide-staged input {
   margin: 0;
   accent-color: var(--ink);
 }
@@ -1409,16 +1517,23 @@ svg.mark-partial .half {
 
 .stage-bar {
   display: flex;
-  height: 4px;
-  background: var(--frame-2);
+  height: 8px;
+  border-radius: 2px;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(90deg, color-mix(in srgb, var(--a) 55%, transparent) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(76deg, color-mix(in srgb, var(--b) 55%, transparent) 0 1px, transparent 1px 3px), var(--plate);
+  box-shadow: inset 0 0 0 1px var(--rule);
 }
 
 .stage-bar i {
-  background: var(--ink);
+  background: var(--b);
 }
 
-.stage-bar i.is-changed {
-  background: var(--focus);
+@media (prefers-reduced-motion: no-preference) {
+  .stage-bar i {
+    transition: width 320ms ease-out;
+  }
 }
 
 .s-add {
@@ -1456,8 +1571,7 @@ svg.mark-partial .half {
   height: 40px;
   padding: 0 12px 0 18px;
   border-bottom: 1px solid var(--rule);
-  background: color-mix(in srgb, var(--focus) 9%, var(--plate));
-  box-shadow: inset 3px 0 0 var(--focus);
+  background: var(--frame);
 }
 
 .encoding {
@@ -1496,14 +1610,14 @@ svg.mark-partial .half {
 }
 
 .pane-h {
+  --pane-button-h: 25px;
   position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 12px 18px 11px;
   min-width: 0;
-  /* fits the Stage/Preview buttons, so the header keeps its height in modes without them */
-  min-height: 48px;
+  min-height: calc(12px + var(--pane-button-h) + 11px);
 }
 
 .pane-h + .pane-h {
@@ -1517,8 +1631,19 @@ svg.mark-partial .half {
   text-overflow: ellipsis;
 }
 
-.pane-h span:not(.plate-tag) {
+.pane-h .pane-name span {
+  border-radius: 2px;
+}
+
+.pane-h .pane-arrow {
+  flex: none;
   color: var(--faint);
+  font: 400 14px var(--ui);
+}
+
+.pane-h .pane-absent,
+.pane-h .pane-mode {
+  color: var(--graphite);
   font: 400 12.5px var(--code);
   white-space: nowrap;
   overflow: hidden;
@@ -1537,6 +1662,7 @@ svg.mark-partial .half {
 }
 
 .pane-h .actions button {
+  min-height: var(--pane-button-h);
   padding: 4px 8px;
   color: var(--graphite);
   font: 500 13px var(--ui);
@@ -1545,12 +1671,6 @@ svg.mark-partial .half {
 
 .pane-h .actions button:hover {
   color: var(--ink);
-}
-
-/* With copy buttons in the head, the side's label gives way before the file name does. */
-.pane-h > b {
-  flex-shrink: 0;
-  max-width: 40%;
 }
 
 .pane-copy {
@@ -1571,6 +1691,7 @@ svg.mark-partial .half {
 }
 
 .pane-copy button {
+  min-height: var(--pane-button-h);
   padding: 4px 8px;
   color: var(--graphite);
   font: 500 13px var(--ui);
@@ -1581,12 +1702,8 @@ svg.mark-partial .half {
   color: var(--ink);
 }
 
-.mini-h {
-  border-left: 1px solid var(--rule);
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  align-items: center;
-  justify-items: center;
+.main:not(.is-preview) .panes-head > .pane-h:last-child {
+  grid-column: -3 / -1;
 }
 
 .scroller {
@@ -1600,6 +1717,7 @@ svg.mark-partial .half {
 
 .diff-scroller {
   scrollbar-width: none;
+  container-type: size;
 }
 
 .diff {
@@ -1654,7 +1772,6 @@ svg.mark-partial .half {
   border-left: 1px solid var(--rule);
 }
 
-/* A text drag stays on the side it started on, and never picks up the diff's own labels. */
 .diff :is(.hunk-head, .fold, .note, .absent, button),
 .diff[data-pick="a"] :is(.cell.b, .pb),
 .diff[data-pick="b"] :is(.cell.a, .pa) {
@@ -1690,18 +1807,18 @@ svg.mark-partial .half {
   color: var(--a-ink);
 }
 
-.row.split .ln.a.del,
+:where(.row.split) .ln.a.del,
 .row.plate .ln.del,
-.row.uni .ln.a.del {
+:where(.row.uni) .ln.a.del {
   background:
     repeating-linear-gradient(var(--a) 0 4px, transparent 4px 7px) 0 0 / 3px 100% no-repeat,
     var(--a-line);
 }
 
-.row.split .ln.b.add,
+:where(.row.split) .ln.b.add,
 .row.plate .ln.add,
-.row.uni .ln.a.add,
-.diff.only-b .row.uni .ln.b.add {
+:where(.row.uni) .ln.a.add,
+:where(.diff.only-b .row.uni) .ln.b.add {
   background:
     linear-gradient(var(--b), var(--b)) 0 0 / 3px 100% no-repeat,
     var(--b-line);
@@ -1727,7 +1844,6 @@ svg.mark-partial .half {
   font-weight: 600;
 }
 
-/* On the text, not the cell, so a row stretched to match the other side gets no marks below its own lines. */
 .cell > .text {
   position: relative;
 }
@@ -1735,13 +1851,10 @@ svg.mark-partial .half {
 .cell > .text::after {
   content: "";
   position: absolute;
-  top: var(--row);
-  bottom: 0;
-  left: -2ch;
-  width: 1ch;
-  background: var(--faint);
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='21'%3E%3Cpath d='M1.5 6v5.5h4.5M4 9l2.5 2.5L4 14' fill='none' stroke='black' stroke-width='1.2'/%3E%3C/svg%3E")
-    0 0 / 8px var(--row) repeat-y;
+  top: calc(var(--row) - 4px);
+  bottom: 4px;
+  left: -1.25ch;
+  border-left: 1px dotted var(--faint);
 }
 
 .absent {
@@ -1779,11 +1892,36 @@ svg.mark-partial .half {
   background: color-mix(in srgb, var(--focus) 10%, var(--plate));
 }
 
-.is-staged > .ln,
 .is-staged > .cell,
-.ln.is-staged,
 .cell.is-staged {
   opacity: 0.55;
+}
+
+.ln.add.is-staged {
+  background: repeating-linear-gradient(color-mix(in srgb, var(--b) 50%, transparent) 0 1px, transparent 1px 3px), var(--b-line);
+}
+
+.ln.del.is-staged {
+  background: repeating-linear-gradient(color-mix(in srgb, var(--a) 50%, transparent) 0 1px, transparent 1px 3px), var(--a-line);
+}
+
+:where(.row.is-done) > .ln {
+  background: repeating-linear-gradient(color-mix(in srgb, var(--b) 32%, transparent) 0 1px, transparent 1px 3px);
+  color: var(--b-ink);
+}
+
+:where(.row.is-done) > .cell {
+  background: repeating-linear-gradient(color-mix(in srgb, var(--b) 9%, transparent) 0 1px, transparent 1px 3px);
+}
+
+.row.has-cut > .ln::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--a) 0 3px, transparent 3px 5px);
 }
 
 [data-tone="dark"] .absent {
@@ -1852,6 +1990,7 @@ svg.mark-partial .half {
 
 .hunk-head.is-focus {
   color: var(--ink);
+  background: var(--frame);
 }
 
 .hunk-head.is-focus::before {
@@ -1861,7 +2000,7 @@ svg.mark-partial .half {
   top: 0;
   height: 100%;
   width: 3px;
-  background: var(--focus);
+  background: var(--ink);
 }
 
 .hh-badge {
@@ -1874,14 +2013,9 @@ svg.mark-partial .half {
   color: var(--ink);
 }
 
-.hh-badge::before {
-  content: "";
-  width: 4px;
-  height: 8px;
-  margin: 0 2px 2px;
-  border: solid currentColor;
-  border-width: 0 1.6px 1.6px 0;
-  transform: rotate(45deg);
+.hh-badge .reg {
+  width: 13px;
+  height: 13px;
 }
 
 .hh-actions {
@@ -1904,6 +2038,10 @@ svg.mark-partial .half {
 
 .hunk-head:is(.is-focus, .has-sel) .hh-btn {
   border-color: var(--rule);
+}
+
+.hunk-head:not(.is-focus, .has-sel, :hover) .hh-actions {
+  opacity: 0;
 }
 
 .hh-btn:hover {
@@ -1929,15 +2067,20 @@ svg.mark-partial .half {
   display: inline;
 }
 
-.hunk-head.is-focus :is(.hh-stage, .hh-unstage) {
-  background: color-mix(in srgb, var(--focus) 12%, var(--plate));
-  color: var(--ink);
-  border-color: color-mix(in srgb, var(--focus) 55%, var(--rule));
+.hunk-head:is(.is-focus, .has-sel) :is(.hh-stage, .hh-unstage) {
+  background: var(--ink);
+  color: var(--plate);
+  border-color: var(--ink);
 }
 
-.hunk-head.is-focus :is(.hh-stage, .hh-unstage):hover {
-  background: color-mix(in srgb, var(--focus) 22%, var(--plate));
-  border-color: var(--focus);
+.hunk-head:is(.is-focus, .has-sel) :is(.hh-stage, .hh-unstage):hover {
+  background: color-mix(in srgb, var(--ink) 85%, var(--plate));
+  color: var(--plate);
+}
+
+.hunk-head:is(.is-focus, .has-sel) :is(.hh-stage, .hh-unstage) kbd {
+  color: inherit;
+  opacity: 0.7;
 }
 
 .vrow.in-focus::before {
@@ -1948,7 +2091,39 @@ svg.mark-partial .half {
   top: 0;
   height: 100%;
   width: 3px;
-  background: color-mix(in srgb, var(--focus) 40%, transparent);
+  background: color-mix(in srgb, var(--ink) 35%, transparent);
+}
+
+.stub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 12px 0 18px;
+  border-top: 1px solid var(--rule);
+  background: var(--b-line);
+  color: var(--b-ink);
+  font: 500 12.5px var(--ui);
+}
+
+.stub .reg {
+  width: 13px;
+  height: 13px;
+}
+
+.stub button {
+  padding: 2px 6px;
+  border-radius: 3px;
+  color: var(--b-ink);
+  font-weight: 500;
+}
+
+.stub button:first-of-type {
+  margin-left: auto;
+}
+
+.stub button:hover {
+  background: color-mix(in srgb, var(--b) 18%, transparent);
 }
 
 .fold {
@@ -1987,6 +2162,10 @@ svg.mark-partial .half {
   stroke: color-mix(in srgb, var(--b) 60%, transparent);
 }
 
+.fold.has-done .grating .ga {
+  stroke: color-mix(in srgb, var(--b) 45%, transparent);
+}
+
 .hunk-head.is-folded {
   justify-content: center;
   height: 28px;
@@ -2006,10 +2185,11 @@ svg.mark-partial .half {
 
 .fold span,
 .fold-label {
+  --fold-pad-x: 10px;
   position: relative;
   z-index: 1;
   background: var(--plate);
-  padding: 2px 10px;
+  padding: 2px var(--fold-pad-x);
 }
 
 .fold-label {
@@ -2022,9 +2202,8 @@ svg.mark-partial .half {
   color: var(--ink);
 }
 
-/* sits flush against the fold label, reading as one more part of it */
 .fold-all {
-  margin-left: -20px;
+  margin-left: calc(-2 * var(--fold-pad-x));
   padding-left: 0;
 }
 
@@ -2104,12 +2283,24 @@ svg.mark-partial .half {
   margin: 16px auto 0;
 }
 
+.diff > .vrow:only-child > .note {
+  min-height: 100cqh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
 .main.is-preview {
   grid-template-columns: minmax(0, 1fr);
 }
 
 .main.preview-image .panes-head {
   grid-template-columns: 1fr 1fr;
+}
+
+.main.preview-image .panes-head:has(> .pane-h:only-child) {
+  grid-template-columns: 1fr;
 }
 
 .main.preview-markdown .panes-head {
@@ -2132,6 +2323,10 @@ svg.mark-partial .half {
   grid-template-columns: 1fr 1fr;
   min-height: 0;
   overflow: auto;
+}
+
+.img-compare.is-whole {
+  grid-template-columns: 1fr;
 }
 
 .img-side {
@@ -2423,7 +2618,6 @@ svg.mark-partial .half {
   min-width: 0;
 }
 
-/* Hints that don't fit wrap onto a hidden second line, so none is cut in half and ? stays. */
 .status .keys-list {
   display: flex;
   flex-wrap: wrap;
@@ -2695,7 +2889,7 @@ button.commit-subject[aria-expanded="true"]::before {
 
 .search input:focus {
   outline: none;
-  border-color: var(--focus);
+  border-color: var(--graphite);
 }
 
 .search-status {
@@ -2844,9 +3038,9 @@ mark.hit.is-current span[style] {
 }
 
 .keys-foot {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 16px;
   padding: 9px 16px;
   border-top: 1px solid var(--rule);
   background: var(--frame);
@@ -2859,6 +3053,28 @@ mark.hit.is-current span[style] {
   gap: 14px;
 }
 
+.keys-hints {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.keys-hints input {
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+:is(.keys-hints, .hide-staged) span {
+  text-box: trim-both cap alphabetic;
+}
+
+.keys-version {
+  justify-self: end;
+  font: 400 12px var(--code);
+}
+
 .keys-foot button {
   color: var(--graphite);
   font-weight: 500;
@@ -2868,7 +3084,6 @@ mark.hit.is-current span[style] {
   color: var(--ink);
 }
 
-/* files in: the drop target takes the B tint, the colour of incoming lines */
 .drop-foot {
   display: grid;
   gap: 3px;
@@ -2976,7 +3191,6 @@ mark.hit.is-current span[style] {
   pointer-events: auto;
 }
 
-/* a clash is reviewed as a diff: the repository's file (A) against the incoming one (B) */
 .clash-bar {
   grid-row: 3;
   grid-column: 2;
@@ -3060,12 +3274,6 @@ mark.hit.is-current span[style] {
   font-weight: 500;
 }
 
-.notes-head .count,
-.uncovered .count {
-  font: 400 12px var(--code);
-  color: var(--graphite);
-}
-
 .notes-close {
   margin-left: auto;
   color: var(--graphite);
@@ -3098,15 +3306,13 @@ mark.hit.is-current span[style] {
 }
 
 .chapter {
-  margin-top: 8px;
+  margin-top: 4px;
   border-radius: 3px;
 }
 
 .chapter.is-current {
   background: var(--plate);
-  box-shadow:
-    inset 3px 0 0 var(--focus),
-    0 0 0 1px var(--rule);
+  box-shadow: 0 0 0 1px var(--rule);
 }
 
 .chapter-head {
@@ -3114,7 +3320,7 @@ mark.hit.is-current span[style] {
   grid-template-columns: 22px minmax(0, 1fr);
   gap: 2px 6px;
   width: 100%;
-  padding: 8px 8px 9px 4px;
+  padding: 7px 8px 8px 4px;
   border-radius: 3px;
   text-align: left;
 }
@@ -3131,7 +3337,7 @@ mark.hit.is-current span[style] {
 }
 
 .chapter.is-current .note-no {
-  color: var(--focus);
+  color: var(--ink);
 }
 
 .chapter-title {
@@ -3148,20 +3354,31 @@ mark.hit.is-current span[style] {
   color: var(--a-ink);
 }
 
-.chapter-done {
-  font: 400 12px var(--ui);
-  color: var(--faint);
-}
-
 .note-text {
   font-size: 14px;
   line-height: 1.45;
   color: var(--ink);
 }
 
-.chapter.is-done .chapter-title,
-.chapter.is-done .note-text {
-  color: var(--faint);
+.chapter.is-done:not(.is-current) .chapter-title,
+.chapter.is-done:not(.is-current) .note-text {
+  color: var(--graphite);
+}
+
+.chapter.is-done {
+  background-image:
+    repeating-linear-gradient(color-mix(in srgb, var(--b) 60%, transparent) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(color-mix(in srgb, var(--b) 9%, transparent) 0 1px, transparent 1px 3px);
+  background-size:
+    3px 100%,
+    auto;
+  background-repeat: no-repeat, repeat;
+}
+
+.chapter.is-partly {
+  background-image: repeating-linear-gradient(color-mix(in srgb, var(--b) 45%, transparent) 0 1px, transparent 1px 3px);
+  background-size: 3px 100%;
+  background-repeat: no-repeat;
 }
 
 .chapter-body {
@@ -3182,7 +3399,7 @@ mark.hit.is-current span[style] {
 }
 
 .stop.is-current {
-  background: color-mix(in srgb, var(--focus) 12%, var(--plate));
+  background: var(--frame-2);
 }
 
 .stop-where {
@@ -3194,11 +3411,33 @@ mark.hit.is-current span[style] {
 }
 
 .stop.is-current .stop-where {
-  color: var(--focus);
+  color: var(--ink);
+  font-weight: 500;
 }
 
 .stop.is-elsewhere .stop-where {
   color: var(--faint);
+}
+
+.stop-staged {
+  display: inline-flex;
+  align-self: center;
+  margin-left: -2px;
+}
+
+.lined {
+  width: 10px;
+  height: 10px;
+}
+
+.lined path {
+  fill: none;
+  stroke: var(--b);
+  stroke-width: 1;
+}
+
+.lined-partial path {
+  stroke: color-mix(in srgb, var(--b) 70%, transparent);
 }
 
 .stop-note {
@@ -3212,7 +3451,7 @@ mark.hit.is-current span[style] {
 
 .uncovered {
   display: grid;
-  margin-top: 16px;
+  margin-top: 12px;
   padding: 10px 4px 0 30px;
   border-top: 1px solid var(--rule);
   font-size: 13px;
@@ -3225,13 +3464,13 @@ mark.hit.is-current span[style] {
 }
 
 .uncovered button {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
   padding: 2px 4px;
   border-radius: 3px;
   font: 400 12.5px/20px var(--code);
   text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .uncovered button:hover {
@@ -3284,10 +3523,30 @@ mark.hit.is-current span[style] {
 }
 
 .row.in-chapter > .ln.b::after {
-  border-color: var(--focus);
+  border-color: var(--ink);
 }
 
 .row.split.note-now > .cell.b,
 .row.uni.note-now > .cell {
-  background-image: linear-gradient(color-mix(in srgb, var(--focus) 11%, transparent), color-mix(in srgb, var(--focus) 11%, transparent));
+  background-image: linear-gradient(color-mix(in srgb, var(--ink) 7%, transparent), color-mix(in srgb, var(--ink) 7%, transparent));
+}
+
+.hover-tip {
+  position: fixed;
+  z-index: 40;
+  max-width: 420px;
+  padding: 5px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--plate);
+  box-shadow: 0 8px 20px -12px rgb(23 32 42 / 0.5);
+  color: var(--ink);
+  font: 400 12.5px/1.45 var(--code);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+.hover-tip.is-above {
+  translate: 0 -100%;
 }

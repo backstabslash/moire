@@ -30,7 +30,7 @@ function hunk(at: number): Hunk {
 }
 
 const file: FileDiff = { path: "a.ts", status: "modified", binary: false, additions: 2, deletions: 2, hunks: [hunk(5), hunk(16)] };
-const contents = { a: oldText, b: newText, tooLarge: false };
+const contents = { a: oldText, b: newText, hidden: false };
 const rows = (layout: "split" | "unified") => buildRows(file, contents, { layout, scope: "changed", expanded: new Set() });
 const at = (list: Row[], side: "a" | "b" | "line", no: number) =>
   list.findIndex((r) => (r.t === "split" ? r[side === "line" ? "b" : side]?.no === no : r.t === "uni" && side === "line" && r.line.no === no));
@@ -64,12 +64,12 @@ describe("copySide", () => {
   it("copies a whole side byte for byte, trailing newline included", () => {
     expect(copySide(contents, "b")).toEqual({ text: newText, count: 20 });
     expect(copySide(contents, "a")).toEqual({ text: oldText, count: 20 });
-    expect(copySide({ a: null, b: "no newline", tooLarge: false }, "b")).toEqual({ text: "no newline", count: 1 });
+    expect(copySide({ a: null, b: "no newline", hidden: false }, "b")).toEqual({ text: "no newline", count: 1 });
   });
 
   it("has nothing to copy for a missing side or a file too large to show", () => {
-    expect(copySide({ a: null, b: "x\n", tooLarge: false }, "a")).toBeNull();
-    expect(copySide({ a: null, b: null, tooLarge: true }, "b")).toBeNull();
+    expect(copySide({ a: null, b: "x\n", hidden: false }, "a")).toBeNull();
+    expect(copySide({ a: null, b: null, hidden: true }, "b")).toBeNull();
     expect(copySide(null, "b")).toBeNull();
   });
 });

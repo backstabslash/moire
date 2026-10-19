@@ -1,4 +1,4 @@
-import { type MouseEvent, type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import type { CompareMode, FileDiff, FileTree as Listing, RepoInfo, RepoState, Upstream } from "../../../shared/types";
 import { fuzzyMatch, orderPaths } from "../model/files";
 import { type Grouping, type PairedGroup, pairFiles } from "../model/paired";
@@ -53,6 +53,19 @@ interface Props {
   onWidth(width: number): void;
 }
 
+function useRelistOpenIgnoredFolders(root: string, folders: Folders, setFolders: Dispatch<SetStateAction<Folders>>, refreshTick: number) {
+  useEffect(() => {
+    for (const [dir, entries] of folders.opened) {
+      if (typeof entries === "string" || !folders.open.has(dir)) continue;
+      window.moire.listDir(root, dir).then(
+        (next) =>
+          setFolders((cur) => (cur.root === root && !sameList(cur.opened.get(dir), next) ? { ...cur, opened: new Map(cur.opened).set(dir, next) } : cur)),
+        () => {},
+      );
+    }
+  }, [refreshTick]);
+}
+
 export function Sidebar({
   repo,
   upstream,
@@ -92,18 +105,7 @@ export function Sidebar({
     void window.moire.watchFolders(repo.root, openIgnored ? openIgnored.split("\0") : []);
   }, [repo.root, openIgnored]);
 
-  // The watcher skips ignored folders except for files coming and going in open ones, so those are listed again on each refresh.
-  useEffect(() => {
-    const root = repo.root;
-    for (const [dir, entries] of folders.opened) {
-      if (typeof entries === "string" || !folders.open.has(dir)) continue;
-      window.moire.listDir(root, dir).then(
-        (next) =>
-          setFolders((cur) => (cur.root === root && !sameList(cur.opened.get(dir), next) ? { ...cur, opened: new Map(cur.opened).set(dir, next) } : cur)),
-        () => {},
-      );
-    }
-  }, [refreshTick]);
+  useRelistOpenIgnoredFolders(repo.root, folders, setFolders, refreshTick);
 
   const byPath = useMemo(() => new Map(changed.map((f) => [f.path, f])), [changed]);
   const ignored = useMemo(() => new Set(tree?.ignored), [tree]);
@@ -134,7 +136,6 @@ export function Sidebar({
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [active, view]);
 
-  // Clicked buttons drop focus, so a click in the list also counts as the list having it.
   const navRef = useRef<HTMLElement>(null);
   useEffect(() => {
     let clicked = false;
@@ -162,17 +163,17 @@ export function Sidebar({
     };
   }, []);
 
-  const marks = changed.some((f) => f.changedSinceStaged || f.staged === "full" || f.staged === "partial");
+  const marks = changed.some((f) => f.staged === "partial");
   const list: ListState = { active, hitCounts, fresh, activeRef, onSelect, menu, onMenu };
   const total = view === "changed" ? changed.length : allPaths.length;
-  const count = view === "all" && !tree ? "" : filter ? `${listed.length} of ${total}` : `${total} ${total === 1 ? "file" : "files"}`;
+  const count = filter && (view === "changed" || tree) ? `${listed.length} of ${total}` : "";
 
   return (
     <aside className="sidebar">
       <Resizer width={width} onWidth={onWidth} />
       <div className="side-head">
         <span className="repo-line">
-          <button className="repo" title={`${repo.root}\nClick to open another repository`} onClick={onSwitchRepo}>
+          <button className="repo" data-tip={`${repo.root}${repo.branch ? `\n${repo.branch}` : ""}\nClick to open another repository`} onClick={onSwitchRepo}>
             <span>{repo.name}</span>
             <small>{repo.branch ?? repo.head ?? "no commits"}</small>
           </button>
@@ -224,7 +225,7 @@ export function Sidebar({
           : groups.map((g) => (
               <div className="group" key={g.dir}>
                 {g.dir && (
-                  <div className="dir" title={g.dir}>
+                  <div className="dir" data-tip={g.dir}>
                     <bdi>{g.dir}</bdi>
                   </div>
                 )}
@@ -258,24 +259,17 @@ function PairedList({ groups, list }: { groups: PairedGroup[]; list: ListState }
   return groups.map((g) => (
     <div className="group" key={g.tier ? g.label : g.folders[0]}>
       {g.tier ? (
-        <div className="tier">
-          {g.label}
-          <span>{g.rows.length}</span>
-        </div>
+        <div className="tier">{g.label}</div>
       ) : (
-        <div className="dir module" title={g.folders.join("\n")}>
+        <div className="dir module" data-tip={g.folders.join("\n")}>
           <bdi>{g.label}</bdi>
-          {g.mixed && <span className="roots">src and tests</span>}
         </div>
       )}
       {g.rows.map((r) =>
         "slot" in r ? (
-          <div className="slot-empty" key={`slot:${r.lead}`}>
-            <span>
-              <span className="tie" />
-              {r.slot}
-            </span>
-            <span className="why">no test change</span>
+          <div className="slot-empty" key={`slot:${r.lead}`} data-tip={`No test change for ${r.lead.split("/").pop()}`}>
+            <span className="tie" />
+            {r.slot}
           </div>
         ) : (
           fileRow(list, r.file.path, r.file, { hint: r.hint, suffix: r.suffix })

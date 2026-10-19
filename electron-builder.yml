@@ -30,8 +30,10 @@ mac:
     - target: zip
       arch: [arm64, x64]
   category: public.app-category.developer-tools
-  # Lets a folder be dropped on the Dock icon.
   extendInfo:
+    CFBundleName: Moire
+    CFBundleDisplayName: Moire
+    # Lets a folder be dropped on the Dock icon.
     CFBundleDocumentTypes:
       - CFBundleTypeName: Folder
         CFBundleTypeRole: Viewer

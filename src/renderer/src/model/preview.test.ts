@@ -11,6 +11,8 @@ describe("previewOf", () => {
   it("always previews binary images and offers it for SVG and Markdown", () => {
     expect(previewOf(file("a/logo.PNG", { binary: true }))).toEqual({ kind: "image", forced: true });
     expect(previewOf(file("a/logo.png"))).toBeNull();
+    expect(previewOf(file("logo.png", { status: "unchanged", binary: true }))).toEqual({ kind: "image", forced: true });
+    expect(previewOf(file("logo.png", { status: "untracked", tooLarge: true, unread: true }))).toEqual({ kind: "image", forced: true });
     expect(previewOf(file("icon.svg"))).toEqual({ kind: "image", forced: false });
     expect(previewOf(file("docs/plan.md"))).toEqual({ kind: "markdown", forced: false });
     expect(previewOf(file("docs/plan.md", { tooLarge: true }))).toBeNull();

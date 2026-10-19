@@ -25,14 +25,13 @@ async function writeJson(path: string, data: unknown) {
 
 export const notesPath = (root: string) => gitPath(root, ["rev-parse", "--git-path", "moire/notes.json"]);
 
-// Committed chapters sit in the common git folder, so every worktree sees them, like the commits.
 async function commitNotesPath(root: string, sha: string): Promise<string> {
   return join(await gitPath(root, ["rev-parse", "--git-common-dir"]), "moire", "commits", `${sha}.json`);
 }
 
 export async function readNotes(root: string, commit?: string): Promise<NotesFile> {
   const path = await notesPath(root);
-  await settleOnce(root, path);
+  await settleInTurn(root, path);
   if (commit) return readFrom(await commitNotesPath(root, (await commitOf(root, commit)) ?? commit));
   const file = await readFrom(path);
   return file.notes ? { ...file, placed: await placements(root, file.notes.chapters) } : file;
@@ -45,7 +44,6 @@ async function readFrom(path: string): Promise<NotesFile> {
   return { path, notes, problem };
 }
 
-// Where each range is in the work tree, found again by its code when lines above it changed.
 async function placements(root: string, chapters: Chapter[]): Promise<Placement[][]> {
   const cache = new Map<string, Promise<string[] | null>>();
   const linesOf = (path: string) => {
@@ -68,8 +66,7 @@ async function readLines(path: string): Promise<string[] | null> {
 
 const settling = new Map<string, Promise<void>>();
 
-// Two refreshes settling at once would both move the same chapters.
-function settleOnce(root: string, path: string): Promise<void> {
+function settleInTurn(root: string, path: string): Promise<void> {
   const run = (settling.get(path) ?? Promise.resolve()).then(() => settle(root, path));
   const tail = run.catch(() => {});
   settling.set(path, tail);
@@ -77,19 +74,27 @@ function settleOnce(root: string, path: string): Promise<void> {
   return run;
 }
 
-// Once HEAD moves, chapters with nothing left uncommitted move to the last commit made here that touched their
-// files, and chapters of commits that were amended, rebased or reset follow them. Nothing is ever dropped.
+type SeenHead = { kind: "never-seen" } | { kind: "no-commits" } | { kind: "commit"; sha: string };
+type MoveResult = "settled" | "notes-rewritten-meanwhile";
+
+function seenHead(headFileText: string | null): SeenHead {
+  const sha = headFileText?.trim();
+  if (sha === undefined) return { kind: "never-seen" };
+  return sha ? { kind: "commit", sha } : { kind: "no-commits" };
+}
+
+const mayBeHalfWritten = (file: Parsed | null) => !!file && !file.raw;
+
 async function settle(root: string, path: string): Promise<void> {
   const headFile = join(dirname(path), "head");
-  const [head, seen, busy] = await Promise.all([commitOf(root, "HEAD"), readText(headFile), inProgress(root)]);
-  // undefined: never looked at this repo; "": it had no commits yet.
-  const was = seen?.trim();
-  if (busy || was === (head ?? "")) return;
+  const [head, headFileText, busy] = await Promise.all([commitOf(root, "HEAD"), readText(headFile), inProgress(root)]);
+  const seen = seenHead(headFileText);
+  const unchanged = head ? seen.kind === "commit" && seen.sha === head : seen.kind === "no-commits";
+  if (busy || unchanged) return;
   const text = await readText(path);
   const working = text === null ? null : parse(text);
-  // A file that doesn't parse may be half written; settle once the agent finishes it.
-  if (working && !working.raw) return;
-  if (head && !(await move(root, path, head, was, text, working))) return;
+  if (mayBeHalfWritten(working)) return;
+  if (head && (await move(root, path, head, seen, text, working)) === "notes-rewritten-meanwhile") return;
   await mkdir(dirname(path), { recursive: true });
   await writeFile(headFile, (head ?? "") + "\n");
 }
@@ -99,11 +104,10 @@ async function inProgress(root: string): Promise<boolean> {
   return paths.some((p) => existsSync(resolve(root, p)));
 }
 
-// Returns false when the agent rewrote notes.json meanwhile, so the next read settles again from the same HEAD.
-async function move(root: string, path: string, head: string, was: string | undefined, text: string | null, working: Parsed | null) {
-  const { added, gone } = await history(root, path, head, was);
+async function move(root: string, path: string, head: string, seen: SeenHead, text: string | null, working: Parsed | null): Promise<MoveResult> {
+  const { added, gone } = await history(root, path, head, seen);
   const old = (await Promise.all(gone.map(async (sha) => ({ sha, file: await readCommit(root, sha) })))).filter((o) => o.file?.notes);
-  if (!old.length && !working?.notes?.chapters.length) return true;
+  if (!old.length && !working?.notes?.chapters.length) return "settled";
   const [{ files }, own, pairs] = await Promise.all([
     diff(root, { kind: "all" }),
     ownCommits(root, added),
@@ -126,11 +130,11 @@ async function move(root: string, path: string, head: string, was: string | unde
   };
   const restored: unknown[] = [];
   for (const { sha, file } of old) {
-    const { raw, notes, index } = file!;
+    const { raw, notes, rawIndex } = file!;
     const left = await open(notes!.chapters);
     notes!.chapters.forEach((_, i) => {
-      if (left[i]) restored.push(raw!.chapters[index[i]]);
-      else if (pairs.has(sha)) send(pairs.get(sha)!, notes!.summary, raw!.chapters[index[i]]);
+      if (left[i]) restored.push(raw!.chapters[rawIndex[i]]);
+      else if (pairs.has(sha)) send(pairs.get(sha)!, notes!.summary, raw!.chapters[rawIndex[i]]);
     });
   }
 
@@ -143,13 +147,13 @@ async function move(root: string, path: string, head: string, was: string | unde
       if (left[i]) return;
       const at = touched.findIndex((paths) => c.ranges.some((r) => paths.has(r.path)));
       if (at < 0) return;
-      moved.add(working.index[i]);
-      send(mine[at], working.notes!.summary, working.raw!.chapters[working.index[i]]);
+      moved.add(working.rawIndex[i]);
+      send(mine[at], working.notes!.summary, working.raw!.chapters[working.rawIndex[i]]);
     });
   }
-  if (!moved.size && !restored.length && !into.size) return true;
+  if (!moved.size && !restored.length && !into.size) return "settled";
 
-  if ((await readText(path)) !== text) return false;
+  if ((await readText(path)) !== text) return "notes-rewritten-meanwhile";
   for (const [sha, { summary, chapters }] of into) await addToCommit(root, sha, summary, chapters);
   const known = new Set((working?.raw?.chapters ?? []).map((c) => JSON.stringify(c)));
   const chapters = [...(working?.raw?.chapters ?? []).filter((_, i) => !moved.has(i)), ...restored.filter((c) => !known.has(JSON.stringify(c)))];
@@ -157,16 +161,16 @@ async function move(root: string, path: string, head: string, was: string | unde
     await mkdir(dirname(path), { recursive: true });
     await writeJson(path, { ...working?.raw, chapters });
   } else await rm(path, { force: true });
-  return true;
+  return "settled";
 }
 
-// Commits since HEAD was last seen, oldest first, and the ones an amend, rebase or reset took out of history.
-async function history(root: string, path: string, head: string, was: string | undefined): Promise<{ added: string[]; gone: string[] }> {
-  if (was === "") return { added: await revList(root, [head]), gone: [] };
-  if (was === undefined) {
+async function history(root: string, path: string, head: string, seen: SeenHead): Promise<{ added: string[]; gone: string[] }> {
+  if (seen.kind === "no-commits") return { added: await revList(root, [head]), gone: [] };
+  if (seen.kind === "never-seen") {
     const st = await stat(path).catch(() => null);
     return { added: st ? await revList(root, [`--since=@${Math.floor(st.mtimeMs / 1000)}`, head]) : [], gone: [] };
   }
+  const was = seen.sha;
   if (!(await commitOf(root, was))) return { added: [], gone: [] };
   if ((await tryGit(root, ["merge-base", "--is-ancestor", was, head])) !== null) return { added: await revList(root, [`${was}..${head}`]), gone: [] };
   const base = (await tryGit(root, ["merge-base", was, head]))?.trim();
@@ -181,7 +185,6 @@ async function ownCommits(root: string, shas: string[]): Promise<Set<string>> {
   return new Set(shas.filter((sha) => own.has(sha)));
 }
 
-// The commit each rewritten one became: the only one for an amend, else the one with the same subject and author.
 async function pairCommits(root: string, gone: string[], added: string[]): Promise<Map<string, string>> {
   if (!gone.length || !added.length) return new Map();
   if (gone.length === 1 && added.length === 1) return new Map([[gone[0], added[0]]]);
@@ -221,11 +224,10 @@ async function addToCommit(root: string, sha: string, summary: string | undefine
 }
 
 type Raw = Record<string, unknown> & { chapters: unknown[] };
-// raw is the file as written, so rewriting it keeps chapters moire skipped; index maps each shown chapter to it.
 interface Parsed {
   raw: Raw | null;
   notes: AgentNotes | null;
-  index: number[];
+  rawIndex: number[];
   problem?: string;
 }
 
@@ -239,23 +241,23 @@ function parse(text: string): Parsed {
   try {
     raw = JSON.parse(text);
   } catch (e) {
-    return { raw: null, notes: null, index: [], problem: `notes.json isn't valid JSON (${(e as Error).message})` };
+    return { raw: null, notes: null, rawIndex: [], problem: `notes.json isn't valid JSON (${(e as Error).message})` };
   }
   const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
-  if (!obj || !Array.isArray(obj.chapters)) return { raw: null, notes: null, index: [], problem: 'notes.json should hold an object with a "chapters" list' };
-  const index: number[] = [];
+  if (!obj || !Array.isArray(obj.chapters)) return { raw: null, notes: null, rawIndex: [], problem: 'notes.json should hold an object with a "chapters" list' };
+  const rawIndex: number[] = [];
   const kept: Chapter[] = [];
   obj.chapters.forEach((c, i) => {
     const chapter = toChapter(c);
     if (!chapter) return;
-    index.push(i);
+    rawIndex.push(i);
     kept.push(chapter);
   });
   const skipped = obj.chapters.length - kept.length;
   return {
     raw: obj as Raw,
     notes: { summary: str(obj.summary), chapters: kept },
-    index,
+    rawIndex,
     problem: skipped ? `Skipped ${skipped} ${skipped === 1 ? "chapter" : "chapters"} without a title or any ranges` : undefined,
   };
 }

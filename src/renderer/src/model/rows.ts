@@ -25,8 +25,7 @@ const INDENTED = new Set([
   "imba",
   "just",
 ]);
-// Formats where any whitespace change can change the meaning, so nothing folds.
-const EXACT = new Set([
+const WHITESPACE_SIGNIFICANT = new Set([
   "markdown",
   "mdx",
   "mdc",
@@ -54,17 +53,31 @@ export interface Side {
 
 export type Row =
   | { t: "hunk"; key: string; hunk: number; label: string; ctx: string; adds: number; dels: number; staged: "full" | "partial" | null; folded?: Folded }
-  | { t: "fold"; key: string; count: number; expandable: boolean; newFrom: number }
-  | { t: "split"; key: string; hunk: number; kind: "ctx" | "chg"; a?: Side; b?: Side; faded?: boolean }
-  | { t: "uni"; key: string; hunk: number; kind: "ctx" | "add" | "del"; a?: number; b?: number; line: Side; faded?: boolean }
-  | { t: "note"; key: string; text: string; expand?: string };
+  | { t: "fold"; key: string; count: number; expandable: boolean; newFrom: number; stagedEarlier?: number }
+  | ({ t: "split"; key: string; hunk: number; kind: "ctx" | "chg"; a?: Side; b?: Side; faded?: boolean } & Done)
+  | ({ t: "uni"; key: string; hunk: number; kind: "ctx" | "add" | "del"; a?: number; b?: number; line: Side; faded?: boolean } & Done)
+  | { t: "note"; key: string; text: string; expand?: string }
+  | { t: "stub"; key: string; treeLine: number; count: number; latest: boolean };
+
+interface Done {
+  stagedEarlier?: boolean;
+  deletionAbove?: boolean;
+}
+
+export interface Stub {
+  treeLine: number;
+  indexLine: number;
+  count: number;
+  undoId: string;
+  undoable?: boolean;
+}
 
 export interface Folded {
   keys: string[];
   count: number;
   gaps: [newFrom: number, count: number][];
-  // On the first of several whitespace folds: the keys of all of them.
-  all?: string[];
+  stagedEarlier?: number;
+  allWhitespaceFolds?: string[];
 }
 
 export interface BuildOptions {
@@ -75,20 +88,22 @@ export interface BuildOptions {
   plates?: number;
 }
 
-// Main decodes text as UTF-8, which turns each byte it can't read into U+FFFD.
+const UTF8_REPLACEMENT_CHAR = "\uFFFD";
+
 export function notUtf8(file: FileDiff, contents: FileContents | null): boolean {
-  if (file.binary || file.tooLarge || contents?.tooLarge) return false;
-  const bad = (text: string | null | undefined) => !!text?.includes("�");
+  if (file.binary || file.tooLarge || contents?.hidden) return false;
+  const bad = (text: string | null | undefined) => !!text?.includes(UTF8_REPLACEMENT_CHAR);
   return file.hunks.some((h) => h.lines.some((l) => bad(l.text))) || bad(contents?.a) || bad(contents?.b);
 }
 
 export function buildRows(file: FileDiff, contents: FileContents | null, opts: BuildOptions): Row[] {
-  if (file.status === "unchanged") return wholeFile(contents);
+  if (file.status === "unchanged" && !file.binary && !file.tooLarge) return wholeFile(contents);
   const note = (text: string): Row[] => [{ t: "note", key: "note", text }];
   const renamed = file.status === "renamed" ? `Renamed from ${file.oldPath}. ` : "";
+  const whole = file.status === "untracked" || file.status === "unchanged";
   if (file.binary) return note(`${renamed}Binary file, contents not shown.`);
   if (file.unread) return note("Not read: there are over 1,000 untracked files. Add their folder to .gitignore, or stage it whole.");
-  if (file.tooLarge) return note(file.status === "untracked" ? "File is over 2 MB, contents not shown." : `${renamed}Over 2 MB of changes, not shown.`);
+  if (file.tooLarge) return note(whole ? "File is over 2 MB, contents not shown." : `${renamed}Over 2 MB of changes, not shown.`);
   if (file.status === "conflicted") return note("Merge conflict. Resolve it in your editor (e); the All view (3) shows it with the markers.");
   const pointer = submoduleNote(file) ?? symlinkNote(file);
   if (pointer) return note(renamed + pointer);
@@ -106,9 +121,8 @@ export function buildRows(file: FileDiff, contents: FileContents | null, opts: B
   let newNext = 1;
 
   const lang = langFor(file.path, contents?.b ?? contents?.a);
-  const spacing = EXACT.has(lang) ? null : INDENTED.has(lang) ? "indented" : "free";
+  const spacing = WHITESPACE_SIGNIFICANT.has(lang) ? null : INDENTED.has(lang) ? "indented" : "free";
   const wsFolded = file.hunks.map((hunk, h) => !opts.showAll && !opts.expanded.has(`ws${h}`) && !!spacing && whitespaceOnly(hunk, spacing === "indented"));
-  // A one-line fold bar would take the room of the line it hides, so that line is shown instead.
   const emitGap = (key: string, oldFrom: number, newFrom: number, count: number, h: number) => {
     if (count <= 0) return;
     const expandable = bLines !== null || aLines !== null;
@@ -118,7 +132,8 @@ export function buildRows(file: FileDiff, contents: FileContents | null, opts: B
         emitContext(rows, opts.layout, `${key}:${i}`, -1, oldFrom + i, newFrom + i, gapText(oldFrom + i, newFrom + i), gapKey(newFrom + i));
       }
     } else {
-      rows.push({ t: "fold", key, count, expandable, newFrom });
+      const stagedEarlier = stagedIn(file.alreadyStaged?.stagedRanges ?? [], oldFrom, count);
+      rows.push({ t: "fold", key, count, expandable, newFrom, ...(stagedEarlier ? { stagedEarlier } : {}) });
     }
   };
 
@@ -139,9 +154,10 @@ export function buildRows(file: FileDiff, contents: FileContents | null, opts: B
 
   const trailing = bLines ? bLines.length - newNext + 1 : aLines ? aLines.length - oldNext + 1 : 0;
   emitGap(`gap${file.hunks.length}`, oldNext, newNext, trailing, file.hunks.length);
+  if (file.alreadyStaged) markDone(rows, file.alreadyStaged);
   const out = absorbGaps(rows);
   const folds = out.flatMap((r) => (r.t === "hunk" && r.folded ? [r.folded] : []));
-  if (folds.length > 1) folds[0].all = folds.flatMap((f) => f.keys);
+  if (folds.length > 1) folds[0].allWhitespaceFolds = folds.flatMap((f) => f.keys);
   return out;
 }
 
@@ -151,6 +167,7 @@ function absorbGaps(rows: Row[]): Row[] {
     f.keys[before ? "unshift" : "push"](gap.key);
     f.count += gap.count;
     f.gaps.push([gap.newFrom, gap.count]);
+    if (gap.stagedEarlier) f.stagedEarlier = (f.stagedEarlier ?? 0) + gap.stagedEarlier;
   };
   for (const row of rows) {
     const last = out.at(-1);
@@ -167,9 +184,37 @@ function absorbGaps(rows: Row[]): Row[] {
   return out;
 }
 
+function stagedIn(ranges: [number, number][], from: number, count: number): number {
+  let n = 0;
+  for (const [first, last] of ranges) n += Math.max(0, Math.min(last, from + count - 1) - Math.max(first, from) + 1);
+  return n;
+}
+
+function markDone(rows: Row[], { stagedRanges, deletionsAfter }: NonNullable<FileDiff["alreadyStaged"]>) {
+  const below = new Set(deletionsAfter.map((n) => n + 1));
+  const sorted = [...stagedRanges].sort((x, y) => x[0] - y[0]);
+  for (const r of rows) {
+    if ((r.t !== "split" && r.t !== "uni") || r.kind !== "ctx") continue;
+    const indexLine = r.t === "split" ? r.a!.no : r.a!;
+    if (within(sorted, indexLine)) r.stagedEarlier = true;
+    if (below.has(indexLine)) r.deletionAbove = true;
+  }
+}
+
+// Ranges from git's hunks, so sorted they don't overlap.
+function within(ranges: [number, number][], n: number): boolean {
+  let [lo, hi] = [0, ranges.length];
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (ranges[mid][0] <= n) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo > 0 && n <= ranges[lo - 1][1];
+}
+
 function wholeFile(contents: FileContents | null): Row[] {
   if (!contents) return [];
-  if (contents.tooLarge) return [{ t: "note", key: "note", text: "Binary file or over 2 MB, contents not shown." }];
+  if (contents.hidden) return [{ t: "note", key: "note", text: "Binary file or over 2 MB, contents not shown." }];
   const lines = splitLines(contents.b);
   if (!lines) return [{ t: "note", key: "note", text: "Can't read this file." }];
   if (!lines.length) return [{ t: "note", key: "note", text: "Empty file." }];
@@ -183,7 +228,7 @@ function emptyNote(file: FileDiff): string {
   const mode = a && b && a !== b ? modeNote(file)!.words : null;
   if (file.status === "added" || file.status === "untracked") return "Empty file.";
   if (file.status === "deleted") return "Deleted an empty file.";
-  if (file.status === "renamed") return `Renamed from ${file.oldPath}${mode ? `, ${mode}` : ""}, no content changes.`;
+  if (file.status === "renamed") return `Renamed${mode ? `, ${mode}` : ""}, no content changes.`;
   if (mode) return `${mode[0].toUpperCase()}${mode.slice(1)} (${a} → ${b}), no content changes.`;
   return "No content changes.";
 }
@@ -218,17 +263,16 @@ function symlinkNote(file: FileDiff): string | null {
 function whitespaceOnly(hunk: Hunk, indented: boolean): boolean {
   const squash = (kind: "add" | "del") => {
     const texts = hunk.lines.filter((l) => l.kind === kind).map((l) => l.text);
-    if (!indented) return dropSpaces(texts.join("\n"));
+    if (!indented) return dropSpacesExceptBetweenWordsAndInStrings(texts.join("\n"));
     return texts
       .filter((t) => t.trim())
-      .map((t) => t.match(/^\s*/)![0] + dropSpaces(t))
+      .map((t) => t.match(/^\s*/)![0] + dropSpacesExceptBetweenWordsAndInStrings(t))
       .join("\n");
   };
   return hunk.lines.some((l) => l.kind !== "ctx") && squash("add") === squash("del");
 }
 
-// Whitespace between two word characters still matters (`a b` isn't `ab`), and so does any inside a string literal.
-function dropSpaces(text: string): string {
+function dropSpacesExceptBetweenWordsAndInStrings(text: string): string {
   const word = /[\p{L}\p{N}_$]/u;
   const space = /\s/;
   const s = text.trim();
@@ -359,5 +403,34 @@ export function align(dels: Side[], adds: Side[]): [Side | undefined, Side | und
     di = i + 1;
     ai = k + 1;
   }
+  return out;
+}
+
+export function keysToGiveLineARow(rows: Row[], newLine: number, inHunk: (hunk: number) => boolean): string[] {
+  const covers = (from: number, count: number) => newLine >= from && newLine < from + count;
+  return rows.flatMap((r) =>
+    r.t === "fold" && covers(r.newFrom, r.count)
+      ? [r.key]
+      : r.t === "hunk" && r.folded && (inHunk(r.hunk) || r.folded.gaps.some(([from, count]) => covers(from, count)))
+        ? r.folded.keys
+        : [],
+  );
+}
+
+export function withStubs(rows: Row[], file: FileDiff, stubs: readonly Stub[]): Row[] {
+  const hunkStillInDiff = (stub: Stub) => file.hunks.some((h) => h.newStart === stub.treeLine);
+  stubs = stubs.filter((stub) => !hunkStillInDiff(stub));
+  if (!stubs.length) return rows;
+  const startOf = (r: Row) =>
+    r.t === "hunk" ? file.hunks[r.hunk]?.newStart : r.t === "fold" ? r.newFrom : r.t === "split" ? r.b?.no : r.t === "uni" ? r.b : undefined;
+  const out = [...rows];
+  const last = stubs.findLastIndex((stub) => stub.undoable);
+  stubs.forEach((stub, i) => {
+    const row: Row = { t: "stub", key: `stub:${stub.treeLine}:${i}`, treeLine: stub.treeLine, count: stub.count, latest: i === last };
+    let at = out.findIndex((r) => r.t !== "stub" && (startOf(r) ?? -1) >= stub.treeLine);
+    if (at < 0) at = out.length;
+    while (at > 0 && out[at - 1].t === "stub" && (out[at - 1] as { treeLine: number }).treeLine > stub.treeLine) at--;
+    out.splice(at, 0, row);
+  });
   return out;
 }

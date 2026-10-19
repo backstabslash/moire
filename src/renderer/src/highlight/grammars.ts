@@ -1,6 +1,5 @@
 import type { LanguageRegistration } from "shiki";
 
-// Small grammars for files Shiki has no language for.
 export const customLangs: Record<string, LanguageRegistration> = {
   "go-mod": {
     name: "go-mod",

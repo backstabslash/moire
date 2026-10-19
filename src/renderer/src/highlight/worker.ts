@@ -8,8 +8,7 @@ import type { HighlightRequest, HighlightResponse, Tok, TokLines } from "./types
 type ShikiLines = ReturnType<Highlighter["codeToTokensBase"]>;
 
 const MAX_LINE = 1000;
-// Big files send their first lines ahead, so the top isn't plain while the rest is coloured.
-const AHEAD = 1000;
+const FIRST_BATCH_LINES = 1000;
 const EMBEDS = new Set(["markdown", "mdx", "vue", "svelte", "astro"]);
 const FENCED = new Set(["markdown", "mdx"]);
 const EMBEDDED = /^[ \t]*(?:`{3,}|~{3,})[ \t]*\{?\.?([\w#+.-]+)|\blang=["']?([\w#+.-]+)/gm;
@@ -73,13 +72,13 @@ self.onmessage = async (event: MessageEvent<HighlightRequest>) => {
   const useLang = (await load(hl, lang)) ? lang : "text";
   if (EMBEDS.has(useLang)) await Promise.all(texts.flatMap((t) => (t ? embedded(t) : [])).map((l) => load(hl, l)));
   const lines = texts.map((text) => text?.split(/\r?\n/) ?? null);
-  const ahead = !!partial && useLang !== "text" && lines.some((l) => l && l.length > AHEAD * 3);
-  const heads = lines.map((l) => l && tokenize(hl, useLang, ahead ? l.slice(0, AHEAD) : l));
+  const ahead = !!partial && useLang !== "text" && lines.some((l) => l && l.length > FIRST_BATCH_LINES * 3);
+  const heads = lines.map((l) => l && tokenize(hl, useLang, ahead ? l.slice(0, FIRST_BATCH_LINES) : l));
   if (ahead) self.postMessage({ id, sides: heads.map((h) => h && flat(h)), done: false } satisfies HighlightResponse);
   const sides = heads.map((head, i) => {
     const l = lines[i];
     if (!head || !l) return null;
-    const all = ahead && l.length > AHEAD ? [...head, ...tokenize(hl, useLang, l.slice(AHEAD), head)] : head;
+    const all = ahead && l.length > FIRST_BATCH_LINES ? [...head, ...tokenize(hl, useLang, l.slice(FIRST_BATCH_LINES), head)] : head;
     if (FENCED.has(useLang)) colourFences(hl, l, all);
     return flat(all);
   });

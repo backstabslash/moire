@@ -19,8 +19,9 @@ const toast = () => page.locator(".toast.show");
 const foot = () => page.locator(".drop-foot");
 
 // Chromium keeps sending dragover while a drag is over the window, so the page does the same until told to drop or leave.
-const dragTo = (selector: string) =>
-  page.evaluate((sel) => {
+const dragTo = async (selector: string) => {
+  await page.locator(selector).first().waitFor();
+  await page.evaluate((sel) => {
     const w = window as unknown as { dragTimer?: number; dragAt?: string };
     const fire = (type: string, at: string) => {
       const data = new DataTransfer();
@@ -34,6 +35,7 @@ const dragTo = (selector: string) =>
     w.dragAt = sel;
     fire("dragover", sel);
   }, selector);
+};
 const endDrag = (how: "drop" | "dragleave") =>
   page.evaluate((type) => {
     const w = window as unknown as { dragTimer?: number; dragAt?: string };
@@ -105,9 +107,10 @@ test("a file dragged over the sidebar opens All files and tints the target folde
   expect(await background('.file[data-path="src/app.ts"]')).toBe(tint);
   expect(await background('.tree-dir[data-dir="docs/"]')).not.toBe(tint);
 
-  await dragTo('.tree-dir[data-dir="src/lib/"]');
-  await expect(dir("src/lib/")).toHaveAttribute("aria-expanded", "true");
+  await dragTo('.tree-seg[data-dir="src/lib/"]');
+  await expect(dir("src/lib/money/")).toHaveAttribute("aria-expanded", "true");
   await expect(foot()).toContainText("src/lib/");
+  await expect(foot()).not.toContainText("money");
   await shot("files-in-drag-light");
 
   await dragTo('.tree-dir[data-dir="dist/"]');
@@ -131,8 +134,8 @@ test("a file dragged over the sidebar opens All files and tints the target folde
   await expect(toast()).toHaveCount(0, { timeout: 8000 });
   await page.keyboard.press("t");
   await dragTo(".sidebar .file");
-  await expect(dir("src/lib/")).toBeVisible();
-  await dragTo('.tree-dir[data-dir="src/lib/"]');
+  await expect(dir("src/lib/money/")).toBeVisible();
+  await dragTo('.tree-seg[data-dir="src/lib/"]');
   await expect(foot()).toContainText("src/lib/");
   await shot("files-in-drag-dark");
   await endDrag("dragleave");
@@ -153,7 +156,7 @@ test("pasted files clash, the clash is reviewed as a diff, replaced and undone",
   const bar = page.locator(".clash-bar");
   await expect(bar).toContainText("format.ts already exists in src/lib/money/");
   await expect(bar).toContainText("1 of 1");
-  await expect(page.locator(".pane-h").first()).toContainText("In the repository, src/lib/money/format.ts");
+  await expect(page.locator(".panes-head .tag-a")).toHaveAttribute("data-tip", "In the repository");
   await expect(page.locator(".cell.add").first()).toContainText("code: string");
   await expect(page.locator('.file[data-path="src/lib/money/rates.json"] .name')).toHaveCSS("font-style", "italic");
   await expect(foot()).toContainText("1 name clash to decide in the diff.");

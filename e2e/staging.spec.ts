@@ -70,14 +70,57 @@ test("x discards the focused hunk and u brings it back", async () => {
   expect(readFileSync(join(repo, "a.ts"), "utf8")).toBe(edited);
 });
 
+test("selecting a line focuses its hunk, and s stages just that line", async () => {
+  await expect(page.locator(".hunk-head")).toHaveCount(2);
+  await expect(page.locator(".app")).toHaveAttribute("aria-busy", "false");
+  await page.locator(".ln.b.add[data-line]").first().click();
+  await expect(page.locator(".hunk-head").first()).toHaveClass(/is-focus/);
+  await page.locator(".ln.b.add[data-line]").nth(1).click();
+  await expect(page.locator(".hunk-head").nth(1)).toHaveClass(/is-focus/);
+  await expect(page.locator(".hunk-head.is-focus")).toHaveCount(1);
+  await page.keyboard.press("s");
+  await expect(page.locator(".toast.show")).toContainText("Staged 1 line in a.ts");
+  expect(git("show", ":a.ts")).toContain("export const v33 = 1 + 33;");
+  await page.keyboard.press("u");
+  await expect.poll(() => git("diff", "--cached")).toBe("");
+
+  await page.locator(".ln.b.add[data-line]").first().click();
+  await expect(page.locator(".hunk-head").first()).toHaveClass(/is-focus/);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".ln.sel")).toHaveCount(0);
+});
+
+test("a staged hunk leaves a stub in its place, which undoes it or shows it in Staged", async () => {
+  await expect(page.locator(".hunk-head")).toHaveCount(2);
+  await expect(page.locator(".app")).toHaveAttribute("aria-busy", "false");
+  await page.keyboard.press("s");
+  await expect(page.locator(".stub")).toContainText("Staged 2 lines");
+  await expect(page.locator(".hunk-head")).toHaveCount(1);
+  await page.locator(".stub").getByRole("button", { name: "Undo" }).click();
+  await expect(page.locator(".hunk-head")).toHaveCount(2);
+  await expect(page.locator(".stub")).toHaveCount(0);
+  await expect.poll(() => git("diff", "--cached")).toBe("");
+
+  await expect(page.locator(".app")).toHaveAttribute("aria-busy", "false");
+  await page.keyboard.press("s");
+  await page.locator(".stub").getByRole("button", { name: "Show in Staged" }).click();
+  await expect(page.locator(".picker-btn")).toHaveText("Staged");
+  await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
+  await expect(page.locator(".hunk-head.is-focus")).toHaveCount(1);
+  await page.keyboard.press("1");
+  await expect(page.locator(".app")).toHaveAttribute("aria-busy", "false");
+  await page.keyboard.press("u");
+  await expect.poll(() => git("diff", "--cached")).toBe("");
+});
+
 test("staging a whole file moves on to the next one, and the All view marks what's staged", async () => {
   await page.locator(".hunk-head").first().hover();
   await page.locator(".hunk-head").first().locator(".hh-stage").click();
   await expect(page.locator(".hunk-head")).toHaveCount(1);
   await page.keyboard.press("3");
   await expect(page.locator(".hh-badge")).toHaveText("Staged");
-  await expect(page.locator(".file", { hasText: "a.ts" }).locator(".mark-partial")).toBeVisible();
-  await expect(page.locator(".file", { hasText: "new.ts" }).locator(".mark")).toHaveCount(0);
+  await expect(page.locator(".file", { hasText: "a.ts" }).locator(".reg-partial")).toBeVisible();
+  await expect(page.locator(".file", { hasText: "new.ts" }).locator(".reg")).toHaveCount(0);
   await shot("all-view");
   await page.keyboard.press("1");
   await page.locator(".file", { hasText: "a.ts" }).click();
@@ -86,7 +129,7 @@ test("staging a whole file moves on to the next one, and the All view marks what
   await expect(page.locator(".file.is-active .name")).toHaveText("new.ts");
   await page.keyboard.press("2");
   await expect(page.locator(".file", { hasText: "a.ts" })).toBeVisible();
-  await expect(page.locator(".pane-h").first()).toContainText("a.ts");
+  await expect(page.locator(".panes-head")).toContainText("a.ts");
   await expect(page.locator(".app")).toHaveAttribute("aria-busy", "false");
   await page.keyboard.press("s");
   await expect(page.locator(".toast.show")).toContainText("Unstaged 2 lines in a.ts");

@@ -15,7 +15,7 @@ function lfsPointer(file: FileDiff): boolean {
 export function previewOf(file: FileDiff): { kind: PreviewKind; forced: boolean } | null {
   const ext = file.path.split("/").pop()!.toLowerCase().split(".").slice(1).pop() ?? "";
   if ((RASTER.has(ext) || ext === "svg") && !file.binary && lfsPointer(file)) return { kind: "image", forced: true };
-  if (RASTER.has(ext)) return file.binary ? { kind: "image", forced: true } : null;
+  if (RASTER.has(ext)) return file.binary || file.tooLarge ? { kind: "image", forced: true } : null;
   if (ext === "svg") return file.binary ? null : { kind: "image", forced: !!file.tooLarge };
   if (MARKDOWN.has(ext) && !file.binary && !file.tooLarge) return { kind: "markdown", forced: false };
   return null;

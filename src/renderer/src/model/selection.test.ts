@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DiffLine, FileDiff } from "../../../shared/types";
 import { buildRows } from "./rows";
-import { carryKeys } from "./selection";
+import { carryKeys, gapKey, hunkOfKey, lineKey } from "./selection";
 
 const opts = { layout: "split" as const, scope: "changed" as const, expanded: new Set<string>() };
 
@@ -53,5 +53,12 @@ describe("carryKeys", () => {
   it("gives up once a selected line is gone", () => {
     const edited = file([10, [ctx("}", 10), del("a = 1", 11), add("a = 3", 11), ctx("}", 12)]]);
     expect(carryKeys(rows(before), rows(edited), new Set(["0:1", "0:2"]))).toBeNull();
+  });
+});
+
+describe("hunkOfKey", () => {
+  it("reads the hunk from a line key and none from expanded context", () => {
+    expect(hunkOfKey(lineKey(3, 7))).toBe(3);
+    expect(hunkOfKey(gapKey(12))).toBeNull();
   });
 });

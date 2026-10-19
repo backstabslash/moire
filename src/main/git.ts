@@ -23,6 +23,7 @@ import type {
   Upstream,
   Worktree,
 } from "../shared/types";
+import { newToOld } from "../shared/chapters";
 import { tildify } from "./launch";
 import { parseDiff, sortFiles } from "./parse";
 
@@ -64,7 +65,6 @@ export async function gitBuffer(root: string, args: string[]): Promise<Buffer> {
   return stdout;
 }
 
-// Streams stdout into a new file, for output of any size.
 export async function gitToFile(root: string, args: string[], path: string, mode: number): Promise<void> {
   const child = spawn("git", gitArgs(root, args), { env, stdio: ["ignore", "pipe", "pipe"] });
   let stderr = "";
@@ -127,7 +127,6 @@ export function oldGit(version: string): string | null {
 
 let missing: Promise<string | null> | undefined;
 
-// The login shell's PATH is only waited for when git isn't on the PATH moire started with.
 export function gitMissing(): Promise<string | null> {
   const version = () => exec("git", ["--version"], { env }).then(({ stdout }) => oldGit(stdout));
   missing ??= version().catch(() => shellPath.then(version).catch((e: unknown) => missingGit(e, process.platform)));
@@ -332,7 +331,6 @@ async function untracked(root: string, pathspec: string[]): Promise<FileDiff[]> 
   return files.filter((f): f is FileDiff => f !== null);
 }
 
-// The diff() marks only set top-level fields on untracked files, so a shallow copy keeps the cache intact.
 async function untrackedFile(root: string, path: string, cache: Map<string, CachedUntracked>): Promise<FileDiff | null> {
   const st = await lstat(join(root, path)).catch(() => null);
   const hit = st && cache.get(path);
@@ -397,6 +395,7 @@ export async function diff(root: string, mode: CompareMode, paths: string[] = []
   const [progress] = await Promise.all([
     worktree && !paths.length ? markChangedSinceStaged(repo.root, files, mode.kind === "unstaged", repo.head ?? empty) : undefined,
     mode.kind === "all" && markStaged(repo.root, files, treeish(a, empty), pathspec),
+    mode.kind === "unstaged" && !paths.length && markAlreadyStaged(repo.root, files, repo.head ?? empty),
     markNoise(repo.root, files),
   ]);
   for (const f of files) f.version = fileVersion(f);
@@ -404,8 +403,7 @@ export async function diff(root: string, mode: CompareMode, paths: string[] = []
   return { repo, a, b, files: sortFiles(files), progress, version };
 }
 
-// `mv old new` plus an edit shows as a deletion and an untracked file. Git pairs them once the new
-// file is in an index as intent-to-add, so this builds a scratch index of just those paths.
+// Git only pairs a deletion with an untracked file as a rename once that file is intent-to-add in an index.
 async function pairRenames(root: string, base: string | null, files: FileDiff[], extra: FileDiff[]): Promise<FileDiff[]> {
   const gone = files.filter((f) => f.status === "deleted").map((f) => f.path);
   const fresh = extra.filter((f) => !f.unread).map((f) => f.path);
@@ -437,7 +435,6 @@ async function pairRenames(root: string, base: string | null, files: FileDiff[],
 const hash = (text: string) => createHash("sha1").update(text).digest("base64url");
 const hunkVersions = new WeakMap<Hunk[], string>();
 
-// Cached untracked files share their hunks across refreshes, so their hash is computed once.
 function fileVersion(file: FileDiff): string {
   let hunks = hunkVersions.get(file.hunks);
   if (!hunks) hunkVersions.set(file.hunks, (hunks = hash(JSON.stringify(file.hunks))));
@@ -456,10 +453,10 @@ function rawBlobs(out: string): Map<string, string> {
   return blobs;
 }
 
-// Remembers fully staged blobs, to tell a later edit apart from staging part of a file.
 async function markChangedSinceStaged(root: string, files: FileDiff[], filesAreUnstaged: boolean, head: string) {
-  const [cached, unstaged, memoryPath] = await Promise.all([
+  const [cached, cachedStat, unstaged, memoryPath] = await Promise.all([
     git(root, ["diff-index", "--cached", "--ita-invisible-in-index", "--raw", "--no-abbrev", "-z", "-M", head]),
+    git(root, ["diff-index", "--cached", "--ita-invisible-in-index", "--numstat", "-z", "-M", head]),
     // --numstat compares contents, so files whose stat info alone is stale don't count.
     filesAreUnstaged ? "" : git(root, ["diff-files", "--numstat", "-z", "--no-renames"]),
     fixedGit(root, ["rev-parse", "--git-path", "moire-staged"]),
@@ -486,8 +483,28 @@ async function markChangedSinceStaged(root: string, files: FileDiff[], filesAreU
       .then(() => rename(tmp, memory))
       .catch(() => rm(tmp, { force: true }));
   }
-  for (const f of files) if (changed.has(f.path)) f.changedSinceStaged = true;
-  return { staged: [...staged.keys()].filter((p) => !dirty.has(p)).length, total: new Set([...staged.keys(), ...dirty]).size };
+  for (const f of files) {
+    if (changed.has(f.path)) f.changedSinceStaged = true;
+    else if (filesAreUnstaged && staged.has(f.path)) f.staged = "partial";
+  }
+  const stagedLines = numstatLines(cachedStat);
+  const left = filesAreUnstaged
+    ? files.reduce((n, f) => n + Math.max(1, f.additions + f.deletions), 0)
+    : numstatLines(unstaged) + files.filter((f) => f.status === "untracked").reduce((n, f) => n + Math.max(1, f.additions), 0);
+  return {
+    stagedFiles: [...staged.keys()].filter((p) => !dirty.has(p)).length,
+    totalFiles: new Set([...staged.keys(), ...dirty]).size,
+    lines: { staged: stagedLines, total: stagedLines + left },
+  };
+}
+
+function numstatLines(out: string): number {
+  let n = 0;
+  for (const rec of out.split("\0")) {
+    const m = /^(\d+|-)\t(\d+|-)\t/.exec(rec);
+    if (m) n += m[1] === "-" ? 1 : Math.max(1, Number(m[1]) + Number(m[2]));
+  }
+  return n;
 }
 
 const LOCKFILES = new Set([
@@ -512,8 +529,8 @@ const LOCKFILES = new Set([
   "gradle.lockfile",
 ]);
 
-// A one-line bundle soft-wraps into thousands of rows; ordinary code averages well under this.
-const LONG_LINES = 1000;
+const MINIFIED_AVG_CHARS_PER_CHANGED_LINE = 1000;
+const MINIFIED_MIN_CHANGED_CHARS = 20 * MINIFIED_AVG_CHARS_PER_CHANGED_LINE;
 
 function longLines(file: FileDiff): boolean {
   let chars = 0;
@@ -525,7 +542,7 @@ function longLines(file: FileDiff): boolean {
       count++;
     }
   }
-  return chars > 20 * LONG_LINES && chars / count > LONG_LINES;
+  return chars > MINIFIED_MIN_CHANGED_CHARS && chars / count > MINIFIED_AVG_CHARS_PER_CHANGED_LINE;
 }
 
 function changedChars(file: FileDiff): number {
@@ -583,20 +600,23 @@ async function markStaged(root: string, files: FileDiff[], head: string, pathspe
   }
 }
 
-export function newToOld(hunks: Hunk[]): (n: number) => number | null {
-  return (n) => {
-    let delta = 0;
+async function markAlreadyStaged(root: string, files: FileDiff[], head: string) {
+  const tracked = files.filter((f) => f.status !== "untracked" && !f.binary && f.hunks.length);
+  if (!tracked.length) return;
+  // No pathspec: limiting it to these paths would lose a staged rename's old name and show the whole file as staged.
+  const out = await diffCommand(root, head, "index").then((cmd) => git(root, [...cmd, "-U0"]));
+  const staged = new Map(parseDiff(out).map((f) => [f.path, f]));
+  for (const file of tracked) {
+    const hunks = staged.get(file.path)?.hunks;
+    if (!hunks?.length) continue;
+    const stagedRanges: [number, number][] = [];
+    const deletionsAfter: number[] = [];
     for (const h of hunks) {
-      const first = h.newLines === 0 ? h.newStart + 1 : h.newStart;
-      if (n < first) break;
-      if (n < first + h.newLines) {
-        const line = h.lines.find((l) => l.newNo === n);
-        return line?.kind === "ctx" ? line.oldNo! : null;
-      }
-      delta = (h.oldLines === 0 ? h.oldStart + 1 : h.oldStart) + h.oldLines - first - h.newLines;
+      if (h.newLines) stagedRanges.push([h.newStart, h.newStart + h.newLines - 1]);
+      else deletionsAfter.push(h.newStart);
     }
-    return n + delta;
-  };
+    file.alreadyStaged = { stagedRanges, deletionsAfter };
+  }
 }
 
 async function readWorktree(root: string, path: string, limit = SIZE_LIMIT): Promise<Buffer | null> {
@@ -690,10 +710,9 @@ function isBinary(buf: Buffer): boolean {
 type FileRef = Pick<FileDiff, "path" | "oldPath" | "status">;
 
 function toContents(bufA: Buffer | null, bufB: Buffer | null): FileContents {
-  for (const buf of [bufA, bufB]) {
-    if (buf && (buf.length > SIZE_LIMIT || isBinary(buf))) return { a: null, b: null, tooLarge: true };
-  }
-  return { a: bufA?.toString("utf8") ?? null, b: bufB?.toString("utf8") ?? null, tooLarge: false };
+  if ([bufA, bufB].some((buf) => buf && isBinary(buf))) return { a: null, b: null, hidden: true, binary: true };
+  if ([bufA, bufB].some((buf) => buf && buf.length > SIZE_LIMIT)) return { a: null, b: null, hidden: true };
+  return { a: bufA?.toString("utf8") ?? null, b: bufB?.toString("utf8") ?? null, hidden: false };
 }
 
 function sidePaths(file: FileRef): [string | null, string | null] {

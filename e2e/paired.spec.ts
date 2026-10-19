@@ -79,7 +79,7 @@ async function launch() {
   await expect(page.locator(".files .file")).toHaveCount(PAIRED.length);
 }
 
-const shown = () => page.locator(".files .file").evaluateAll((els) => els.map((e) => (e as HTMLElement).title.split("\n")[0]));
+const shown = () => page.locator(".files .file").evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.tip!.split("\n")[0]));
 
 test.beforeAll(async () => {
   base = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
@@ -114,10 +114,10 @@ test("the Changed list pairs files by module, with tests under their source", as
   expect(await shown()).toEqual(PAIRED);
   await expect(page.locator(".side-head .grouping")).toHaveText("Paired");
   await expect(page.locator(".files .dir bdi")).toHaveText(["components/checkout", "hooks", "lib/money", "locales", "server/db", "server/routes"]);
-  await expect(page.locator(".files .dir .roots")).toHaveCount(2);
-  await expect(page.locator(".files .tier")).toHaveText(["Config and CI2", "Docs1", "Folded1"]);
+  await expect(page.locator(".files .tier")).toHaveText(["Config and CI", "Docs", "Folded"]);
   await expect(page.locator(".file.sib")).toHaveCount(5);
-  await expect(page.locator(".slot-empty")).toHaveText([".test.tsxno test change", ".test.tsno test change", ".test.tsno test change"]);
+  await expect(page.locator(".slot-empty")).toHaveText([".test.tsx", ".test.ts", ".test.ts"]);
+  await expect(page.locator(".slot-empty").first()).toHaveAttribute("data-tip", "No test change for CurrencyPicker.tsx");
   await expect(page.locator(".file", { hasText: "0042_order_currency.sql" }).locator(".name")).toHaveAttribute("data-hint", "migrations/");
 
   await page.locator(".file", { hasText: "CartSummary.tsx" }).click();
@@ -134,12 +134,12 @@ test("] and [ walk the files in the order the list shows them", async () => {
   const walked = [];
   for (let i = 0; i < PAIRED.length; i++) {
     await expect(page.locator(".file.is-active")).toHaveCount(1);
-    walked.push((await page.locator(".file.is-active").getAttribute("title"))!.split("\n")[0]);
+    walked.push((await page.locator(".file.is-active").getAttribute("data-tip"))!.split("\n")[0]);
     await page.keyboard.press("]");
   }
   expect(walked).toEqual(PAIRED);
   await page.keyboard.press("[");
-  await expect(page.locator(".file.is-active")).toHaveAttribute("title", /^docs\/checkout\.md/);
+  await expect(page.locator(".file.is-active")).toHaveAttribute("data-tip", /^docs\/checkout\.md/);
 });
 
 test("l switches to By folder, which survives a restart", async () => {
@@ -152,7 +152,7 @@ test("l switches to By folder, which survives a restart", async () => {
 
   await page.locator(".files .file").first().click();
   await page.keyboard.press("]");
-  await expect(page.locator(".file.is-active")).toHaveAttribute("title", new RegExp(`^${byFolder[1]}`));
+  await expect(page.locator(".file.is-active")).toHaveAttribute("data-tip", new RegExp(`^${byFolder[1]}`));
 
   await app.close();
   await launch();

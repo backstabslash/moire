@@ -106,6 +106,20 @@ test("? shows every key, remapped ones included, and closes with ? or Esc", asyn
   await page.keyboard.press("Escape");
 });
 
+test("buttons show their keys only when the shortcuts dialog says so, and the dialog shows the version", async () => {
+  const stageKey = page.locator(".hunk-head.is-focus .hh-stage kbd");
+  await expect(stageKey).toBeHidden();
+  await expect(page.locator(".status .keys kbd").first()).toBeVisible();
+  await page.keyboard.press("?");
+  const help = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(help.locator(".keys-version")).toHaveText(/^moire \d+\.\d+\.\d+/);
+  await help.getByLabel("Show shortcuts on buttons").check();
+  await expect(stageKey).toBeVisible();
+  await help.getByLabel("Show shortcuts on buttons").uncheck();
+  await expect(stageKey).toBeHidden();
+  await page.keyboard.press("Escape");
+});
+
 test("menu items run through the same commands", async () => {
   await clickMenu("nextFile");
   await expect(page.locator(".file.is-active .name")).toHaveText("b.ts");

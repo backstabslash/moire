@@ -57,7 +57,6 @@ export function strokeOf(e: KeyPress, mac: boolean): string | null {
   return mod ? `Mod+${ch}` : ch;
 }
 
-// The key that ends a hold, whatever Shift or Caps Lock did in between.
 export function sameKey(a: string | null, b: string | undefined): boolean {
   return !!a && !!b && a.toLowerCase() === b.toLowerCase();
 }

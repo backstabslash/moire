@@ -12,10 +12,9 @@ const errors: string[] = [];
 
 const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
 const nav = () => page.getByRole("navigation", { name: "All files" });
-const dir = (name: string) => nav().locator(".tree-dir", { has: page.locator(".name", { hasText: new RegExp(`^${name}$`) }) });
+const dir = (path: string) => nav().locator(`.tree-dir[data-dir="${path}"]`);
 
-// Records every state the tree is drawn in, per DOM change and per frame: its open folders, or "empty".
-const watchTree = () =>
+const recordTreeStates = () =>
   page.evaluate(() => {
     const w = window as unknown as { seen: Set<string> };
     w.seen = new Set();
@@ -25,7 +24,6 @@ const watchTree = () =>
       const rows = nav.querySelectorAll(".file, .tree-dir").length;
       const open = [...nav.querySelectorAll('.tree-dir[aria-expanded="true"] .name')].map((n) => n.textContent).join(",");
       w.seen.add(rows ? open : "empty");
-      if (!document.querySelector(".side-head .count")?.textContent) w.seen.add("no count");
     };
     new MutationObserver(look).observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
     const frame = () => {
@@ -70,47 +68,62 @@ test.afterEach(() => {
 
 test("opened folders survive mode switches, and the tree never blanks meanwhile", async () => {
   await page.keyboard.press("a");
-  await expect(dir("src")).toHaveAttribute("aria-expanded", "true");
-  await dir("lib").click();
-  await dir("deep").click();
-  await expect(nav().getByTitle(/^lib\/deep\/x\.ts/)).toBeVisible();
+  await expect(dir("src/")).toHaveAttribute("aria-expanded", "true");
+  await dir("lib/deep/").click();
+  await expect(nav().locator('[data-tip^="lib/deep/x.ts"]')).toBeVisible();
 
-  await watchTree();
+  await recordTreeStates();
   const names: Record<string, string> = { "1": "Unstaged", "2": "Staged", "3": "All since last commit" };
   for (const key of ["2", "3", "1"]) {
     await page.keyboard.press(key);
     await expect(page.locator(".picker-btn")).toHaveText(names[key]);
   }
   await page.waitForTimeout(300);
-  expect(await seen()).toEqual(["lib,deep,src"]);
+  expect(await seen()).toEqual(["lib/deep/,src/"]);
 });
 
 test("a twice keeps opened folders, open from the first frame", async () => {
-  await watchTree();
+  await recordTreeStates();
   await page.keyboard.press("a");
   await expect(page.getByRole("navigation", { name: "Changed files" })).toBeVisible();
   await page.keyboard.press("a");
-  await expect(nav().getByTitle(/^lib\/deep\/x\.ts/)).toBeVisible();
+  await expect(nav().locator('[data-tip^="lib/deep/x.ts"]')).toBeVisible();
   await page.waitForTimeout(300);
-  expect(await seen()).toEqual(["lib,deep,src"]);
+  expect(await seen()).toEqual(["lib/deep/,src/"]);
 });
 
 test("the active file's folder can be closed, and opens again when a file in it is picked", async () => {
-  await dir("src").click();
-  await expect(nav().getByTitle(/^src\/a\.ts/)).toHaveCount(0);
+  await expect(dir("src/")).toHaveText("src/");
+  await dir("src/").click();
+  await expect(nav().locator('[data-tip^="src/a.ts"]')).toHaveCount(0);
+  await expect(dir("src/")).toHaveText("src/1");
   await page.keyboard.press("a");
   await page.keyboard.press("a");
-  await expect(dir("src")).toHaveAttribute("aria-expanded", "false");
+  await expect(dir("src/")).toHaveAttribute("aria-expanded", "false");
 
-  await dir("docs").click();
-  await nav()
-    .getByTitle(/^docs\/guide\.md/)
-    .click();
-  await expect(dir("src")).toHaveAttribute("aria-expanded", "false");
+  await dir("docs/").click();
+  await nav().locator('[data-tip^="docs/guide.md"]').click();
+  await expect(dir("src/")).toHaveAttribute("aria-expanded", "false");
   await page.keyboard.press("p");
   await page.keyboard.type("src/a.ts");
   await page.keyboard.press("Enter");
   await page.locator(".file-filter").press("Escape");
-  await expect(dir("src")).toHaveAttribute("aria-expanded", "true");
+  await expect(dir("src/")).toHaveAttribute("aria-expanded", "true");
   await expect(nav().locator(".file.is-active .name")).toHaveText("a.ts");
+});
+
+test("a folder holding just one folder shares its row, which opens and closes both", async () => {
+  await expect(dir("lib/")).toHaveCount(0);
+  await expect(dir("lib/deep/")).toHaveText("lib/deep/");
+  await dir("lib/deep/").click();
+  await expect(dir("lib/deep/")).toHaveAttribute("aria-expanded", "false");
+  await expect(nav().locator('[data-path="lib/deep/x.ts"]')).toHaveCount(0);
+
+  writeFileSync(join(repo, "lib", "y.ts"), "export const y = 1;\n");
+  await page.keyboard.press("r");
+  await expect(dir("lib/")).toHaveAttribute("aria-expanded", "false");
+  await expect(dir("lib/")).toHaveText("lib/1");
+  await dir("lib/").click();
+  await expect(dir("lib/deep/")).toHaveAttribute("aria-expanded", "false");
+  await expect(dir("lib/")).toHaveText("lib/");
 });

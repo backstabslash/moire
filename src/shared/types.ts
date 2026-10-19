@@ -54,7 +54,6 @@ export interface FileDiff {
   path: string;
   oldPath?: string;
   status: FileStatus;
-  // Git's file modes ("100755", "120000" for symlinks, "160000" for submodules), unset when both are plain "100644".
   oldMode?: string;
   newMode?: string;
   binary: boolean;
@@ -63,6 +62,7 @@ export interface FileDiff {
   unread?: boolean;
   staged?: "full" | "partial" | "none";
   changedSinceStaged?: boolean;
+  alreadyStaged?: { stagedRanges: [number, number][]; deletionsAfter: number[] };
   noise?: string;
   additions: number;
   deletions: number;
@@ -75,7 +75,7 @@ export interface DiffResult {
   a: SideInfo;
   b: SideInfo;
   files: FileDiff[];
-  progress?: { staged: number; total: number };
+  progress?: { stagedFiles: number; totalFiles: number; lines: { staged: number; total: number } };
   version: string;
 }
 
@@ -87,12 +87,12 @@ export interface FileTree {
 export interface FileContents {
   a: string | null;
   b: string | null;
-  tooLarge: boolean;
+  hidden: boolean;
+  binary?: boolean;
 }
 
 export interface BlobSize {
   bytes: number;
-  // A Git LFS pointer whose file isn't in the local LFS store.
   lfsMissing?: boolean;
 }
 
@@ -128,6 +128,7 @@ export interface StageRequest {
   action: StageAction;
   file: FileDiff;
   lines: LineRef[] | null;
+  undoId?: string;
 }
 
 export interface StageAllRequest {
@@ -135,12 +136,11 @@ export interface StageAllRequest {
   files: FileDiff[];
 }
 
-export type UndoResult = { label: string } | { refused: string; id: string; saveAs: string };
+export type UndoResult = { label: string; id: string } | { refused: string; id: string; saveAs: string };
 
 export interface UpdateNotice {
   version: string;
-  // Set when this copy can't replace itself, saying why; the button then opens the release page.
-  manual?: string;
+  manualReason?: string;
 }
 
 export interface CopyItem {
@@ -153,8 +153,7 @@ export interface CopyPlan {
   dir: string;
   sources: string[];
   items: CopyItem[];
-  // Nested .git folders left out of the copy.
-  skipped: number;
+  skippedGitDirs: number;
   ignored: boolean;
 }
 
@@ -173,11 +172,8 @@ export interface ClashDiff {
 
 export interface NoteRange {
   path: string;
-  // First and last line in the new version; unset for all of the file's changes.
   lines?: [number, number];
-  // The first line as written, so the range can follow it when lines above it change.
   code?: string;
-  // A pinned note on just these lines.
   note?: string;
   warn?: boolean;
 }
@@ -194,8 +190,7 @@ export interface AgentNotes {
   chapters: Chapter[];
 }
 
-// Where a range's lines are in the work tree now: null is all of its file's changes.
-export type Placement = { start: number; end: number } | "lost" | null;
+export type Placement = { start: number; end: number } | "lost" | "all";
 
 export interface NotesFile {
   path: string;

@@ -54,6 +54,7 @@ const api = {
   editKeys: (): Promise<void> => ipcRenderer.invoke("keys:edit"),
   checkForUpdates: (): Promise<void> => ipcRenderer.invoke("app:check-updates"),
   reportIssue: (): Promise<void> => ipcRenderer.invoke("app:report-issue"),
+  version: (): Promise<string> => ipcRenderer.invoke("app:version"),
   updateNotice: (): Promise<UpdateNotice | null> => ipcRenderer.invoke("update:get"),
   applyUpdate: (): Promise<void> => ipcRenderer.invoke("update:apply"),
   onUpdateNotice: (listener: (notice: UpdateNotice | null) => void): (() => void) => {
@@ -92,7 +93,7 @@ const api = {
   upstream: (root: string): Promise<Upstream | null> => ipcRenderer.invoke("git:upstream", root),
   act: (root: string, req: StageRequest): Promise<string> => ipcRenderer.invoke("git:act", root, req),
   actAll: (root: string, req: StageAllRequest): Promise<string> => ipcRenderer.invoke("git:act-all", root, req),
-  undo: (root: string): Promise<UndoResult | null> => ipcRenderer.invoke("git:undo", root),
+  undo: (root: string, only?: string): Promise<UndoResult | null> => ipcRenderer.invoke("git:undo", root, only),
   saveDiscarded: (root: string, id: string): Promise<string> => ipcRenderer.invoke("git:save-discarded", root, id),
   dropDiscarded: (root: string, id: string): Promise<void> => ipcRenderer.invoke("git:drop-discarded", root, id),
   commit: (root: string, message: string): Promise<string> => ipcRenderer.invoke("git:commit", root, message),

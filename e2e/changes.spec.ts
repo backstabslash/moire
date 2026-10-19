@@ -27,6 +27,7 @@ test.beforeAll(async () => {
   write("a.ts", "a\n");
   symlinkSync("a.ts", join(repo, "link"));
   write("old.ts", body("v"));
+  write("keep.ts", body("k"));
   write("ws.ts", body("w"));
   write("bundle.js", "x\n");
   mkdirSync(join(repo, "__snapshots__"));
@@ -39,6 +40,7 @@ test.beforeAll(async () => {
   symlinkSync("run.sh", join(repo, "link"));
   renameSync(join(repo, "old.ts"), join(repo, "new.ts"));
   write("new.ts", body("v").replace("v3 = 3", "v3 = 33"));
+  renameSync(join(repo, "keep.ts"), join(repo, "kept.ts"));
   write("ws.ts", body("w").replace("export const w2", "export  const w2").replace("export const w25", "export  const w25"));
   write("bundle.js", `${"var a=1;".repeat(4000)}\n`);
   write("__snapshots__/a.test.ts.snap", 'exports[`a`] = `"tampered"`;\n');
@@ -49,7 +51,7 @@ test.beforeAll(async () => {
   });
   page = await app.firstWindow();
   page.on("pageerror", (e) => errors.push(e.message));
-  await expect(page.locator(".file")).toHaveCount(6);
+  await expect(page.locator(".file")).toHaveCount(7);
 });
 
 test.afterAll(async () => {
@@ -86,6 +88,21 @@ test("a moved and edited file shows as one rename with the edit", async () => {
   await open("new.ts").click();
   await expect(open("new.ts").locator(".kind")).toHaveText("R");
   await expect(page.locator(".cell.add")).toHaveText(["export const v3 = 33;"]);
+  await expect(page.locator(".pane-h b")).toHaveText(["old.ts", "new.ts"]);
+  await expect(page.locator(".pane-h .w-del")).toHaveText("old");
+  await expect(page.locator(".pane-h .w-add")).toHaveText("new");
+  await expect(page.locator(".pane-h b").first()).toHaveAttribute("data-tip", "Index, old name\nold.ts");
+});
+
+test("a moved file with no edits shows as a rename, not a deletion and a new file", async () => {
+  await expect(open("keep.ts")).toHaveCount(0);
+  await open("kept.ts").click();
+  await expect(page.locator(".note")).toHaveText("Renamed, no content changes.");
+  await expect(page.locator(".pane-h b")).toHaveText(["keep.ts", "kept.ts"]);
+  await page.keyboard.press("v");
+  await expect(page.locator(".pane-h b")).toHaveText(["keep.ts", "kept.ts"]);
+  await expect(page.locator(".pane-arrow")).toBeVisible();
+  await page.keyboard.press("v");
 });
 
 test("whitespace folds count their lines and expand together", async () => {

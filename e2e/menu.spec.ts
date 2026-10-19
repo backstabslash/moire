@@ -53,46 +53,46 @@ test.afterEach(() => {
 });
 
 test("right-clicking a file copies its paths", async () => {
-  await page.getByTitle(/^site\/index\.html/).click({ button: "right" });
+  await page.locator('[data-tip^="site/index.html"]').click({ button: "right" });
   await expect(menu()).toContainText("site/index.html");
   await expect(items()).toHaveText(["Copy relative path", "Copy absolute path", "Copy contents", /^Show in /, "Open in editor", "Open with default app"]);
   await expect(page.locator(".file.is-menu .name")).toHaveText("index.html");
   await shot("menu-light");
   await page.keyboard.press("Escape");
   await page.keyboard.press("t");
-  await page.getByTitle(/^site\/index\.html/).click({ button: "right" });
+  await page.locator('[data-tip^="site/index.html"]').click({ button: "right" });
   await shot("menu-dark");
   await page.keyboard.press("Escape");
   await page.keyboard.press("t");
-  await page.getByTitle(/^site\/index\.html/).click({ button: "right" });
+  await page.locator('[data-tip^="site/index.html"]').click({ button: "right" });
   await items().first().click();
   await expect(menu()).toBeHidden();
   await expect(page.locator(".toast.show")).toContainText("Copied site/index.html");
   expect(await clipboard()).toBe("site/index.html");
 
-  await page.getByTitle(/^site\/index\.html/).click({ button: "right" });
+  await page.locator('[data-tip^="site/index.html"]').click({ button: "right" });
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   expect(await clipboard()).toBe(join(repo, "site", "index.html"));
 });
 
 test("opens documents with the default app, but not programs", async () => {
-  await page.getByTitle(/^site\/index\.html/).click({ button: "right" });
+  await page.locator('[data-tip^="site/index.html"]').click({ button: "right" });
   await items().filter({ hasText: "Open with default app" }).click();
   await expect(page.locator(".toast.show")).toContainText("Opened index.html");
 
-  await page.getByTitle(/^site\/build/).click({ button: "right" });
+  await page.locator('[data-tip^="site/build"]').click({ button: "right" });
   await items().filter({ hasText: "Open with default app" }).click();
   await expect(page.locator(".toast.show")).toContainText("build is executable, so moire won't open it");
 });
 
 test("a deleted file only offers its paths, Escape closes, and the pane header has the same menu", async () => {
-  await page.getByTitle(/^site\/old\.html/).click({ button: "right" });
+  await page.locator('[data-tip^="site/old.html"]').click({ button: "right" });
   await expect(items().and(page.locator(":disabled"))).toHaveText(["Copy contents", /^Show in /, "Open in editor", "Open with default app"]);
   await page.keyboard.press("Escape");
   await expect(menu()).toBeHidden();
 
-  await page.getByTitle(/^site\/index\.html/).click();
+  await page.locator('[data-tip^="site/index.html"]').click();
   await page.locator(".panes-head").click({ button: "right" });
   await items().first().click();
   expect(await clipboard()).toBe("site/index.html");

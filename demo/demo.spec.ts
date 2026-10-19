@@ -6,7 +6,7 @@ import { _electron as electron, type CDPSession, expect, type Locator, type Page
 import { makeDemoRepo } from "./repo";
 
 const OUT = resolve(process.env.MOIRE_DEMO_OUT ?? "demo");
-const SIZE = { width: 1440, height: 900 };
+const SIZE = { width: 1200, height: 750 };
 
 let page: Page;
 let at = { x: SIZE.width / 2, y: SIZE.height / 2 };
@@ -27,18 +27,21 @@ async function glide(to: Locator | { x: number; y: number }, ms = 600) {
 }
 
 async function click(to: Locator) {
+  await to.scrollIntoViewIfNeeded();
   await glide(to);
   await page.mouse.down();
   await hold(90);
   await page.mouse.up();
 }
 
-async function press(key: string, after = 900) {
+async function press(key: string, caption?: string, after = 900) {
+  await page.evaluate((c) => ((window as { caption?: string }).caption = c), caption);
   await page.keyboard.press(key);
+  await page.evaluate(() => delete (window as { caption?: string }).caption);
   await hold(after);
 }
 
-// A pointer and a caption of the keys pressed, since the recording has neither.
+// A pointer and a caption of the key pressed and what it does, since the recording has neither.
 function overlay() {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
@@ -52,24 +55,26 @@ function overlay() {
   arrow.setAttribute("stroke-linejoin", "round");
   svg.append(arrow);
   Object.assign(svg.style, { position: "fixed", left: "0", top: "0", zIndex: "99999", pointerEvents: "none", transition: "scale 90ms" });
-  const keys = document.createElement("div");
-  Object.assign(keys.style, {
+  const caption = document.createElement("div");
+  Object.assign(caption.style, {
     position: "fixed",
     left: "50%",
-    bottom: "64px",
+    bottom: "120px",
     translate: "-50% 0",
     zIndex: "99999",
     pointerEvents: "none",
-    padding: "10px 18px",
-    borderRadius: "8px",
-    background: "rgba(0, 0, 0, 0.78)",
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    padding: "9px 16px 9px 10px",
+    borderRadius: "10px",
+    background: "rgba(20, 22, 26, 0.86)",
     color: "#fff",
-    font: "600 22px var(--ui)",
-    letterSpacing: "0.04em",
+    font: "500 19px var(--ui)",
     opacity: "0",
-    transition: "opacity 160ms",
+    transition: "opacity 180ms",
   });
-  document.body.append(svg, keys);
+  document.body.append(svg, caption);
   addEventListener("mousemove", (e) => (svg.style.translate = `${e.clientX - 4}px ${e.clientY - 3}px`), true);
   addEventListener("mousedown", () => (svg.style.scale = "0.85"), true);
   addEventListener("mouseup", () => (svg.style.scale = "1"), true);
@@ -77,12 +82,27 @@ function overlay() {
   addEventListener(
     "keydown",
     (e) => {
-      if (["Shift", "Control", "Meta", "Alt"].includes(e.key) || (e.target as HTMLElement).closest("input")) return;
-      const name = e.key === "Escape" ? "Esc" : e.key.length === 1 ? e.key.toLowerCase() : e.key;
-      keys.textContent = [e.ctrlKey && "Ctrl", e.shiftKey && "Shift", name].filter(Boolean).join(" + ");
-      keys.style.opacity = "1";
+      const text = (window as { caption?: string }).caption;
+      if (!text || ["Shift", "Control", "Meta", "Alt"].includes(e.key)) return;
+      const cap = (label: string) => {
+        const kbd = document.createElement("span");
+        kbd.textContent = label;
+        Object.assign(kbd.style, {
+          minWidth: "16px",
+          padding: "2px 8px",
+          borderRadius: "6px",
+          background: "rgba(255, 255, 255, 0.16)",
+          border: "1px solid rgba(255, 255, 255, 0.28)",
+          font: "600 18px var(--code)",
+          textAlign: "center",
+        });
+        return kbd;
+      };
+      const keys = [e.shiftKey && "Shift", e.key.length === 1 ? e.key.toLowerCase() : e.key].filter((k): k is string => !!k);
+      caption.replaceChildren(...keys.map(cap), text);
+      caption.style.opacity = "1";
       clearTimeout(timer);
-      timer = window.setTimeout(() => (keys.style.opacity = "0"), 900);
+      timer = window.setTimeout(() => (caption.style.opacity = "0"), 1300);
     },
     true,
   );
@@ -103,27 +123,29 @@ async function record(cdp: CDPSession, dir: string) {
   };
 }
 
-function encode(frames: { file: string; t: number }[], dir: string) {
+function encode(frames: { file: string; t: number }[], dir: string, name: string, mp4: boolean) {
   const list = frames.map((f, i) => `file '${f.file}'\nduration ${((frames[i + 1]?.t ?? f.t + 2) - f.t).toFixed(4)}`);
   writeFileSync(join(dir, "frames.txt"), `${list.join("\n")}\nfile '${frames.at(-1)!.file}'\n`);
   const input = ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", join(dir, "frames.txt")];
   mkdirSync(OUT, { recursive: true });
-  execFileSync("ffmpeg", [...input, "-vf", "fps=30,format=yuv420p", "-c:v", "libx264", "-crf", "20", "-movflags", "+faststart", join(OUT, "demo.mp4")]);
-  const gif = "fps=12,scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=none";
-  execFileSync("ffmpeg", [...input, "-vf", gif, join(OUT, "demo.gif")]);
+  if (mp4)
+    execFileSync("ffmpeg", [...input, "-vf", "fps=30,format=yuv420p", "-c:v", "libx264", "-crf", "20", "-movflags", "+faststart", join(OUT, "demo.mp4")]);
+  const gif = "fps=15,split[a][b];[a]palettegen=max_colors=192:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle";
+  execFileSync("ffmpeg", [...input, "-vf", gif, join(OUT, `${name}.gif`)]);
 }
 
-test("record the demo", async () => {
+async function demo(theme: string, name: string, mp4 = false) {
   const work = mkdtempSync(join(tmpdir(), "moire-demo-"));
   const repo = join(work, "ratelimit");
   const frames = join(work, "frames");
   mkdirSync(frames);
   makeDemoRepo(repo);
-  const prefs = { theme: "p7", layout: "unified", scope: "changed", mode: "unstaged", file: "src/limiter.ts" };
+  const prefs = { theme, layout: "unified", scope: "changed", mode: "unstaged", file: "src/limiter.ts" };
   const app = await electron.launch({
     args: [resolve("."), `--user-data-dir=${join(work, "data")}`, repo],
     env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_PREFS: JSON.stringify(prefs) },
   });
+  at = { x: SIZE.width / 2, y: SIZE.height / 2 };
   try {
     page = await app.firstWindow();
     await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height), SIZE);
@@ -135,27 +157,38 @@ test("record the demo", async () => {
 
     const cdp = await page.context().newCDPSession(page);
     const stop = await record(cdp, frames);
-    await hold(1800);
+    await hold(1600);
 
-    await press(".", 1100);
-    await press(".", 2400);
-    await press(".", 900);
-    await press(".", 1200);
-    await press(".", 1500);
-
-    await click(page.locator(".chapter-head").first());
-    await hold(700);
+    await press(".", "Next note", 1300);
+    await press(".", "Next note", 2600);
+    await press(".", "Next note", 1200);
     await click(page.getByRole("button", { name: "Stage this chapter" }));
-    await glide({ x: 700, y: 600 }, 600);
-    await hold(1200);
+    await glide({ x: 640, y: 560 }, 500);
+    await hold(1300);
 
-    await press("Shift+B", 2400);
-    await press("Escape", 500);
-    await press("2", 2600);
+    await press("Shift+B", "Blink old and new", 2600);
+    await press("Escape", undefined, 400);
+
+    await click(page.locator(".uncovered button", { hasText: "server.ts" }));
+    await hold(900);
+    const debug = page.locator(".ln.b[data-line]", { hasText: /^11$/ });
+    await click(debug);
+    await hold(500);
+    await press("x", "Discard", 1500);
+
+    await press("2", "Staged changes", 1000);
+    const message = page.getByPlaceholder("Commit message");
+    await click(message);
+    await glide({ x: 420, y: 520 }, 500);
+    await page.keyboard.type("Token bucket per client", { delay: 45 });
+    await hold(2200);
     const recorded = await stop();
-    encode(recorded, work);
+    encode(recorded, work, name, mp4);
   } finally {
     await app.close();
     rmSync(work, { recursive: true, force: true });
   }
-});
+}
+
+test("record the light demo", () => demo("light", "demo-light", true));
+test("record the dark demo", () => demo("dark", "demo-dark"));

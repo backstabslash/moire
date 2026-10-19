@@ -198,6 +198,7 @@ app.use(limit({ capacity: 20, refillPerSec: 5 }));
 app.get("/health", (_req, res) => res.send("ok"));
 
 app.listen(3000);
+console.log("DEBUG limiter on");
 `,
   "tests/limiter.test.ts": `import { describe, expect, it, vi } from "vitest";
 import { tokenBucket } from "../src/limiter";
@@ -230,10 +231,9 @@ function write(root: string, files: Record<string, string>) {
 
 const linesOf = (path: string) => after[path].split("\n");
 const lineOf = (path: string, code: string) => linesOf(path).findIndex((l) => l.includes(code)) + 1;
-// From the line holding `from` to the one holding `to`, plus `past` lines after it.
-const range = (path: string, from: string, to: string, past = 0, extra: object = {}) => {
-  const start = lineOf(path, from);
-  return { path, lines: [start, lineOf(path, to) + past], code: linesOf(path)[start - 1], ...extra };
+const range = (path: string, firstLineHas: string, lastLineHas: string, linesAfterLast = 0, extra: object = {}) => {
+  const start = lineOf(path, firstLineHas);
+  return { path, lines: [start, lineOf(path, lastLineHas) + linesAfterLast], code: linesOf(path)[start - 1], ...extra };
 };
 
 const notes = {
@@ -259,7 +259,7 @@ const notes = {
     {
       title: "New options for callers",
       text: "The server and README move from max and windowMs to capacity and refillPerSec. The old names aren't read anymore, so other callers fail to compile until they switch.",
-      ranges: ["src/server.ts", range("README.md", "Tiny token-bucket", "so short bursts go through")],
+      ranges: [range("src/server.ts", "app.use(limit", "app.use(limit"), range("README.md", "Tiny token-bucket", "so short bursts go through")],
     },
     { title: "Tests", text: "Covers a burst followed by a wait, and refilling with fake timers.", ranges: ["tests/limiter.test.ts"] },
   ],

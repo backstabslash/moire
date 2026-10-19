@@ -3,7 +3,6 @@ import { diffWordsWithSpace } from "diff";
 export type Range = [start: number, end: number];
 
 const MAX_LINE_PAIR = 10000;
-// In words and spaces; bounds the time a long, heavily rewritten pair can take.
 const MAX_EDITS = 200;
 
 const MIN_SHARED = 0.4;

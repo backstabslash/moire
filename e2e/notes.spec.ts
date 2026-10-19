@@ -70,7 +70,7 @@ test("chapters list in reading order and show what they leave out", async () => 
   const panel = page.locator(".notes-panel");
   await expect(panel.locator(".notes-summary")).toHaveText("Moves the retry limit into config.ts so tests can lower it.");
   await expect(panel.locator(".chapter-title")).toHaveText(["The limit moves to config", "Callers"]);
-  await expect(panel.locator(".uncovered button")).toHaveText(["c.ts2 lines"]);
+  await expect(panel.locator(".uncovered button")).toHaveText(["c.ts"]);
 });
 
 test(". steps through each chapter's ranges across files", async () => {
@@ -107,7 +107,7 @@ test("ranges follow their code and reload when the agent rewrites notes", async 
 
   writeNotes({ chapters: [NOTES.chapters[0]] });
   await expect(page.locator(".chapter")).toHaveCount(1);
-  await expect(page.locator(".uncovered button")).toHaveText(["a.ts6 lines", "c.ts2 lines"]);
+  await expect(page.locator(".uncovered button")).toHaveText(["a.ts", "c.ts"]);
   writeFileSync(join(repo, "a.ts"), edit(3, 40).join("\n") + "\n");
   writeNotes(NOTES);
   await expect(page.locator(".chapter")).toHaveCount(2);
@@ -132,9 +132,29 @@ test("a chapter stages all its ranges at once, then the next one opens", async (
   await expect(page.locator(".chapter").nth(1)).not.toHaveClass(/is-done/);
   await expect(page.locator(".chapter.is-current .chapter-title")).toHaveText("Callers");
   await expect(page.locator(".row.note-now .ln.b")).toHaveText(["40", "41", "42"]);
+  await expect(page.locator(".fold.has-done")).toHaveText("37 lines unchanged, 1 staged");
   expect(git("diff", "--cached", "--name-only").trim().split("\n")).toEqual(["a.ts", "b.ts"]);
   expect(git("diff", "--cached", "a.ts")).toContain("+export const v3 = 30;");
   expect(git("diff", "--cached", "a.ts")).not.toContain("v40");
+});
+
+test("a staged chapter shows a lined-up grating, and its ranges open in the Staged tab", async () => {
+  const finished = page.locator(".chapter").first();
+  await expect(finished.locator(".reg")).toHaveCount(0);
+  expect(await finished.evaluate((el) => getComputedStyle(el).backgroundImage)).toContain("repeating-linear-gradient");
+  await page.locator(".chapter-head").first().click();
+  await expect(page.locator(".picker-btn")).toHaveText("Staged");
+  await expect(page.locator(".file.is-active .name")).toHaveText("b.ts");
+  await expect(page.locator(".row.note-now .ln.b")).toHaveText(["26"]);
+
+  await page.keyboard.press("3");
+  await page.locator(".chapter-head").first().click();
+  await expect(page.locator(".chapter.is-current .stop-staged")).toHaveCount(2);
+  await expect(page.locator(".chapter.is-current .stop-staged").first()).toHaveAttribute("data-tip", "Staged");
+  await page.locator(".chapter-head").nth(1).click();
+  await expect(page.locator(".chapter.is-current .stop-staged")).toHaveCount(0);
+  await page.keyboard.press("1");
+  await expect(page.locator(".picker-btn")).toHaveText("Unstaged");
 });
 
 test("committing moves a chapter to its commit", async () => {

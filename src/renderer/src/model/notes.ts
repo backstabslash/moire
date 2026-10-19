@@ -1,6 +1,6 @@
 import type { Placed } from "../../../shared/chapters";
 import type { AgentNotes, Hunk } from "../../../shared/types";
-import type { Row } from "./rows";
+import { keysToGiveLineARow, type Row } from "./rows";
 
 export interface Stop {
   chapter: number;
@@ -20,16 +20,8 @@ export function rowOfLine(rows: Row[], line: number): number {
   return rows.findIndex((r) => newLineOf(r) === line);
 }
 
-// The fold or folded-hunk keys to expand so the line gets a row.
 export function lineKeys(rows: Row[], hunks: Hunk[], line: number): string[] {
-  const covers = (from: number, count: number) => line >= from && line < from + count;
-  return rows.flatMap((r) =>
-    r.t === "fold" && covers(r.newFrom, r.count)
-      ? [r.key]
-      : r.t === "hunk" && r.folded && (covers(hunks[r.hunk].newStart, hunks[r.hunk].newLines) || r.folded.gaps.some(([from, count]) => covers(from, count)))
-        ? r.folded.keys
-        : [],
-  );
+  return keysToGiveLineARow(rows, line, (hunk) => line >= hunks[hunk].newStart && line < hunks[hunk].newStart + hunks[hunk].newLines);
 }
 
 export interface Mark extends Placed {
@@ -37,7 +29,6 @@ export interface Mark extends Placed {
   stop: number;
 }
 
-// Row classes for the gutter bracket beside a chapter's lines; the current stop's lines are also tinted.
 export function noteClass(line: number | undefined, marks: Mark[], chapter: number | null, stop: number | null): string {
   if (line === undefined) return "";
   let best: Mark | null = null;

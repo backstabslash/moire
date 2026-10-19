@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { changedLines, chapterRefs, hasChanges, placeRange, uncovered } from "./chapters";
-import type { FileDiff, Hunk } from "./types";
+import { changedLines, chapterRefs, hasChanges, placeRange, rangeStaged, uncovered } from "./chapters";
+import type { FileDiff, Hunk, Placement } from "./types";
 
 const text = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
 
@@ -8,7 +8,7 @@ describe("placeRange", () => {
   it("keeps line numbers when the code still matches or wasn't given", () => {
     expect(placeRange({ path: "a", lines: [4, 6], code: "  line 4" }, text)).toEqual({ start: 4, end: 6 });
     expect(placeRange({ path: "a", lines: [4, 6] }, text)).toEqual({ start: 4, end: 6 });
-    expect(placeRange({ path: "a" }, text)).toBeNull();
+    expect(placeRange({ path: "a" }, text)).toBe("all");
   });
 
   it("follows its first line to the nearest match when lines moved", () => {
@@ -26,7 +26,6 @@ describe("placeRange", () => {
   });
 });
 
-// Line 10 replaced, line 20 deleted, a line added after 25.
 const hunks: Hunk[] = [
   {
     oldStart: 10,
@@ -46,7 +45,7 @@ const file: FileDiff = { path: "a.ts", status: "modified", binary: false, additi
 
 describe("chapters and coverage", () => {
   it("places deleted lines at the line that now follows them", () => {
-    expect(changedLines(file).map((c) => [c.at, c.del])).toEqual([
+    expect(changedLines(file).map((c) => [c.newLine, c.del])).toEqual([
       [10, true],
       [10, false],
       [20, true],
@@ -61,7 +60,7 @@ describe("chapters and coverage", () => {
       { hunk: 0, line: 1 },
     ]);
     expect(chapterRefs(file, [{ start: 19, end: 19 }], [])).toEqual([{ hunk: 1, line: 0 }]);
-    expect(chapterRefs(file, [null], [null])).toHaveLength(4);
+    expect(chapterRefs(file, ["all"], ["all"])).toHaveLength(4);
   });
 
   it("gives blank lines no range covers to the chapter of the nearest changed line", () => {
@@ -97,12 +96,34 @@ describe("chapters and coverage", () => {
     ]);
     const blank: FileDiff = { ...file, path: "d.ts", hunks: [{ ...hunks[2], lines: [{ kind: "add", text: "  ", newNo: 25 }] }] };
     expect(uncovered([blank], notes)).toEqual([]);
-    expect(uncovered([file], notes, [[{ start: 24, end: 25 }, null]])).toEqual([{ path: "a.ts", count: 3 }]);
-    expect(uncovered([file], notes, [["lost", null]])).toEqual([{ path: "a.ts", count: 4 }]);
-    const placed = [{ start: 10, end: 12 }, null];
+    expect(uncovered([file], notes, [[{ start: 24, end: 25 }, "all"]])).toEqual([{ path: "a.ts", count: 3 }]);
+    expect(uncovered([file], notes, [["lost", "all"]])).toEqual([{ path: "a.ts", count: 4 }]);
+    const placed: Placement[] = [{ start: 10, end: 12 }, "all"];
     expect(hasChanges([file], notes.chapters[0], placed)).toBe(true);
     expect(hasChanges([other], notes.chapters[0], placed)).toBe(false);
-    expect(hasChanges([file], notes.chapters[0], [{ start: 40, end: 41 }, null])).toBe(false);
-    expect(hasChanges([file], notes.chapters[0], ["lost", null])).toBe(true);
+    expect(hasChanges([file], notes.chapters[0], [{ start: 40, end: 41 }, "all"])).toBe(false);
+    expect(hasChanges([file], notes.chapters[0], ["lost", "all"])).toBe(true);
+  });
+});
+
+describe("rangeStaged", () => {
+  const at = (start: number, end: number) => ({ start, end });
+
+  it("in the unstaged view, finds a range's index lines among those staged earlier", () => {
+    const earlier: FileDiff = { ...file, alreadyStaged: { stagedRanges: [[3, 4]], deletionsAfter: [22] } };
+    expect(rangeStaged(earlier, at(1, 5), "unstaged")).toBe("full");
+    expect(rangeStaged(earlier, at(2, 10), "unstaged")).toBe("partial");
+    expect(rangeStaged(earlier, at(9, 11), "unstaged")).toBeNull();
+    expect(rangeStaged(earlier, at(21, 21), "unstaged")).toBe("full");
+    expect(rangeStaged(earlier, "all", "unstaged")).toBe("partial");
+    expect(rangeStaged(file, at(1, 5), "unstaged")).toBeNull();
+    expect(rangeStaged(earlier, at(1, 1_000_000), "unstaged")).toBe(rangeStaged(earlier, at(1, 30), "unstaged"));
+  });
+
+  it("in the All view, counts the staged marks on the range's changed lines", () => {
+    const marked: FileDiff = { ...file, hunks: [{ ...hunks[0], lines: hunks[0].lines.map((l) => ({ ...l, staged: true })) }, ...hunks.slice(1)] };
+    expect(rangeStaged(marked, at(10, 10), "all")).toBe("full");
+    expect(rangeStaged(marked, at(9, 20), "all")).toBe("partial");
+    expect(rangeStaged(marked, at(25, 25), "all")).toBeNull();
   });
 });

@@ -20,7 +20,6 @@ import { clashDiff, copyIn, fileUris, planCopy } from "./copyin";
 import { undo } from "./stage";
 import { dirs, makeRepo } from "./test-repo";
 
-// Runs before each copyFile, to change the repo in the middle of a copy.
 const hook = vi.hoisted(() => ({ beforeCopy: null as ((dest: string) => void) | null }));
 vi.mock("node:fs/promises", async (original) => {
   const fs = await original<typeof import("node:fs/promises")>();
@@ -71,7 +70,7 @@ describe("copying files in", () => {
     expect(lstatSync(join(r.root, "src/run.sh")).mode & 0o111).toBeTruthy();
     expect(readFileSync(src("b.ts"), "utf8")).toBe("export const b = 2;\n");
 
-    expect(await undo(r.root)).toEqual({ label: "Copied 2 files into src/" });
+    expect(await undo(r.root)).toMatchObject({ label: "Copied 2 files into src/" });
     expect(existsSync(join(r.root, "src/b.ts"))).toBe(false);
     expect(existsSync(join(r.root, "src/run.sh"))).toBe(false);
   });
@@ -82,7 +81,7 @@ describe("copying files in", () => {
     symlinkSync("one.txt", src("kit/link"));
     const plan = await planCopy(r.root, [src("kit")], "");
     expect(plan.items.map((i) => i.dest)).toEqual(["kit/deep/two.txt", "kit/link", "kit/one.txt"]);
-    expect(plan.skipped).toBe(2);
+    expect(plan.skippedGitDirs).toBe(2);
     const result = await copyIn(r.root, plan, {});
     expect(result.text).toBe("Copied 3 files into the repository root. Skipped 2 nested .git folders.");
     expect(readlinkSync(join(r.root, "kit/link"))).toBe("one.txt");
@@ -120,7 +119,7 @@ describe("copying files in", () => {
     expect((await copyIn(r.root, plan, { "src/a.ts": "replace" })).text).toBe("Copied 1 file into src/. Replaced a.ts; undo restores it.");
     expect(r.read("src/a.ts")).toBe("replacement\n");
     r.git("gc", "-q", "--prune=now");
-    expect(await undo(r.root)).toEqual({ label: "Copied 1 file into src/" });
+    expect(await undo(r.root)).toMatchObject({ label: "Copied 1 file into src/" });
     expect(r.read("src/a.ts")).toBe("export const a = 1;\n");
   });
 
@@ -194,7 +193,7 @@ describe("copying safely", () => {
     mkdirSync(src("up/.GIT"), { recursive: true });
     const plan = await planCopy(r.root, [src("kit"), src("up/.GIT")], "");
     expect(plan.items.map((i) => i.dest)).toEqual(["kit/x"]);
-    expect(plan.skipped).toBe(2);
+    expect(plan.skippedGitDirs).toBe(2);
     await expect(planCopy(r.root, [src("kit/x")], ".GIT/")).rejects.toThrow("Can't copy into .GIT/");
     await expect(clashDiff(r.root, src("kit/x"), ".Git/config")).rejects.toThrow("Can't copy into .Git/config");
   });
@@ -251,7 +250,7 @@ describe("copying safely", () => {
     const backup = execFileSync("git", ["-C", r.root, "hash-object", "--stdin"], { input: "export const a = 1;\n", encoding: "utf8" }).trim();
     expect(r.git("ls-tree", "refs/moire/discards")).toContain(backup);
     r.git("gc", "-q", "--prune=now");
-    expect(await undo(r.root)).toEqual({ label: "Failed copy into src/" });
+    expect(await undo(r.root)).toMatchObject({ label: "Failed copy into src/" });
     expect(r.read("src/a.ts")).toBe("export const a = 1;\n");
   });
 });
@@ -263,7 +262,7 @@ describe("clashDiff", () => {
     const { file, contents } = await clashDiff(r.root, src("a.ts"), "src/a.ts");
     expect(file).toMatchObject({ path: src("a.ts"), oldPath: "src/a.ts", status: "modified", additions: 1, deletions: 1 });
     expect(file.hunks[0].lines.map((l) => `${l.kind} ${l.text}`)).toEqual(["del export const a = 1;", "add export const a = 2;"]);
-    expect(contents).toEqual({ a: "export const a = 1;\n", b: "export const a = 2;\n", tooLarge: false });
+    expect(contents).toEqual({ a: "export const a = 1;\n", b: "export const a = 2;\n", hidden: false });
 
     const bin = await clashDiff(r.root, src("bin.dat"), "src/a.ts");
     expect(bin.file.binary).toBe(true);

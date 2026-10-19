@@ -9,7 +9,6 @@ export interface PairedGroup {
   label: string;
   tier: boolean;
   folders: string[];
-  mixed: boolean;
   rows: PairedRow[];
 }
 
@@ -32,7 +31,6 @@ export function isTest(path: string): boolean {
 const isSource = (path: string) => SOURCE.test(path) && !/\.d\.[cm]?ts$/.test(path);
 const rank = (path: string) => (isTest(path) ? 2 : isSource(path) ? 0 : 1);
 
-// Go's foo_test.go and Python's test_foo.py pair with foo.
 function stemOf(name: string): string {
   const stem = name.split(".")[0] || name;
   if (/^test_.+\.py$/.test(name)) return stem.slice(5);
@@ -48,7 +46,7 @@ function tierOf(f: FileDiff): number {
 
 function placeOf(path: string) {
   const dirs = path.split("/").slice(0, -1);
-  const root = dirs.length && ROOTS.has(dirs[0]) ? dirs.shift()! : "";
+  if (dirs.length && ROOTS.has(dirs[0])) dirs.shift();
   const kept = dirs.filter((d) => d !== "__tests__");
   const stem = stemOf(nameOf(path));
   const module = kept.slice(0, 2).join("/");
@@ -56,7 +54,7 @@ function placeOf(path: string) {
     .slice(2)
     .map((d) => `${d}/`)
     .join("");
-  return { root, module, deeper, stem, cluster: `${module}:${deeper}${stem}` };
+  return { module, deeper, stem, cluster: `${module}:${deeper}${stem}` };
 }
 
 function testSlot(path: string, stem: string): string {
@@ -65,13 +63,11 @@ function testSlot(path: string, stem: string): string {
 }
 
 interface Module {
-  roots: Set<string>;
   folders: Set<string>;
   clusters: Map<string, { deeper: string; stem: string; files: FileDiff[] }>;
 }
 
-// `changed` is the whole change set, so a filter can't invent a missing test.
-export function pairFiles(files: FileDiff[], changed: FileDiff[] = files): PairedGroup[] {
+export function pairFiles(files: FileDiff[], allChanges: FileDiff[] = files): PairedGroup[] {
   const modules = new Map<string, Module>();
   const tiers: FileDiff[][] = TIERS.map(() => []);
   for (const f of files) {
@@ -80,10 +76,9 @@ export function pairFiles(files: FileDiff[], changed: FileDiff[] = files): Paire
       tiers[tier].push(f);
       continue;
     }
-    const { root, module, deeper, stem } = placeOf(f.path);
+    const { module, deeper, stem } = placeOf(f.path);
     let m = modules.get(module);
-    if (!m) modules.set(module, (m = { roots: new Set(), folders: new Set(), clusters: new Map() }));
-    m.roots.add(root);
+    if (!m) modules.set(module, (m = { folders: new Set(), clusters: new Map() }));
     m.folders.add(dirOf(f.path).slice(0, -1));
     const key = `${deeper}${stem}`;
     let c = m.clusters.get(key);
@@ -91,7 +86,7 @@ export function pairFiles(files: FileDiff[], changed: FileDiff[] = files): Paire
     c.files.push(f);
   }
 
-  const tests = changed.filter((f) => isTest(f.path));
+  const tests = allChanges.filter((f) => isTest(f.path));
   const tested = new Set(tests.map((f) => placeOf(f.path).cluster));
   const out: PairedGroup[] = [];
   for (const [module, m] of [...modules].sort(([x], [y]) => collator.compare(x, y))) {
@@ -110,14 +105,13 @@ export function pairFiles(files: FileDiff[], changed: FileDiff[] = files): Paire
       label: module || "src",
       tier: false,
       folders: [...m.folders].sort(collator.compare),
-      mixed: m.roots.has("src") && (m.roots.has("test") || m.roots.has("tests")),
       rows,
     });
   }
   tiers.forEach((list, i) => {
     if (!list.length) return;
-    const rows = orderFiles(list).map((file) => ({ file, hint: dirOf(file.path) || undefined }));
-    out.push({ label: TIERS[i], tier: true, folders: [], mixed: false, rows });
+    const rows = orderFiles(list).map((file) => ({ file }));
+    out.push({ label: TIERS[i], tier: true, folders: [], rows });
   });
   return out;
 }

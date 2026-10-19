@@ -14,12 +14,10 @@ export class RepoWatcher {
   private gitDirs = new Set<string>();
   private remotes = "";
   private notes = "";
-  // Directories with no files yet, which ls-files can't report.
-  private adopted = new Set<string>();
-  private adopting = new Set<Promise<void>>();
+  private emptyNewDirs = new Set<string>();
+  private watchingNewDirs = new Set<Promise<void>>();
   private pending = new Set<string>();
-  // Ignored folders open in the file tree. They're listed rather than diffed, so only entries coming and going count.
-  private open = new Set<string>();
+  private openIgnoredDirs = new Set<string>();
   private listed = false;
   private gitTouched = false;
   private quiet: NodeJS.Timeout | null = null;
@@ -40,11 +38,11 @@ export class RepoWatcher {
     await this.sync();
     if (RECURSIVE) return;
     const empty = await git(this.root, ["ls-files", "--others", "--exclude-standard", "--directory", "-z"]);
-    await this.adopt(empty.split("\0").flatMap((p) => (p.endsWith("/") ? [join(this.root, p.slice(0, -1))] : [])));
+    await this.watchNewDirs(empty.split("\0").flatMap((p) => (p.endsWith("/") ? [join(this.root, p.slice(0, -1))] : [])));
   }
 
   setOpen(dirs: string[]): void {
-    this.open = new Set(dirs.filter((d) => !d.split("/").includes("..")).map((d) => join(this.root, d.replace(/\/+$/, ""))));
+    this.openIgnoredDirs = new Set(dirs.filter((d) => !d.split("/").includes("..")).map((d) => join(this.root, d.replace(/\/+$/, ""))));
     if (!RECURSIVE) void this.sync().catch(() => {});
   }
 
@@ -70,24 +68,24 @@ export class RepoWatcher {
         git(this.root, ["ls-files", "--others", "--exclude-standard", "-z"]),
       ]);
       dirs.add(this.root);
-      for (const dir of this.open) dirs.add(dir);
+      for (const dir of this.openIgnoredDirs) dirs.add(dir);
       for (const path of `${tracked}\0${untracked}`.split("\0")) {
         for (let dir = dirname(path); path && dir !== "." && !dirs.has(join(this.root, dir)); dir = dirname(dir)) dirs.add(join(this.root, dir));
       }
-      const adopted = [...this.adopted];
+      const emptyDirs = [...this.emptyNewDirs];
       const gone = await Promise.all(
-        adopted.map((d) =>
+        emptyDirs.map((d) =>
           lstat(d).then(
             (st) => !st.isDirectory(),
             () => true,
           ),
         ),
       );
-      adopted.forEach((d, i) => (gone[i] ? this.adopted.delete(d) : dirs.add(d)));
+      emptyDirs.forEach((d, i) => (gone[i] ? this.emptyNewDirs.delete(d) : dirs.add(d)));
     }
     if (this.closed) return;
     for (const [dir, w] of this.watchers) {
-      if (dirs.has(dir) || this.adopted.has(dir)) continue;
+      if (dirs.has(dir) || this.emptyNewDirs.has(dir)) continue;
       w.close();
       this.watchers.delete(dir);
     }
@@ -104,13 +102,10 @@ export class RepoWatcher {
         this.watchers.delete(dir);
       });
       this.watchers.set(dir, w);
-    } catch {
-      // gone already, or out of inotify watches; the next sync tries again
-    }
+    } catch {}
   }
 
-  // Watches new directories level by level, so files written into them right away are still seen.
-  private async adopt(paths: string[]) {
+  private async watchNewDirs(paths: string[]) {
     for (let level = paths; level.length && !this.closed;) {
       const found = await Promise.all(
         level.map((p) =>
@@ -128,7 +123,7 @@ export class RepoWatcher {
       const kept = dirs.filter((d) => !ignored.has(relative(this.root, d)));
       if (this.closed) return;
       for (const dir of kept) {
-        this.adopted.add(dir);
+        this.emptyNewDirs.add(dir);
         this.watchDir(dir);
       }
       const children = await Promise.all(
@@ -145,7 +140,7 @@ export class RepoWatcher {
 
   private event(dir: string, name: string | null, kind = "change") {
     const full = name ? join(dir, name) : dir;
-    if (kind === "rename" && this.open.has(dirname(full))) this.listed = true;
+    if (kind === "rename" && this.openIgnoredDirs.has(dirname(full))) this.listed = true;
     const inGit = [...this.gitDirs].find((g) => full === g || full.startsWith(g + sep));
     if (inGit) {
       const rel = relative(inGit, full);
@@ -157,9 +152,9 @@ export class RepoWatcher {
     } else {
       const rel = relative(this.root, full);
       if (!RECURSIVE && name && !this.pending.has(rel) && !this.watchers.has(full)) {
-        const adopting = this.adopt([full]).catch(() => {});
-        this.adopting.add(adopting);
-        void adopting.then(() => this.adopting.delete(adopting));
+        const watching = this.watchNewDirs([full]).catch(() => {});
+        this.watchingNewDirs.add(watching);
+        void watching.then(() => this.watchingNewDirs.delete(watching));
       }
       this.pending.add(rel);
     }
@@ -177,7 +172,7 @@ export class RepoWatcher {
     const listed = this.listed;
     this.pending.clear();
     this.gitTouched = this.listed = false;
-    await Promise.all(this.adopting);
+    await Promise.all(this.watchingNewDirs);
     if (!gitTouched && !listed && (await allIgnored(this.root, paths))) return;
     if (this.closed) return;
     this.onChange();

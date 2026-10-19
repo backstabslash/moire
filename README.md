@@ -6,17 +6,39 @@
 [![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-555)](#install)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**See exactly what your coding agent changed, and keep only what you want.** A fast desktop diff viewer for git: stage by line, search every change, and blink between old and new.
+**Your agent touched 40 files. Read why, keep the good lines, throw back the rest.**
 
-![moire showing an agent's notes beside its rewrite of a rate limiter: stepping through chapters, staging one, blink](demo/demo.gif)
+moire is a desktop diff viewer for git, built for reviewing what a coding agent changed. The agent explains its work as chapters beside the diff. You step through them, stage what's right and discard what isn't, down to a single line.
 
-- Side-by-side or unified diffs with syntax highlighting: unstaged, staged, everything since the last commit, a single commit, or one branch against another
-- Stage, unstage and discard whole files, hunks or single lines, with undo, and commit from the staged view
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="demo/demo-dark.gif">
+  <img alt="moire stepping through an agent's notes on a rate limiter rewrite: reading a chapter and its warning, staging the chapter, blinking a hunk, discarding a stray debug line, then writing the commit" src="demo/demo-light.gif">
+</picture>
+
+### Read the agent's notes
+
+The agent writes a short summary and a few chapters, each one behaviour of the change with the lines that make it up, across files. Press `.` to walk them in order while the diff follows. Risky lines carry a "Check this" note, and lines no chapter explains are listed, so a stray edit can't hide. Install the skill once and your agent writes the notes after every change:
+
+```sh
+npx skills add backstabslash/moire -g
+```
+
+It works with Claude Code, Codex, Cursor and other agents that read skills.
+
+### Keep what's right, throw back the rest
+
+- Stage a whole chapter once you've read it, or stage, unstage and discard files, hunks and single lines, with undo
+- Commit from the staged view
+- Copy selected lines as Markdown with path and line numbers, to paste back into the agent with your feedback
+- Blink a hunk between its old and new version in place, so a one-character change jumps out
+
+### And a fast diff viewer
+
+- Side-by-side or unified, with syntax highlighting: unstaged, staged, everything since the last commit, a single commit, or one branch against another
 - Updates by itself as files change
 - Search across every changed file; lockfiles, generated files and whitespace-only changes are folded away
-- Copy selected lines as code, or as Markdown with path and line numbers to paste into an agent
-- Blink a hunk between its old and new version in place, so small changes jump out
 - Changed images shown old and new; Markdown and SVG can be previewed rendered, with changed blocks marked
+- Keyboard-first, with keys you can remap, and six light and dark themes
 
 ## Install
 
@@ -28,8 +50,8 @@ installs the latest release, then opens the repo in the current directory. After
 
 Or download from [Releases](https://github.com/backstabslash/moire/releases):
 
-- **Linux:** AppImage, `.deb` or `.rpm`. The AppImage updates itself; the `.deb` and `.rpm` also install a `moire` command, and moire links to each new release for you to install.
-- **macOS:** `.dmg` for Apple silicon or Intel. Builds aren't notarized yet, so the first time macOS blocks the app. Open System Settings → Privacy & Security and click Open Anyway.
+- **Linux** (x64): AppImage, `.deb` or `.rpm`. The AppImage updates itself; the `.deb` and `.rpm` also install a `moire` command, and moire links to each new release for you to install.
+- **macOS**: `.dmg` for Apple silicon or Intel. Builds aren't notarized yet, so the first time macOS blocks the app. Open System Settings → Privacy & Security and click Open Anyway.
 
 ## Use
 
@@ -39,6 +61,9 @@ moire path/to/repo
 ```
 
 `moire` returns right away and opens a new window if moire is already running. The npx install adds the command on macOS too; with the `.dmg` alone, use `open -na moire --args "$PWD"`. Inside the app, `o` lists recent repos and the repo's other worktrees.
+
+<details>
+<summary>Keyboard shortcuts</summary>
 
 | Key | Action |
 | --- | --- |
@@ -66,9 +91,9 @@ moire path/to/repo
 | `t` | Light or dark theme |
 | `?` | All keyboard shortcuts |
 
-To change a key, open Help → Edit keyboard shortcuts…, which creates `keys.json` with every command and its default, for example `{"stage": "S"}`. Changes apply when you save.
+</details>
 
-To have your coding agent explain its changes as chapters beside the diff, install the moire-notes skill with `npx skills add backstabslash/moire -g`. It works with Claude Code, Codex, Cursor and other agents that read skills.
+To change a key, open Help → Edit keyboard shortcuts…, which creates `keys.json` with every command and its default, for example `{"stage": "S"}`. Changes apply when you save.
 
 ## Build from source
 

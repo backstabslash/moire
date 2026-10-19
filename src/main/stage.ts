@@ -15,7 +15,6 @@ export interface Step {
   path: string;
   index?: [Blob | null, Blob | null];
   worktree?: [Blob | null, Blob | null];
-  // The `mode sha stage` entries of a merge conflict that staging resolved.
   conflict?: string[];
 }
 
@@ -24,7 +23,6 @@ interface UndoEntry {
   label: string;
   steps: Step[];
   head?: string | null;
-  // Folders a copy created, shallowest first, removed again on undo when empty.
   dirs?: string[];
 }
 
@@ -58,8 +56,8 @@ export function actAll(root: string, req: StageAllRequest): Promise<string> {
   return serial(() => runActAll(root, req));
 }
 
-export function undo(root: string): Promise<UndoResult | null> {
-  return serial(() => runUndo(root));
+export function undo(root: string, only?: string): Promise<UndoResult | null> {
+  return serial(() => runUndo(root, only));
 }
 
 export function saveDiscarded(root: string, id: string): Promise<string> {
@@ -98,7 +96,6 @@ export function commit(root: string, message: string): Promise<string> {
   });
 }
 
-// Before 0.1.1 a single undo.json in userData held the history of every repo.
 export function adoptLegacyUndo(root: string, legacy: string): Promise<void> {
   return serial(async () => {
     const old = await readFile(legacy, "utf8")
@@ -119,12 +116,16 @@ export function adoptLegacyUndo(root: string, legacy: string): Promise<void> {
 }
 
 const pathsOf = (file: FileDiff) => (file.oldPath ? [file.path, file.oldPath] : [file.path]);
-// The full refresh marks files staged-then-changed; a refresh of some paths doesn't.
-const seen = (f: FileDiff | undefined) => JSON.stringify(f && { ...f, changedSinceStaged: undefined, version: undefined });
+const changeFingerprint = (f: FileDiff | undefined) =>
+  f &&
+  JSON.stringify([
+    [f.path, f.oldPath, f.status, f.oldMode, f.newMode, f.binary, f.blobs, f.tooLarge, f.additions, f.deletions],
+    f.hunks.map((h) => [h.oldStart, h.oldLines, h.newStart, h.newLines, h.lines.map((l) => [l.kind, l.text, l.noNewline])]),
+  ]);
 
 async function checkSeen(root: string, mode: StageRequest["mode"], files: FileDiff[], paths: string[]) {
   const current = new Map((await diff(root, { kind: mode }, paths.length > 1000 ? [] : paths)).files.map((f) => [f.path, f]));
-  const moved = files.find((f) => (f.unread ? current.get(f.path)?.status !== f.status : seen(current.get(f.path)) !== seen(f)));
+  const moved = files.find((f) => (f.unread ? current.get(f.path)?.status !== f.status : changeFingerprint(current.get(f.path)) !== changeFingerprint(f)));
   if (moved) throw new Error(`${basename(moved.path)} changed since you looked. Refreshed.`);
 }
 
@@ -139,10 +140,9 @@ async function runAct(root: string, req: StageRequest): Promise<string> {
   const picked = new Set((req.lines ?? []).map((r) => `${r.hunk}:${r.line}`).filter((k) => changed.includes(k)));
   const whole = req.lines === null || picked.size === changed.length;
   if (!whole && picked.size === 0) throw new Error("No changed lines selected");
-  if (whole && action !== "discard") return stageWhole(root, action, [file], paths, `${VERB[action]} ${name}`);
+  if (whole && action !== "discard") return stageWhole(root, action, [file], paths, `${VERB[action]} ${name}`, req.undoId);
 
   const kind = action === "discard" ? "worktree" : "index";
-  // In the unstaged view a rename is a deletion paired with an untracked file, so discard restores both.
   const touched = action === "discard" && file.status !== "renamed" ? [file.path] : paths;
   const read = (p: string, keep: boolean) => (kind === "index" ? indexEntry(root, p) : worktreeEntry(root, p, keep));
   const [before] = await Promise.all([
@@ -158,7 +158,7 @@ async function runAct(root: string, req: StageRequest): Promise<string> {
   const [after, head] = await Promise.all([Promise.all(touched.map((p) => read(p, false))), kind === "index" ? headSha(root) : undefined]);
 
   const label = whole ? `${VERB[action]} ${name}` : `${VERB[action]} ${picked.size} ${picked.size === 1 ? "line" : "lines"} in ${name}`;
-  await record(root, { label, steps: touched.map((path, i): Step => ({ path, [kind]: [before[i], after[i]] })), head });
+  await record(root, { label, steps: touched.map((path, i): Step => ({ path, [kind]: [before[i], after[i]] })), head }, req.undoId);
   return label;
 }
 
@@ -171,7 +171,7 @@ async function runActAll(root: string, { mode, files }: StageAllRequest): Promis
   return stageWhole(root, action, files, paths, label);
 }
 
-async function stageWhole(root: string, action: "stage" | "unstage", files: FileDiff[], paths: string[], label: string): Promise<string> {
+async function stageWhole(root: string, action: "stage" | "unstage", files: FileDiff[], paths: string[], label: string, undoId?: string): Promise<string> {
   for (const f of files.filter((f) => f.status === "conflicted")) {
     const name = basename(f.path);
     if (action === "unstage") throw new Error(`${name} has merge conflicts. Resolve them first.`);
@@ -191,7 +191,7 @@ async function stageWhole(root: string, action: "stage" | "unstage", files: File
     if (!b.conflict && same(b.blob, a.blob)) return [];
     return [{ path, index: [b.blob, a.blob], ...(b.conflict && { conflict: b.conflict }) }];
   });
-  await record(root, { label, steps, head });
+  await record(root, { label, steps, head }, undoId);
   return label;
 }
 
@@ -204,7 +204,6 @@ async function discardWhole(root: string, file: FileDiff, paths: string[]) {
   if (file.status === "untracked") {
     await rm(join(root, file.path), { force: true });
   } else if (file.status === "renamed") {
-    // Git steps first: if the index is locked, nothing is lost before the undo entry is written.
     await locked(() => git(root, ["checkout", "-q", "--", ...literal([file.oldPath!])]));
     await rm(join(root, file.path), { force: true });
   } else if (file.status === "added") {
@@ -219,7 +218,6 @@ async function discardWhole(root: string, file: FileDiff, paths: string[]) {
 async function actLines(root: string, action: StageAction, file: FileDiff, selected: (hunk: number, line: number) => boolean, entry: Blob | null) {
   const name = basename(file.path);
   const typeChanged = file.oldMode !== file.newMode && [file.oldMode, file.newMode].some((m) => m === "120000" || m === "160000");
-  // Renames in the unstaged view pair an untracked file with a deletion, which line edits can't express.
   const untrackedRename = file.status === "renamed" && action !== "unstage";
   if (file.binary || file.tooLarge || untrackedRename || typeChanged) throw new Error(`${name} can only be ${VERB[action].toLowerCase()} whole`);
   if (file.hunks.some((h) => h.lines.some((l) => l.text.includes("\uFFFD")))) throw new Error(`${name} isn't UTF-8 text, so it can only be changed whole`);
@@ -227,7 +225,6 @@ async function actLines(root: string, action: StageAction, file: FileDiff, selec
   if (entry?.mode === "160000") throw new Error(`${name} is a submodule and can only be ${VERB[action].toLowerCase()} whole`);
   if (action === "discard") {
     const full = join(root, file.path);
-    // The diff shows the file as git would store it, which only matches the bytes on disk when git converts nothing.
     if (entry && (await git(root, ["hash-object", "--", full])).trim() !== entry.sha) {
       throw new Error(`git converts ${name} (line endings or a filter), so it can only be discarded whole`);
     }
@@ -242,11 +239,13 @@ async function actLines(root: string, action: StageAction, file: FileDiff, selec
   await setIndex(root, file.path, { mode, sha });
 }
 
-async function runUndo(root: string): Promise<UndoResult | null> {
+async function runUndo(root: string, only?: string): Promise<UndoResult | null> {
   const store = await storeFor(root);
   const log = await readLog(store);
-  // A refused discard stays on top, so its Save or Dismiss is offered again rather than lost.
   const i = log.length - 1;
+  if (only !== undefined && log[i]?.id !== only) {
+    throw new Error(log.some((e) => e.id === only) ? `Can't undo that from here: "${log[i].label}" came after it` : "That was already undone");
+  }
   if (i < 0) return null;
   const entry = log[i];
   const drop = async (why: string) => {
@@ -274,7 +273,7 @@ async function runUndo(root: string): Promise<UndoResult | null> {
   for (const step of entry.steps) if (step.worktree) await setWorktree(root, step.path, step.worktree[0]);
   for (const dir of (entry.dirs ?? []).toReversed()) await rmdir(join(root, dir)).catch(() => {});
   await writeLog(root, store, log.toSpliced(i, 1), log);
-  return { label: entry.label };
+  return { label: entry.label, id: entry.id };
 }
 
 async function runSaveDiscarded(root: string, id: string): Promise<string> {
@@ -433,10 +432,10 @@ async function readLog(store: Store): Promise<UndoEntry[]> {
   }
 }
 
-export async function record(root: string, entry: Omit<UndoEntry, "id">) {
+export async function record(root: string, entry: Omit<UndoEntry, "id">, id: string = randomUUID()) {
   const store = await storeFor(root);
   const log = await readLog(store);
-  await writeLog(root, store, [...log, { id: randomUUID(), ...entry }], log);
+  await writeLog(root, store, [...log, { id, ...entry }], log);
 }
 
 async function writeLog(root: string, store: Store, next: UndoEntry[], before: UndoEntry[]) {
@@ -455,7 +454,6 @@ async function writeLog(root: string, store: Store, next: UndoEntry[], before: U
     throw e;
   }
   const want = backups(log);
-  // A failed pin costs nothing yet: git keeps unreachable objects for two weeks, and the next update pins them again.
   if (want.join() !== backups(before).join()) await pin(root, store.pin, want).catch(() => {});
 }
 

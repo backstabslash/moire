@@ -99,10 +99,10 @@ export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true,
       {update && (
         <button
           className="update"
-          title={update.manual ? `${update.manual} Opens the release page.` : `Restarts moire on version ${update.version}`}
+          title={update.manualReason ? `${update.manualReason} Opens the release page.` : `Restarts moire on version ${update.version}`}
           onClick={() => void window.moire.applyUpdate()}
         >
-          {update.manual ? `Get moire ${update.version}` : "Restart to update"}
+          {update.manualReason ? `Get moire ${update.version}` : "Restart to update"}
         </button>
       )}
     </footer>

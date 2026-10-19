@@ -31,8 +31,8 @@ export function ImagePreview({ root, mode, file, a, b, version }: ImageProps) {
   const urlA = pathA && blobUrl(root, a, pathA, version);
   const urlB = pathB && blobUrl(root, b, pathB, version);
   return (
-    <div className="img-compare">
-      <ImageSide key={urlA ?? "a"} side="a" url={urlA} size={sizes?.[0] ?? null} />
+    <div className={`img-compare${file.status === "unchanged" ? " is-whole" : ""}`}>
+      {file.status !== "unchanged" && <ImageSide key={urlA ?? "a"} side="a" url={urlA} size={sizes?.[0] ?? null} />}
       <ImageSide key={urlB ?? "b"} side="b" url={urlB} size={sizes?.[1] ?? null} />
     </div>
   );
@@ -125,7 +125,6 @@ export const MarkdownPreview = forwardRef<DiffViewHandle, MarkdownProps>(functio
   }, [html]);
 
   const revealed = useRef("");
-  // Rendered text has no rows to put <mark>s in, so matches are painted with CSS highlights instead.
   useEffect(() => {
     const article = articleRef.current;
     if (!article || !find) return;

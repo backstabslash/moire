@@ -15,7 +15,7 @@ const changed = (path: string, status: FileDiff["status"] = "modified", noise?: 
 
 function show(groups: PairedGroup[]): string[] {
   return groups.flatMap((g) => [
-    g.tier ? `# ${g.label} (${g.rows.length})` : `${g.label}${g.mixed ? " [src and tests]" : ""}`,
+    g.tier ? `# ${g.label} (${g.rows.length})` : g.label,
     ...g.rows.map((r) =>
       "slot" in r ? `  └ ${r.slot} (no test change)` : r.suffix ? `  └ ${r.suffix}` : `${r.file.path.split("/").pop()}${r.hint ? ` ${r.hint}` : ""}`,
     ),
@@ -49,7 +49,7 @@ const MOCKUP = [
 describe("pairFiles", () => {
   it("groups the mockup's change set by module, with tests and styles under their source", () => {
     expect(show(pairFiles(MOCKUP))).toEqual([
-      "components/checkout [src and tests]",
+      "components/checkout",
       "CartSummary.tsx",
       "  └ .module.css",
       "  └ .test.tsx",
@@ -60,7 +60,7 @@ describe("pairFiles", () => {
       "hooks",
       "useCart.ts",
       "  └ .test.ts (no test change)",
-      "lib/money [src and tests]",
+      "lib/money",
       "currency.ts",
       "  └ .test.ts",
       "format.ts",
@@ -77,9 +77,9 @@ describe("pairFiles", () => {
       "  └ .test.ts (no test change)",
       "# Config and CI (2)",
       "package.json",
-      "ci.yml .github/workflows/",
+      "ci.yml",
       "# Docs (1)",
-      "checkout.md docs/",
+      "checkout.md",
       "# Folded (1)",
       "pnpm-lock.yaml",
     ]);
@@ -121,7 +121,7 @@ describe("pairFiles", () => {
 
   it("labels the root module src and leaves out slots for index, types, schema and deleted files", () => {
     const files = [changed("src/app.tsx"), changed("src/index.ts"), changed("src/types.ts"), changed("src/old.ts", "deleted"), changed("tests/app.test.tsx")];
-    expect(show(pairFiles(files))).toEqual(["src [src and tests]", "app.tsx", "  └ .test.tsx", "index.ts", "old.ts", "types.ts"]);
+    expect(show(pairFiles(files))).toEqual(["src", "app.tsx", "  └ .test.tsx", "index.ts", "old.ts", "types.ts"]);
   });
 
   it("adds no test slots when nothing in the change set is a test", () => {
@@ -143,20 +143,12 @@ describe("pairFiles", () => {
       changed("src/x/run"),
       changed("tests/x/run"),
     ];
-    expect(show(pairFiles(files))).toEqual(["x [src and tests]", "a.ts", "  └ .css", "  └ .test.ts", "  └ .ts", "run", "  └ run"]);
+    expect(show(pairFiles(files))).toEqual(["x", "a.ts", "  └ .css", "  └ .test.ts", "  └ .ts", "run", "  └ run"]);
   });
 
   it("puts root .md files in Docs and noise ahead of everything", () => {
     const files = [changed("README.md"), changed("docs/guide/setup.txt"), changed("src/__snapshots__/a.snap", "modified", "Snapshot"), changed("Makefile")];
-    expect(show(pairFiles(files))).toEqual([
-      "# Config and CI (1)",
-      "Makefile",
-      "# Docs (2)",
-      "README.md",
-      "setup.txt docs/guide/",
-      "# Folded (1)",
-      "a.snap src/__snapshots__/",
-    ]);
+    expect(show(pairFiles(files))).toEqual(["# Config and CI (1)", "Makefile", "# Docs (2)", "README.md", "setup.txt", "# Folded (1)", "a.snap"]);
   });
 });
 

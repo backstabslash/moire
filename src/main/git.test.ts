@@ -75,19 +75,19 @@ describe("working tree modes", () => {
     const file = { path: "a.txt", status: "modified" as const };
     const v1 = "one\ntwo\nthree\n";
     const v3 = "one\nTWO\nthree\nfour\n";
-    expect(await fileContents(r.root, { kind: "unstaged" }, file)).toEqual({ a: v1, b: v3, tooLarge: false });
+    expect(await fileContents(r.root, { kind: "unstaged" }, file)).toEqual({ a: v1, b: v3, hidden: false });
     r.git("add", "a.txt");
     r.write("a.txt", v3);
-    expect(await fileContents(r.root, { kind: "all" }, file)).toEqual({ a: v1, b: v3, tooLarge: false });
+    expect(await fileContents(r.root, { kind: "all" }, file)).toEqual({ a: v1, b: v3, hidden: false });
     expect(await fileContents(r.root, { kind: "staged" }, { path: "staged.txt", status: "added" })).toEqual({
       a: null,
       b: "staged\n",
-      tooLarge: false,
+      hidden: false,
     });
     expect(await fileContents(r.root, { kind: "unstaged" }, { path: "dir/new.txt", status: "untracked" })).toEqual({
       a: null,
       b: "fresh\nno newline",
-      tooLarge: false,
+      hidden: false,
     });
   });
 });
@@ -101,7 +101,7 @@ describe("staged, then changed", () => {
     r.write("a.txt", "two\n");
     r.git("add", "a.txt");
     r.write("c.txt", "new\n");
-    expect((await diff(r.root, { kind: "unstaged" })).progress).toEqual({ staged: 1, total: 2 });
+    expect((await diff(r.root, { kind: "unstaged" })).progress).toEqual({ stagedFiles: 1, totalFiles: 2, lines: { staged: 2, total: 3 } });
 
     r.write("a.txt", "three\n");
     r.write("b.txt", "two\n");
@@ -109,7 +109,7 @@ describe("staged, then changed", () => {
     r.write("b.txt", "three\n");
     const res = await diff(r.root, { kind: "all" });
     expect(res.files.filter((f) => f.changedSinceStaged).map((f) => f.path)).toEqual(["a.txt"]);
-    expect(res.progress).toEqual({ staged: 0, total: 3 });
+    expect(res.progress).toEqual({ stagedFiles: 0, totalFiles: 3, lines: { staged: 4, total: 9 } });
     expect(byPath((await diff(r.root, { kind: "unstaged" })).files, "a.txt").changedSinceStaged).toBe(true);
   });
 
@@ -120,7 +120,7 @@ describe("staged, then changed", () => {
     r.git("mv", "a.txt", "b.txt");
     const res = await diff(r.root, { kind: "all" });
     expect(res.files.map((f) => f.path)).toEqual(["b.txt"]);
-    expect(res.progress).toEqual({ staged: 1, total: 1 });
+    expect(res.progress).toEqual({ stagedFiles: 1, totalFiles: 1, lines: { staged: 1, total: 1 } });
   });
 
   it("still loads when it can't write to .git", async () => {
@@ -131,7 +131,7 @@ describe("staged, then changed", () => {
     r.git("add", "a.txt");
     chmodSync(join(r.root, ".git"), 0o555);
     try {
-      expect((await diff(r.root, { kind: "unstaged" })).progress).toEqual({ staged: 1, total: 1 });
+      expect((await diff(r.root, { kind: "unstaged" })).progress).toMatchObject({ stagedFiles: 1, totalFiles: 1 });
     } finally {
       chmodSync(join(r.root, ".git"), 0o755);
     }
@@ -145,7 +145,7 @@ describe("staged, then changed", () => {
     r.git("add", "a.txt");
     for (const junk of ["", '{"a.txt": "12']) {
       writeFileSync(join(r.root, ".git", "moire-staged"), junk);
-      expect((await diff(r.root, { kind: "unstaged" })).progress).toEqual({ staged: 1, total: 1 });
+      expect((await diff(r.root, { kind: "unstaged" })).progress).toMatchObject({ stagedFiles: 1, totalFiles: 1 });
     }
     expect(JSON.parse(readFileSync(join(r.root, ".git", "moire-staged"), "utf8"))).toHaveProperty("a.txt");
   });
@@ -162,6 +162,26 @@ describe("staged, then changed", () => {
     r.git("add", "a.txt");
     r.write("a.txt", "four\n");
     expect(byPath((await diff(r.root, { kind: "unstaged" })).files, "a.txt").changedSinceStaged).toBeUndefined();
+  });
+
+  it("gives the unstaged view the index lines staged earlier, and where staged deletions were", async () => {
+    const r = makeRepo();
+    r.write("a.txt", lines(10));
+    r.write("b.txt", lines(3));
+    r.commit("init");
+    r.write("a.txt", lines(10).replace("line 2\n", "two\n").replace("line 5\n", "line 5\nnew\n").replace("line 8\n", ""));
+    r.git("add", "a.txt");
+    r.write("a.txt", lines(10).replace("line 2\n", "two\n").replace("line 5\n", "line 5\nnew\n").replace("line 8\n", "").replace("line 10", "ten"));
+    r.write("b.txt", lines(3).replace("line 1", "one"));
+    r.git("add", "b.txt");
+    r.git("mv", "b.txt", "c.txt");
+    r.write("c.txt", lines(3).replace("line 1", "one").replace("line 3", "three"));
+
+    const files = (await diff(r.root, { kind: "unstaged" })).files;
+    expect(byPath(files, "a.txt").alreadyStaged).toEqual({ stagedRanges: [2, 6].map((n) => [n, n]), deletionsAfter: [8] });
+    expect(byPath(files, "c.txt").alreadyStaged).toEqual({ stagedRanges: [[1, 1]], deletionsAfter: [] });
+    expect(byPath((await diff(r.root, { kind: "unstaged" }, ["a.txt"])).files, "a.txt").alreadyStaged).toBeUndefined();
+    expect(byPath((await diff(r.root, { kind: "all" })).files, "a.txt").alreadyStaged).toBeUndefined();
   });
 });
 
@@ -208,11 +228,11 @@ describe("commit mode", () => {
     const renamed = await fileContents(r.root, mode, { path: "new.txt", oldPath: "old.txt", status: "renamed" });
     expect(renamed.a).toBe(body);
     expect(renamed.b).toContain("line ten\n");
-    expect(await fileContents(r.root, mode, { path: "gone.txt", status: "deleted" })).toEqual({ a: "bye\n", b: null, tooLarge: false });
+    expect(await fileContents(r.root, mode, { path: "gone.txt", status: "deleted" })).toEqual({ a: "bye\n", b: null, hidden: false });
     expect(await fileContents(r.root, { kind: "commit", sha: root }, { path: "eof.txt", status: "added" })).toEqual({
       a: null,
       b: "a\nb",
-      tooLarge: false,
+      hidden: false,
     });
   });
 
@@ -220,14 +240,14 @@ describe("commit mode", () => {
     const files = (await diff(r.root, mode)).files;
     const one = await Promise.all(files.map((f) => fileContents(r.root, mode, f)));
     expect(await manyContents(r.root, mode, files)).toEqual(one);
-    expect(one.map((c) => c.tooLarge)).toEqual([true, false, false, false]);
+    expect(one.map((c) => c.hidden)).toEqual([true, false, false, false]);
   });
 
   it("flags binary and oversized files as too large", async () => {
-    expect(await fileContents(r.root, mode, { path: "bin.dat", status: "modified" })).toEqual({ a: null, b: null, tooLarge: true });
+    expect(await fileContents(r.root, mode, { path: "bin.dat", status: "modified" })).toEqual({ a: null, b: null, hidden: true, binary: true });
     r.write("huge.txt", "x".repeat(2 * 1024 * 1024 + 10));
     const huge = await fileContents(r.root, { kind: "unstaged" }, { path: "huge.txt", status: "untracked" });
-    expect(huge).toEqual({ a: null, b: null, tooLarge: true });
+    expect(huge).toEqual({ a: null, b: null, hidden: true });
     const res = await diff(r.root, { kind: "unstaged" });
     expect(byPath(res.files, "huge.txt")).toMatchObject({ status: "untracked", binary: false, hunks: [] });
     unlinkSync(join(r.root, "huge.txt"));
@@ -276,7 +296,7 @@ describe("unborn HEAD", () => {
     expect(await fileContents(r.root, { kind: "staged" }, { path: "first.txt", status: "added" })).toEqual({
       a: null,
       b: "hello\n",
-      tooLarge: false,
+      hidden: false,
     });
     const all = await diff(r.root, { kind: "all" });
     expect(paths(all.files)).toEqual(["untracked:blob.bin", "added:first.txt"]);
@@ -302,7 +322,7 @@ describe("branches mode", () => {
     expect(res.b).toEqual({ kind: "commit", rev: tip, label: "feature" });
     expect(paths(res.files)).toEqual(["added:feature.txt", "modified:shared.txt"]);
     const shared = await fileContents(r.root, { kind: "branches", base: "main", head: "feature" }, { path: "shared.txt", status: "modified" });
-    expect(shared).toEqual({ a: "base\n", b: "base\nfeature\n", tooLarge: false });
+    expect(shared).toEqual({ a: "base\n", b: "base\nfeature\n", hidden: false });
   });
 
   it("lists branches with the current one first", async () => {
@@ -612,6 +632,49 @@ describe("renames git doesn't know about yet", () => {
     const r = setup();
     expect(paths((await diff(r.root, { kind: "unstaged" }, ["new.ts", "old.ts"])).files)).toEqual(["renamed:new.ts"]);
   });
+
+  it("pairs a plain move with no edits as a rename with no hunks", async () => {
+    const r = makeRepo();
+    r.write("src/old.ts", lines(20));
+    r.commit("init");
+    renameSync(join(r.root, "src/old.ts"), join(r.root, "src/new.ts"));
+    for (const kind of ["unstaged", "all"] as const) {
+      const files = (await diff(r.root, { kind })).files;
+      expect(paths(files)).toEqual(["renamed:src/new.ts"]);
+      expect(files[0]).toMatchObject({ oldPath: "src/old.ts", additions: 0, deletions: 0, hunks: [] });
+    }
+  });
+});
+
+describe("renames made with git mv", () => {
+  const setup = (edit: boolean) => {
+    const r = makeRepo();
+    r.write("old.ts", lines(20));
+    r.commit("init");
+    r.git("mv", "old.ts", "new.ts");
+    if (edit) r.write("new.ts", lines(20).replace("line 3\n", "line three\n"));
+    return r;
+  };
+
+  it("shows a pure rename with no hunks in staged and all, and nothing unstaged", async () => {
+    const r = setup(false);
+    expect((await diff(r.root, { kind: "unstaged" })).files).toEqual([]);
+    for (const kind of ["staged", "all"] as const) {
+      const files = (await diff(r.root, { kind })).files;
+      expect(paths(files)).toEqual(["renamed:new.ts"]);
+      expect(files[0]).toMatchObject({ oldPath: "old.ts", additions: 0, deletions: 0, hunks: [] });
+    }
+  });
+
+  it("shows the rename staged, the edit unstaged and both in all", async () => {
+    const r = setup(true);
+    const [unstaged, staged, all] = await Promise.all((["unstaged", "staged", "all"] as const).map((kind) => diff(r.root, { kind })));
+    expect(paths(unstaged.files)).toEqual(["modified:new.ts"]);
+    expect(paths(staged.files)).toEqual(["renamed:new.ts"]);
+    expect(staged.files[0].hunks).toEqual([]);
+    expect(paths(all.files)).toEqual(["renamed:new.ts"]);
+    expect(all.files[0]).toMatchObject({ oldPath: "old.ts", additions: 1, deletions: 1 });
+  });
 });
 
 describe("binary rewrites", () => {
@@ -674,11 +737,11 @@ describe("file tree", () => {
   });
 
   it("reads an unchanged file from side B only", async () => {
-    expect(await fileContents(r.root, { kind: "unstaged" }, { path: "IDEAS.md", status: "unchanged" })).toEqual({ a: null, b: "# ideas\n", tooLarge: false });
+    expect(await fileContents(r.root, { kind: "unstaged" }, { path: "IDEAS.md", status: "unchanged" })).toEqual({ a: null, b: "# ideas\n", hidden: false });
     expect(await fileContents(r.root, { kind: "commit", sha: first }, { path: "src/a.ts", status: "unchanged" })).toEqual({
       a: null,
       b: "a\n",
-      tooLarge: false,
+      hidden: false,
     });
   });
 
@@ -709,7 +772,7 @@ describe("index lock", () => {
       expect(paths(res.files)).toEqual(
         kind === "unstaged" ? ["modified:a.txt"] : kind === "staged" ? ["modified:staged.txt"] : ["modified:a.txt", "modified:staged.txt"],
       );
-      if (kind === "all") expect(res.progress).toEqual({ staged: 1, total: 2 });
+      if (kind === "all") expect(res.progress).toMatchObject({ stagedFiles: 1, totalFiles: 2 });
     }
     expect(readFileSync(index).equals(before)).toBe(true);
   });

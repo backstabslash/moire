@@ -83,7 +83,6 @@ function resolveShellPath() {
   setShellPath(path);
 }
 
-// From a terminal, run in the background like `code`, so Chromium's logging and Ctrl+C don't reach the app.
 function detach(): boolean {
   if (!app.isPackaged || process.platform !== "linux" || !(process.stdout.isTTY || process.stderr.isTTY)) return false;
   app.releaseSingleInstanceLock();

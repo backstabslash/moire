@@ -19,7 +19,7 @@ export function reportIssue() {
 }
 
 export function setupMenu(): void {
-  app.setAboutPanelOptions({ applicationName: "moire", applicationVersion: app.getVersion(), website: "https://github.com/backstabslash/moire" });
+  app.setAboutPanelOptions({ applicationName: "Moire", applicationVersion: app.getVersion(), website: "https://github.com/backstabslash/moire" });
   buildMenu();
   watchKeys(() => {
     buildMenu();
@@ -30,26 +30,36 @@ export function setupMenu(): void {
 export function buildMenu(): void {
   const mac = process.platform === "darwin";
   const { keys } = loadKeys();
-  // The page handles every key itself, and registered bare letters would swallow typing in text fields.
-  // macOS can't show an accelerator without registering it, so there only zoom, which main handles, shows one.
+  // Registered bare letters would swallow typing in text fields, and macOS only shows registered accelerators.
   const shortcut = (id: CommandId) => {
     const accel = keys[id][0] && accelerator(keys[id][0]);
     if (!accel) return {};
     if (!mac) return { accelerator: accel, registerAccelerator: false };
-    return command(id).fixed ? { accelerator: accel } : {};
+    return command(id).handledByMain ? { accelerator: accel } : {};
   };
   const item = (id: CommandId, label = COMMANDS[id].label): MenuItemConstructorOptions => ({ id, label, click: () => send(id), ...shortcut(id) });
   const sep: MenuItemConstructorOptions = { type: "separator" };
   const recent = (loadState().recent ?? []).filter((r) => existsSync(join(r, ".git")));
-  const about: MenuItemConstructorOptions = { role: "about", label: "About moire" };
+  const about: MenuItemConstructorOptions = { role: "about", label: "About Moire" };
   const updates: MenuItemConstructorOptions[] = app.isPackaged ? [{ label: "Check for updates…", click: () => checkForUpdates(true) }] : [];
 
   const template: MenuItemConstructorOptions[] = [
     ...(mac
       ? [
           {
-            label: app.name,
-            submenu: [about, ...updates, sep, { role: "services" }, sep, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, sep, { role: "quit" }],
+            label: "Moire",
+            submenu: [
+              about,
+              ...updates,
+              sep,
+              { role: "services" },
+              sep,
+              { role: "hide", label: "Hide Moire" },
+              { role: "hideOthers" },
+              { role: "unhide" },
+              sep,
+              { role: "quit", label: "Quit Moire" },
+            ],
           } as MenuItemConstructorOptions,
         ]
       : []),

@@ -4,24 +4,27 @@ import { Key } from "./Key";
 interface Props {
   staged: number;
   total: number;
+  files: { stagedFiles: number; totalFiles: number };
   changed: number;
   hideStaged: boolean | null;
   onHideStaged(hide: boolean): void;
   stageAll: { label: string; busy: boolean; run(): void } | null;
 }
 
-export function StageProgress({ staged, total, changed, hideStaged, onHideStaged, stageAll }: Props) {
-  const pct = (n: number) => `${(n / total) * 100}%`;
+export function StageProgress({ staged, total, files, changed, hideStaged, onHideStaged, stageAll }: Props) {
+  const tip = [
+    `${staged} of ${total} changed ${total === 1 ? "line" : "lines"}`,
+    `${files.stagedFiles} of ${files.totalFiles} ${files.totalFiles === 1 ? "file" : "files"} fully staged`,
+    changed > 0 && `${changed} staged, then changed again`,
+  ].filter(Boolean);
   return (
     <div className="stage-progress">
       <div className="stage-progress-line">
-        <b>
-          {staged} of {total} staged
-        </b>
+        <b data-tip={tip.join("\n")}>{staged === total ? "All staged" : `${Math.floor((staged / total) * 100)}% staged`}</b>
         {hideStaged !== null && (
-          <label>
+          <label className="hide-staged">
             <input type="checkbox" checked={hideStaged} onChange={(e) => onHideStaged(e.target.checked)} />
-            Hide staged
+            <span>Hide staged</span>
           </label>
         )}
         {stageAll && (
@@ -31,9 +34,8 @@ export function StageProgress({ staged, total, changed, hideStaged, onHideStaged
           </button>
         )}
       </div>
-      <div className="stage-bar" title={changed ? `${changed} staged, then changed again` : undefined}>
-        <i style={{ width: pct(staged) }} />
-        {changed > 0 && <i className="is-changed" style={{ width: pct(changed) }} />}
+      <div className="stage-bar" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={staged} aria-label="Lines staged">
+        <i style={{ width: `${(staged / total) * 100}%` }} />
       </div>
     </div>
   );

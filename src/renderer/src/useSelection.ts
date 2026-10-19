@@ -9,13 +9,11 @@ export type SelectHow = "click" | "toggle" | "shift" | "drag";
 interface Picked {
   keys: ReadonlySet<string>;
   col: Col | null;
-  // The whole file on one side, folded lines included.
-  whole: "a" | "b" | null;
-  // Picked from hunk headers: one side of each hunk stands for all of it when staging.
-  hunks: boolean;
+  wholeSide: "a" | "b" | null;
+  fromHunkHeaders: boolean;
 }
 
-const NONE: Picked = { keys: EMPTY, col: null, whole: null, hunks: false };
+const NONE: Picked = { keys: EMPTY, col: null, wholeSide: null, fromHunkHeaders: false };
 
 export function useSelection(rows: Row[]) {
   const [picked, setPicked] = useState(NONE);
@@ -32,8 +30,8 @@ export function useSelection(rows: Row[]) {
     return () => window.removeEventListener("mouseup", up);
   }, []);
 
-  const apply = useCallback((keys: ReadonlySet<string>, col: Col | null, whole: "a" | "b" | null = null, hunks = false) => {
-    const next = keys.size || whole ? { keys, col, whole, hunks } : NONE;
+  const apply = useCallback((keys: ReadonlySet<string>, col: Col | null, wholeSide: "a" | "b" | null = null, fromHunkHeaders = false) => {
+    const next = keys.size || wholeSide ? { keys, col, wholeSide, fromHunkHeaders } : NONE;
     current.current = next;
     setPicked(next);
   }, []);
@@ -58,8 +56,8 @@ export function useSelection(rows: Row[]) {
         drag.current = { base, adding: true };
         return apply(new Set([...base, ...keysBetween(rows, col, from.key, key)]), col);
       }
-      const { keys, col: had, whole } = current.current;
-      const before = how === "toggle" && had === col && !whole ? keys : EMPTY;
+      const { keys, col: had, wholeSide } = current.current;
+      const before = how === "toggle" && had === col && !wholeSide ? keys : EMPTY;
       const adding = !before.has(key);
       const next = new Set(before);
       if (adding) next.add(key);
@@ -83,16 +81,15 @@ export function useSelection(rows: Row[]) {
   );
 
   const pick = useCallback(
-    (keys: string[], col: Col, hunks = false) => {
+    (keys: string[], col: Col, fromHunkHeaders = false) => {
       if (!keys.length) return;
       anchor.current = { key: keys[0], col };
       cursor.current = { key: keys[keys.length - 1], base: EMPTY };
-      apply(new Set(keys), col, null, hunks);
+      apply(new Set(keys), col, null, fromHunkHeaders);
     },
     [apply],
   );
 
-  // Moves the end of the last range by one line, growing or shrinking it from the clicked line.
   const extend = useCallback(
     (delta: number): string | null => {
       const from = anchor.current;
@@ -123,11 +120,11 @@ export function useSelection(rows: Row[]) {
       anchor.current = from && map.has(from.key) ? { ...from, key: moved(from.key) } : null;
       const at = cursor.current;
       cursor.current = at && anchor.current && map.has(at.key) ? { key: moved(at.key), base: new Set([...at.base].map(moved)) } : null;
-      apply(new Set([...current.current.keys].map(moved)), current.current.col, null, current.current.hunks);
+      apply(new Set([...current.current.keys].map(moved)), current.current.col, null, current.current.fromHunkHeaders);
     },
     [apply, clear],
   );
 
-  const selection = useMemo(() => (picked.whole ? new Set(sideKeys(rows, picked.whole)) : picked.keys), [picked, rows]);
-  return { selection, col: picked.col, whole: picked.whole, hunks: picked.hunks, select, selectAll, pick, extend, clear, carry };
+  const selection = useMemo(() => (picked.wholeSide ? new Set(sideKeys(rows, picked.wholeSide)) : picked.keys), [picked, rows]);
+  return { selection, col: picked.col, wholeSide: picked.wholeSide, fromHunkHeaders: picked.fromHunkHeaders, select, selectAll, pick, extend, clear, carry };
 }

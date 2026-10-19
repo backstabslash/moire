@@ -142,7 +142,6 @@ export const moireTheme: ThemeRegistration = {
     rule(["markup.inserted", "markup.inserted punctuation"], "var(--b-ink)"),
     rule(["markup.deleted", "markup.deleted punctuation"], "var(--a-ink)"),
     rule(["meta.template.expression", "meta.embedded"], ink),
-    // Names of constants read as names, not as literal values.
     rule(
       ["variable.other.constant", "constant.other.caps", "constant.other.database-name", "constant.other.table-name", "string.unquoted.argument.shell"],
       ink,

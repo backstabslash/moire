@@ -49,12 +49,12 @@ test.afterEach(() => {
 test("a shows every file, with ignored ones, and opens an unchanged file whole", async () => {
   await page.keyboard.press("a");
   const nav = page.getByRole("navigation", { name: "All files" });
-  await expect(nav.locator(".tree-dir")).toHaveText(["out", "src1"]);
+  await expect(nav.locator(".tree-dir")).toHaveText(["out/", "src/"]);
   await expect(nav.locator(".file.is-ignored")).toHaveText("IDEAS.md");
   await expect(nav.locator(".file .name")).toHaveText(["a.ts", "util.ts", ".gitignore", "IDEAS.md"]);
 
-  await nav.getByTitle(/^IDEAS\.md/).click();
-  await expect(page.locator(".pane-h", { hasText: "Working tree, IDEAS.md, unchanged" })).toBeVisible();
+  await nav.locator('[data-tip^="IDEAS.md"]').click();
+  await expect(page.locator('.pane-h b[data-tip="Working tree, IDEAS.md, unchanged"]')).toBeVisible();
   await expect(page.locator(".row.uni .cell")).toHaveText(["# Ideas", "", "- a file tree"]);
 
   await page.keyboard.press("/");
@@ -82,7 +82,7 @@ test("a shows every file, with ignored ones, and opens an unchanged file whole",
 test("an ignored folder is read when opened", async () => {
   const nav = page.getByRole("navigation", { name: "All files" });
   await nav.locator(".tree-dir", { hasText: "out" }).click();
-  await nav.getByTitle(/^out\/bundle\.js/).click();
+  await nav.locator('[data-tip^="out/bundle.js"]').click();
   await expect(page.locator(".row.uni .cell")).toHaveText(["console.log('built');"]);
   await shot("tree-light");
   await page.keyboard.press("t");
@@ -93,9 +93,9 @@ test("an ignored folder is read when opened", async () => {
 test("an open ignored folder shows files as they're added and removed", async () => {
   const nav = page.getByRole("navigation", { name: "All files" });
   writeFileSync(join(repo, "out", "later.js"), "later\n");
-  await expect(nav.getByTitle(/^out\/later\.js/)).toBeVisible();
+  await expect(nav.locator('[data-tip^="out/later.js"]')).toBeVisible();
   rmSync(join(repo, "out", "later.js"));
-  await expect(nav.getByTitle(/^out\/later\.js/)).toHaveCount(0);
+  await expect(nav.locator('[data-tip^="out/later.js"]')).toHaveCount(0);
 });
 
 test("switching between unchanged files keeps the last one up until the next is ready", async () => {
@@ -108,14 +108,9 @@ test("switching between unchanged files keeps the last one up until the next is 
     new MutationObserver(check).observe(document.body, { childList: true, subtree: true });
   });
   const nav = page.getByRole("navigation", { name: "All files" });
-  for (const [name, title] of [
-    [".gitignore", /^\.gitignore/],
-    ["src/util.ts", /^src\/util\.ts/],
-    ["IDEAS.md", /^IDEAS\.md/],
-    ["src/util.ts", /^src\/util\.ts/],
-  ] as const) {
-    await nav.getByTitle(title).click();
-    await expect(page.locator(".pane-h", { hasText: `${name}, unchanged` })).toBeVisible();
+  for (const name of [".gitignore", "src/util.ts", "IDEAS.md", "src/util.ts"]) {
+    await nav.locator(`[data-path="${name}"]`).click();
+    await expect(page.locator(`.pane-h b[data-tip$="${name}, unchanged"]`)).toBeVisible();
   }
   expect(await page.evaluate(() => (window as unknown as { gaps: number }).gaps)).toBe(0);
 });
@@ -124,17 +119,17 @@ test("the filter covers every file, and the open file follows edits", async () =
   await page.keyboard.press("p");
   await page.keyboard.type("util");
   await page.keyboard.press("Enter");
-  await expect(page.locator(".pane-h", { hasText: "src/util.ts, unchanged" })).toBeVisible();
+  await expect(page.locator('.pane-h b[data-tip$="src/util.ts, unchanged"]')).toBeVisible();
   await page.locator(".file-filter").press("Escape");
 
   writeFileSync(join(repo, "src", "util.ts"), "export function helper() {\n  return 43;\n}\n");
   await page.keyboard.press("r");
   await expect(page.locator(".file.is-active .kind")).toHaveText("M");
-  await expect(page.locator(".pane-h").first()).not.toContainText("unchanged");
+  await expect(page.locator('.pane-h b[data-tip$=", unchanged"]')).toHaveCount(0);
 });
 
 test("going back to changed files leaves the tree", async () => {
-  await page.getByTitle(/^IDEAS\.md/).click();
+  await page.locator('[data-tip^="IDEAS.md"]').click();
   await page.keyboard.press("a");
   await expect(page.getByRole("navigation", { name: "Changed files" }).locator(".file")).toHaveCount(2);
   await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");

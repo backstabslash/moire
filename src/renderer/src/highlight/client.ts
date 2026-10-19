@@ -10,7 +10,6 @@ interface Job {
 }
 
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
-// One job at a time, so a file the user skipped past can still be dropped before it starts.
 const queue: Job[] = [];
 const warmed = new Set<string>();
 let running: Job | null = null;

@@ -40,14 +40,13 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e)).r
 const hasFiles = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes("Files");
 const chain = (dir: string) => dir.split("/").flatMap((_, i, parts) => (i < parts.length - 1 ? [parts.slice(0, i + 1).join("/") + "/"] : []));
 
-function treeRow(dir: string): HTMLElement | null {
-  return document.querySelector<HTMLElement>(`.sidebar .tree-dir[data-dir="${CSS.escape(dir)}"]`);
+function rowHoldingFolder(dir: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`.sidebar .files [data-dir="${CSS.escape(dir)}"]`)?.closest<HTMLElement>(".tree-dir") ?? null;
 }
 
-// The tree keeps its open folders to itself, so this opens them the way a click does, one level per frame.
 function openFolders(dir: string, frames = 60) {
   for (const d of chain(dir)) {
-    const row = treeRow(d);
+    const row = rowHoldingFolder(d);
     if (row?.getAttribute("aria-expanded") === "true") continue;
     if (row) row.click();
     if (frames > 0) requestAnimationFrame(() => openFolders(dir, frames - 1));
@@ -135,15 +134,14 @@ export function useFilesIn(opts: Options) {
   useEffect(() => {
     let depth = 0;
     let hover: { dir: string | null; timer: number } = { dir: null, timer: 0 };
-    // Set while a row is dragged out, so the same drag coming back over the window isn't taken for files arriving.
-    let outgoing = false;
+    let draggingOwnRowOut = false;
     let lastOut = "";
     const update = (next: Drag | null) => setDrag((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
     const holdOver = (dir: string | null) => {
       if (dir === hover.dir) return;
       clearTimeout(hover.timer);
       const open = () => {
-        const row = dir === null ? null : treeRow(dir);
+        const row = dir === null ? null : rowHoldingFolder(dir);
         if (row?.getAttribute("aria-expanded") === "false") row.click();
       };
       hover = { dir, timer: dir === null ? 0 : window.setTimeout(open, OPEN_MS) };
@@ -153,7 +151,7 @@ export function useFilesIn(opts: Options) {
       holdOver(null);
       update(null);
     };
-    const takes = (e: DragEvent) => hasFiles(e) && !outgoing && !latest.current.clash;
+    const takes = (e: DragEvent) => hasFiles(e) && !draggingOwnRowOut && !latest.current.clash;
     const outside = (e: DragEvent) => e.clientX <= 0 || e.clientY <= 0 || e.clientX >= innerWidth || e.clientY >= innerHeight;
 
     const enter = (e: DragEvent) => {
@@ -194,15 +192,15 @@ export function useFilesIn(opts: Options) {
       } else if (el?.closest(".drop-slots, .main, .empty-state, .loading")) {
         next = { ...drag, over: "main", target: el.closest<HTMLElement>("[data-slot]")?.dataset.slot ?? null };
       }
-      holdOver(row?.getAttribute("aria-expanded") === "false" ? row.dataset.dir! : null);
+      holdOver(row?.closest(".tree-dir")?.getAttribute("aria-expanded") === "false" ? row.dataset.dir! : null);
       if (!writable) next.target = null;
       e.dataTransfer!.dropEffect = next.target === null ? "none" : "copy";
       update(next);
     };
     const drop = (e: DragEvent) => {
       e.preventDefault();
-      if (outgoing) {
-        outgoing = false;
+      if (draggingOwnRowOut) {
+        draggingOwnRowOut = false;
         return;
       }
       if (!takes(e)) return;
@@ -224,17 +222,17 @@ export function useFilesIn(opts: Options) {
       const repo = latest.current.opts.repo;
       if (!row || !repo) return;
       e.preventDefault();
-      outgoing = true;
+      draggingOwnRowOut = true;
       lastOut = `${repo.root}/${row.dataset.path}`;
       void window.moire
         .dragFile(repo.root, row.dataset.path!)
         .catch(() => {})
         .finally(() => {
-          if (window.moire.platform !== "darwin") outgoing = false;
+          if (window.moire.platform !== "darwin") draggingOwnRowOut = false;
         });
     };
     const settled = () => {
-      outgoing = false;
+      draggingOwnRowOut = false;
     };
     document.addEventListener("dragenter", enter);
     document.addEventListener("dragleave", leave);

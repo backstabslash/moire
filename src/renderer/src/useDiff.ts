@@ -24,8 +24,7 @@ export function useDiff(repo: RepoInfo | null, wantMode: CompareMode, events: Di
   const viewCache = useRef(new Map<string, Loaded>());
   const writes = useRef(0);
   const changes = useRef(0);
-  // A view cached before the last write or outside change shows old files, and offers actions that main then refuses as stale.
-  const cachedView = (view: string) => {
+  const cachedSinceLastWriteOrChange = (view: string) => {
     const entry = viewCache.current.get(view);
     return entry?.writes === writes.current && entry.changes === changes.current ? entry : undefined;
   };
@@ -52,7 +51,14 @@ export function useDiff(repo: RepoInfo | null, wantMode: CompareMode, events: Di
 
   const wantKey = JSON.stringify(wantMode);
   const wantView = `${repo?.root}:${wantKey}`;
-  const shown = loaded?.view === wantView ? loaded : (cachedView(wantView) ?? loaded);
+  const showing = useRef<Loaded | null>(null);
+  const viewToShow = (): Loaded | null => {
+    if (loaded?.view === wantView) return loaded;
+    const outdatedButOnScreen = showing.current?.view === wantView ? showing.current : null;
+    return cachedSinceLastWriteOrChange(wantView) ?? outdatedButOnScreen ?? loaded;
+  };
+  const shown = viewToShow();
+  showing.current = shown;
 
   useEffect(() => {
     window.addEventListener("focus", refresh);
@@ -71,7 +77,7 @@ export function useDiff(repo: RepoInfo | null, wantMode: CompareMode, events: Di
   const preloadViews = useCallback((root: string, except: string, force: boolean) => {
     for (const kind of ["unstaged", "staged", "all"] as const) {
       const view = `${root}:${JSON.stringify({ kind })}`;
-      if (view === except || (!force && cachedView(view))) continue;
+      if (view === except || (!force && cachedSinceLastWriteOrChange(view))) continue;
       const [at, seen] = [writes.current, changes.current];
       window.moire.diff(root, { kind }).then(
         (result) => remember(viewCache.current, view, { view, mode: { kind }, result, writes: at, changes: seen }),
@@ -118,7 +124,7 @@ export function useDiff(repo: RepoInfo | null, wantMode: CompareMode, events: Di
   }, [repo, wantKey, refreshTick]);
 
   useLayoutEffect(() => {
-    const cached = cachedView(wantView);
+    const cached = cachedSinceLastWriteOrChange(wantView);
     if (cached) on.current.switched(cached.result, cached.mode);
   }, [wantView]);
 

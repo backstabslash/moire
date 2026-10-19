@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { app, BrowserWindow, dialog, type MessageBoxOptions, net, Notification, shell } from "electron";
 import { AppImageUpdater } from "electron-updater";
 import type { UpdateNotice } from "../shared/types";
-import { installedVersion, installKind, newer, npxRoot, type Release, updateNpx, whyManual } from "./install";
+import { installedVersion, installKind, type MoveIn, newer, npxRoot, type Release, updateNpx, whyManual } from "./install";
 import { real } from "./launch";
 import { log } from "./log";
 import { loadState } from "./state";
@@ -53,17 +53,15 @@ export function runningAsAppImage(): boolean {
 
 let notice: UpdateNotice | null = null;
 let apply: ((repo?: string) => void) | undefined;
-// done settles when the download does; it's missing when there's nothing to download.
 interface Found {
   version: string;
-  done?: Promise<unknown>;
+  download?: Promise<unknown>;
 }
 
 let downloading: Found | undefined;
 let checking: Promise<Found | null> | undefined;
 let updater: AppImageUpdater | undefined;
-// The macOS bundle that moves in once moire quits.
-let staged: { version: string; moveIn(): void } | undefined;
+let staged: { version: string; moveIn: MoveIn } | undefined;
 
 export function updateNotice(): UpdateNotice | null {
   return notice;
@@ -79,12 +77,12 @@ function announce(next: UpdateNotice, onApply: (repo?: string) => void) {
   apply = onApply;
   for (const win of BrowserWindow.getAllWindows()) win.webContents.send("update:notice", next);
   if (BrowserWindow.getFocusedWindow()) return;
-  notify(next.manual ? `Version ${next.version} is available. Click to download it.` : `Version ${next.version} is ready. Click to restart moire now.`, () =>
-    applyUpdate(),
+  notify(
+    next.manualReason ? `Version ${next.version} is available. Click to download it.` : `Version ${next.version} is ready. Click to restart moire now.`,
+    () => applyUpdate(),
   );
 }
 
-// A newer release replaces the one waiting, whose files the next download clears away.
 function withdraw() {
   notice = null;
   apply = undefined;
@@ -110,14 +108,13 @@ function relaunch(execPath: string, repo = loadState().lastRepo) {
 async function downloadNpx(release: Release, version: string) {
   const mac = process.platform === "darwin";
   const root = npxRoot(process.platform, process.env, homedir());
-  // The launcher may have installed it already while this copy kept running.
   if (installedVersion(process.platform, root) !== version) {
     const moveIn = await updateNpx({
       release,
       platform: process.platform,
       arch: process.arch,
       root,
-      running: mac ? root : dirname(app.getPath("exe")),
+      runningApp: mac ? root : dirname(app.getPath("exe")),
       fetch: net.fetch,
       onSmallFailed: (e) => log(`small update to ${version} failed, downloading all of it: ${e.message}`),
     });
@@ -143,7 +140,6 @@ function appImageUpdater(): AppImageUpdater {
   return (updater = u);
 }
 
-// Resolves with the newer version, if there is one; downloading it carries on in the background.
 async function check(): Promise<Found | null> {
   if (downloading) return downloading;
   const ready = notice && { version: notice.version };
@@ -152,22 +148,22 @@ async function check(): Promise<Found | null> {
     const result = await appImageUpdater().checkForUpdates();
     if (!result?.isUpdateAvailable || result.updateInfo.version === notice?.version) return ready;
     withdraw();
-    const done = result.downloadPromise ?? Promise.resolve();
-    downloading = { version: result.updateInfo.version, done };
-    void done.catch(() => {}).finally(() => (downloading = undefined));
+    const download = result.downloadPromise ?? Promise.resolve();
+    downloading = { version: result.updateInfo.version, download };
+    void download.catch(() => {}).finally(() => (downloading = undefined));
     return downloading;
   }
   const release = await latestRelease();
   const version = release.tag_name.replace(/^v/, "");
   if (!newer(version, notice?.version ?? app.getVersion())) return ready;
   if (kind !== "npx") {
-    announce({ version, manual: whyManual(kind) }, () => void shell.openExternal(`https://github.com/backstabslash/moire/releases/tag/v${version}`));
+    announce({ version, manualReason: whyManual(kind) }, () => void shell.openExternal(`https://github.com/backstabslash/moire/releases/tag/v${version}`));
     return { version };
   }
   withdraw();
-  const done = downloadNpx(release, version);
-  downloading = { version, done };
-  void done.catch((e: Error) => log(`update to ${version} failed: ${e.message}`)).finally(() => (downloading = undefined));
+  const download = downloadNpx(release, version);
+  downloading = { version, download };
+  void download.catch((e: Error) => log(`update to ${version} failed: ${e.message}`)).finally(() => (downloading = undefined));
   return downloading;
 }
 
@@ -176,9 +172,9 @@ async function report(found: Found | null) {
     await message(`moire ${app.getVersion()} is the latest version.`);
     return;
   }
-  const { version, done } = found;
+  const { version, download } = found;
   if (!notice) {
-    const failed = done?.then(
+    const failed = download?.then(
       () => undefined,
       (e: Error) => e,
     );
@@ -187,9 +183,9 @@ async function report(found: Found | null) {
     if (e) await message(`Couldn't download moire ${version}: ${e.message}`);
     return;
   }
-  const { manual } = notice;
-  const pick = await message(manual ? `moire ${version} is available. ${manual}` : `moire ${version} is ready.`, [
-    manual ? "Open release page" : "Restart now",
+  const { manualReason } = notice;
+  const pick = await message(manualReason ? `moire ${version} is available. ${manualReason}` : `moire ${version} is ready.`, [
+    manualReason ? "Open release page" : "Restart now",
     "Later",
   ]);
   if (pick === 0) applyUpdate();

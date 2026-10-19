@@ -12,12 +12,10 @@ interface Piece {
 
 const ITALIC = 1;
 const BOLD = 2;
-// Shorter lines fit even the narrowest pane, so they skip the wrapping hints.
-const WRAP_HINT_MIN = 40;
+const NARROWEST_PANE_CHARS = 40;
 const TAB_WIDTH = 4;
 const BREAK_AFTER = /[,(=/]|(?<!\d)\.(?!\d)/g;
-// Word joiner: keeps a line's indentation on the same row as its first word.
-const JOIN = "\u2060";
+const WORD_JOINER = "\u2060";
 
 function indentOf(text: string): number {
   return text.length - text.trimStart().length;
@@ -25,18 +23,17 @@ function indentOf(text: string): number {
 
 export function hangingIndent(text: string): React.CSSProperties | undefined {
   const indent = indentOf(text);
-  if (text.length <= WRAP_HINT_MIN || !indent) return undefined;
+  if (text.length <= NARROWEST_PANE_CHARS || !indent) return undefined;
   let cols = 0;
   for (const ch of text.slice(0, indent)) cols += ch === "\t" ? TAB_WIDTH : 1;
   return { paddingLeft: `calc(8px + ${cols + 2}ch)`, textIndent: `-${cols + 2}ch` };
 }
 
 export function withoutJoins(text: string): string {
-  return text.replaceAll(JOIN, "");
+  return text.replaceAll(WORD_JOINER, "");
 }
 
-// Splits pieces where a line may wrap: after punctuation, and where the indentation ends.
-function cut(pieces: Piece[], text: string): Piece[] {
+function splitAtWrapPoints(pieces: Piece[], text: string): Piece[] {
   const breaks = new Set<number>();
   for (const m of text.matchAll(BREAK_AFTER)) if (text[m.index + 1] && text[m.index + 1] !== " ") breaks.add(m.index + 1);
   const indent = indentOf(text);
@@ -68,7 +65,7 @@ interface CodeProps {
 export function Code({ text, tokens, words, mark, hits, current }: CodeProps) {
   if (!text) return "​";
   let pieces: Piece[] = tokens && tokensMatch(tokens, text) ? tokens.map(([t, color, fontStyle]) => ({ text: t, color, fontStyle })) : [{ text, fontStyle: 0 }];
-  if (text.length > WRAP_HINT_MIN) pieces = cut(pieces, text);
+  if (text.length > NARROWEST_PANE_CHARS) pieces = splitAtWrapPoints(pieces, text);
   if (hits?.length) pieces = splitAt(pieces, hits, (_, i) => i + 1);
   const isCurrent = (hit: number) => hits?.[hit - 1]?.[0] === current;
   if (!words?.length) return withHits(pieces, isCurrent);
@@ -167,7 +164,7 @@ function showBidi(text: string): React.ReactNode {
 
 function renderPiece(p: Piece, key: number): React.ReactNode {
   if (p.wbr) return [<wbr key={`w${key}`} />, renderPiece({ ...p, wbr: false }, key)];
-  const text = showBidi(p.join ? JOIN + p.text : p.text);
+  const text = showBidi(p.join ? WORD_JOINER + p.text : p.text);
   if (!p.color && !p.fontStyle) return typeof text === "string" ? text : <span key={key}>{text}</span>;
   const style: React.CSSProperties = { color: p.color || undefined };
   if (p.fontStyle & BOLD) style.fontWeight = 700;

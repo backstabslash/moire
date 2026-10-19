@@ -12,6 +12,7 @@ interface Mark {
   sep: boolean;
   hit: boolean;
   faded: boolean;
+  done: boolean;
 }
 
 function marksFor(rows: Row[], hits: ReadonlyMap<string, Range[]> | null): Mark[] {
@@ -26,15 +27,17 @@ function marksFor(rows: Row[], hits: ReadonlyMap<string, Range[]> | null): Mark[
         sep: false,
         hit: found(r.a?.sel, r.b?.sel),
         faded: !!(r.faded || r.a?.staged || r.b?.staged),
+        done: !!r.stagedEarlier,
       };
     }
     if (r.t === "uni") {
       const ctx = r.kind === "ctx";
       const a = ctx ? "ctx" : r.kind === "del" ? "chg" : null;
       const b = ctx ? "ctx" : r.kind === "add" ? "chg" : null;
-      return { a, b, aText: r.line.text, bText: r.line.text, sep: false, hit: found(r.line.sel), faded: !!(r.faded || r.line.staged) };
+      return { a, b, aText: r.line.text, bText: r.line.text, sep: false, hit: found(r.line.sel), faded: !!(r.faded || r.line.staged), done: !!r.stagedEarlier };
     }
-    return { a: null, b: null, aText: "", bText: "", sep: true, hit: false, faded: false };
+    const done = r.t === "fold" ? !!r.stagedEarlier : r.t === "hunk" && !!r.folded?.stagedEarlier;
+    return { a: null, b: null, aText: "", bText: "", sep: true, hit: false, faded: false, done };
   });
 }
 
@@ -77,6 +80,12 @@ export function Minimap({ rows, hits, scrollRef }: Props) {
       ctx.fillRect(half - 0.3, 0, 0.6, marks.length * rowPx);
       marks.forEach((m, i) => {
         const y = i * rowPx;
+        if (m.done) {
+          ctx.fillStyle = v("--b");
+          ctx.globalAlpha = 0.5;
+          ctx.fillRect(half - 1, y, 2, rowPx);
+          ctx.globalAlpha = 1;
+        }
         if (m.sep) return;
         if (m.hit) {
           ctx.fillStyle = v("--hit-now");

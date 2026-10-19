@@ -25,7 +25,6 @@ import { dirs } from "./test-repo";
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 
-// Laid out the way electron-builder's plist writer leaves it.
 const infoPlist = (version: string, header?: string) =>
   [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -207,7 +206,7 @@ describe("updateNpx on Linux", () => {
       platform: "linux",
       arch: "x64",
       root,
-      running: join(root, "0.1.0"),
+      runningApp: join(root, "0.1.0"),
       fetch,
       onSmallFailed: (e) => failures.push(e.message),
     });
@@ -258,7 +257,6 @@ describe("updateNpx on Linux", () => {
 describe("updateNpx on macOS", () => {
   const path = process.env.PATH;
 
-  // Stand-ins for the macOS tools, which only copy, unzip or do nothing here.
   beforeAll(() => {
     const bin = mkdtempSync(join(tmpdir(), "moire-bin-"));
     dirs.push(bin);
@@ -310,7 +308,7 @@ describe("updateNpx on macOS", () => {
       platform: "darwin",
       arch: "arm64",
       root,
-      running: root,
+      runningApp: root,
       fetch,
       onSmallFailed: (e) => failures.push(e.message),
     });

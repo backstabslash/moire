@@ -21,8 +21,6 @@ import type { ReadableStream } from "node:stream/web";
 import { promisify } from "node:util";
 import { createGunzip } from "node:zlib";
 
-// Ported from launcher/install.mjs, which installs what this updates.
-
 const run = promisify(execFile);
 
 export interface Asset {
@@ -57,7 +55,6 @@ export function newer(a: string, b: string): boolean {
   return false;
 }
 
-// packageType is what electron-builder leaves in resources/package-type for deb and rpm builds.
 export function installKind(platform: string, npx: boolean, appImage: boolean, packageType: string | undefined): InstallKind {
   if (npx) return "npx";
   if (appImage) return "appimage";
@@ -105,7 +102,6 @@ export function reusesRuntime(manifest: unknown, runtime: string | undefined, ma
 
 const resourcesOf = (app: string, mac: boolean) => (mac ? join(app, "Contents", "Resources") : join(app, "resources"));
 
-// Written by build/after-pack.mjs; installs from before it have none, so they always take the full download.
 function runtimeOf(app: string, mac: boolean): string | undefined {
   try {
     return readFileSync(join(resourcesOf(app, mac), "runtime"), "utf8").trim();
@@ -118,7 +114,6 @@ export function withVersion(plist: string, version: string): string {
   return plist.replace(/(<key>(?:CFBundleShortVersionString|CFBundleVersion)<\/key>\s*<string>)[^<]*/g, `$1${version}`);
 }
 
-// Matches the single entry electron-builder writes, so any other shape takes the full download rather than keep a stale hash.
 const integrity =
   /(<key>ElectronAsarIntegrity<\/key>\s*<dict>\s*<key>Resources\/app\.asar<\/key>\s*<dict>\s*<key>algorithm<\/key>\s*<string>SHA256<\/string>\s*<key>hash<\/key>\s*<string>)[0-9a-f]*(?=<\/string>\s*<\/dict>\s*<\/dict>)/;
 
@@ -139,18 +134,17 @@ function hasher() {
   return { stream, hex: () => hash.digest("hex") };
 }
 
-// With `unpacked`, the asset is gunzipped on the way and the result must hash to it.
-async function download(get: Get, asset: Asset, file: string, unpacked?: string) {
+async function download(get: Get, asset: Asset, file: string, gunzippedSha256?: string) {
   const want = asset.digest?.replace(/^sha256:/, "");
   if (!want) throw new Error(`${asset.name} has no checksum on GitHub`);
   const res = await get(asset.browser_download_url);
   if (!res.ok || !res.body) throw new Error(`downloading ${asset.name}: ${res.status}`);
   const packed = hasher();
   const plain = hasher();
-  const stages = unpacked ? [packed.stream, createGunzip(), plain.stream] : [packed.stream];
+  const stages = gunzippedSha256 ? [packed.stream, createGunzip(), plain.stream] : [packed.stream];
   await pipeline([Readable.fromWeb(res.body as ReadableStream), ...stages, createWriteStream(file)]);
   if (packed.hex() !== want) throw new Error(`${asset.name} doesn't match its checksum on GitHub`);
-  if (unpacked && plain.hex() !== unpacked) throw new Error(`${asset.name} doesn't match its manifest`);
+  if (gunzippedSha256 && plain.hex() !== gunzippedSha256) throw new Error(`${asset.name} doesn't match its manifest`);
 }
 
 async function unpackFull(get: Get, asset: Asset, dir: string, mac: boolean): Promise<string> {
@@ -167,14 +161,12 @@ async function unpackFull(get: Get, asset: Asset, dir: string, mac: boolean): Pr
   return join(dir, top);
 }
 
-// Copies the running install and swaps in the new app.asar, or returns undefined when anything outside app.asar changed.
 async function patchCopy(get: Get, from: string, asar: Asset, manifest: Asset, version: string, dir: string, mac: boolean) {
   mkdirSync(dir);
   await download(get, manifest, join(dir, manifest.name));
   const wanted: unknown = JSON.parse(readFileSync(join(dir, manifest.name), "utf8"));
   if (!reusesRuntime(wanted, runtimeOf(from, mac), mac)) return undefined;
   const to = join(dir, mac ? "moire.app" : "moire");
-  // Hard links on Linux, since every file but app.asar stays the same and is only ever replaced, never written to.
   if (mac) await run("ditto", [from, to]);
   else await run("cp", ["-al", from, to]);
   const resources = resourcesOf(to, mac);
@@ -202,7 +194,6 @@ async function placeLinux(root: string, version: string, built: string, running:
 }
 
 function swapMac(app: string, built: string) {
-  // The previous bundle stays until the next update, as the launcher leaves it.
   const previous = join(dirname(app), ".moire-previous.app");
   rmSync(previous, { recursive: true, force: true });
   if (existsSync(app)) renameSync(app, previous);
@@ -219,15 +210,15 @@ export interface NpxUpdate {
   platform: string;
   arch: string;
   root: string;
-  // The folder (Linux) or bundle (macOS) moire is running from.
-  running: string;
+  runningApp: string;
   // Electron's net.fetch in the app: Node's own fetch trips an assertion when a server closes the socket during backpressure.
   fetch: Get;
   onSmallFailed(e: Error): void;
 }
 
-// On Linux the new version is in place when this resolves; on macOS the returned function moves it in once moire quits.
-export async function updateNpx({ release, platform, arch, root, running, fetch: get, onSmallFailed }: NpxUpdate): Promise<(() => void) | undefined> {
+export type MoveIn = () => void;
+
+export async function updateNpx({ release, platform, arch, root, runningApp, fetch: get, onSmallFailed }: NpxUpdate): Promise<MoveIn | undefined> {
   const version = release.tag_name.replace(/^v/, "");
   const { full, asar, manifest } = pickAssets(release, platform, arch);
   if (!full) throw new Error(`moire ${version} has no build for ${platform} ${arch}`);
@@ -240,14 +231,14 @@ export async function updateNpx({ release, platform, arch, root, running, fetch:
   try {
     let built: string | undefined;
     if (asar && manifest) {
-      built = await patchCopy(get, running, asar, manifest, version, join(tmp, "small"), mac).catch((e: Error) => {
+      built = await patchCopy(get, runningApp, asar, manifest, version, join(tmp, "small"), mac).catch((e: Error) => {
         onSmallFailed(e);
         return undefined;
       });
     }
     built ??= await unpackFull(get, full, join(tmp, "full"), mac);
     if (!mac) {
-      await placeLinux(root, version, built, basename(running));
+      await placeLinux(root, version, built, basename(runningApp));
       await rm(tmp, { recursive: true, force: true });
       return undefined;
     }

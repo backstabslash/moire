@@ -6,6 +6,11 @@ import type { Range } from "./model/words";
 
 const sameHit = (x: Hit | null, y: Hit | null) => !!x && !!y && x.path === y.path && x.sel === y.sel && x.start === y.start;
 
+function withOpenFileHitsPastCap(found: { hits: Hit[]; upTo: number }, files: FileDiff[], active: string | null, searchOpen: (f: FileDiff) => Hit[]) {
+  const at = files.findIndex((f) => f.path === active);
+  return at < found.upTo ? found.hits : [...found.hits, ...searchOpen(files[at])];
+}
+
 export function useSearch(
   repo: RepoInfo | null,
   mode: CompareMode,
@@ -16,8 +21,7 @@ export function useSearch(
   onError: (e: unknown) => void,
 ) {
   const changed = useMemo(() => allFiles.filter((f) => !f.noise), [allFiles]);
-  // An unchanged file opened from All files is searched too, since it's what's on screen.
-  const files = useMemo(() => (browsed ? [...changed, browsed.file] : changed), [changed, browsed]);
+  const changedAndBrowsed = useMemo(() => (browsed ? [...changed, browsed.file] : changed), [changed, browsed]);
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<SearchOptions>({ query: "", matchCase: false, regex: false, side: "both" });
   const deferred = useDeferredValue(options);
@@ -66,20 +70,21 @@ export function useSearch(
   );
   const pattern = useMemo(() => (open ? compile(deferred) : null), [open, deferred]);
   const found = useMemo(() => {
-    if (!(pattern instanceof RegExp)) return { hits: [], upTo: files.length };
+    if (!(pattern instanceof RegExp)) return { hits: [], upTo: changedAndBrowsed.length };
     const out: Hit[] = [];
     let i = 0;
-    for (; i < files.length && out.length < MAX_HITS; i++) {
-      out.push(...searchFile(files[i], contentsOf(files[i]), pattern, deferred.side, MAX_HITS - out.length));
+    for (; i < changedAndBrowsed.length && out.length < MAX_HITS; i++) {
+      out.push(...searchFile(changedAndBrowsed[i], contentsOf(changedAndBrowsed[i]), pattern, deferred.side, MAX_HITS - out.length));
     }
     return { hits: out, upTo: i };
-  }, [pattern, files, contentsOf, deferred.side]);
-  // Past the cap, the open file still gets its hits, or a short query would jump away from it.
-  const hits = useMemo(() => {
-    const at = files.findIndex((f) => f.path === active);
-    if (at < found.upTo || !(pattern instanceof RegExp)) return found.hits;
-    return [...found.hits, ...searchFile(files[at], contentsOf(files[at]), pattern, deferred.side, MAX_HITS)];
-  }, [found, files, active, contentsOf, pattern, deferred.side]);
+  }, [pattern, changedAndBrowsed, contentsOf, deferred.side]);
+  const hits = useMemo(
+    () =>
+      pattern instanceof RegExp
+        ? withOpenFileHitsPastCap(found, changedAndBrowsed, active, (f) => searchFile(f, contentsOf(f), pattern, deferred.side, MAX_HITS))
+        : found.hits,
+    [found, changedAndBrowsed, active, contentsOf, pattern, deferred.side],
+  );
 
   const ready = changed.every((f) => f.binary || f.tooLarge || contents.has(fileKey(modeKey, f)));
 

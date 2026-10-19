@@ -32,17 +32,15 @@ export function copyCode(file: FileDiff, contents: FileContents | null, expanded
 }
 
 export function copySide(contents: FileContents | null, side: "a" | "b") {
-  const text = contents && !contents.tooLarge ? contents[side] : null;
+  const text = contents && !contents.hidden ? contents[side] : null;
   return text === null ? null : { text, count: splitLines(text)!.length };
 }
 
-// A row and, when the selection ends inside its line, the character offset there.
 export interface RowPos {
   index: number;
   offset?: number;
 }
 
-// Unified rows count whatever column is asked for, as they show one line each.
 export function textBetween(rows: Row[], col: Col, from: RowPos, to: RowPos): string {
   const out: string[] = [];
   for (let i = from.index; i <= to.index; i++) {

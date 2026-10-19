@@ -4,7 +4,6 @@ import { Key } from "./Key";
 export interface ToastMsg {
   text: string;
   undo: boolean;
-  // A toast with choices stays up until one is picked or another toast replaces it.
   choices?: { label: string; pick(): void }[];
 }
 

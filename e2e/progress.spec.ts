@@ -44,22 +44,23 @@ test.afterEach(() => {
   expect(errors).toEqual([]);
 });
 
-test("the sidebar counts staged files as you stage them", async () => {
-  await expect(progress()).toContainText("0 of 3 staged");
-  expect((await progress().locator(".stage-bar").boundingBox())?.height).toBe(4);
+test("the sidebar counts staged lines as you stage them", async () => {
+  await expect(progress()).toContainText("0% staged");
+  expect((await progress().locator(".stage-bar").boundingBox())?.height).toBe(8);
   for (const name of ["a.ts", "c.ts"]) {
     await page.locator(".file", { hasText: name }).click();
     await page.getByRole("button", { name: "Stage file" }).click();
   }
   await expect(page.locator(".file .name")).toHaveText(["b.ts"]);
-  await expect(progress()).toContainText("2 of 3 staged");
+  await expect(progress()).toContainText("60% staged");
+  await expect(progress().locator("b")).toHaveAttribute("data-tip", /^3 of 5 changed lines\n2 of 3 files fully staged$/);
 });
 
-test("a file edited after it was staged comes back marked, showing only the new edits", async () => {
+test("a file edited after it was staged comes back, showing only the new edits", async () => {
   writeFileSync(join(repo, "a.ts"), "export const a = 2;\nexport const keep = false;\n");
   await page.keyboard.press("r");
-  await expect(page.locator(".file", { hasText: "a.ts" }).locator(".mark-changed")).toBeVisible();
-  await expect(progress()).toContainText("1 of 3 staged");
+  await expect(page.locator(".file", { hasText: "a.ts" })).toHaveAttribute("data-tip", /staged, then changed again/);
+  await expect(progress()).toContainText("42% staged");
   await page.locator(".file", { hasText: "a.ts" }).click();
   await expect(page.locator(".since")).toContainText("These are the new edits.");
   await expect(page.locator(".hunk-head")).toHaveCount(1);
@@ -69,7 +70,7 @@ test("a file edited after it was staged comes back marked, showing only the new 
     .getByRole("button", { name: /Whole diff/ })
     .click();
   await expect(page.locator(".since")).toContainText("Staged lines are faded.");
-  await expect(page.locator(".pane-h").first()).toContainText("HEAD");
+  await expect(page.locator(".panes-head .tag-a")).toHaveAttribute("data-tip", /^HEAD/);
   await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
   await shot("progress-light");
   await page.keyboard.press("t");
