@@ -33,6 +33,7 @@ mac:
   extendInfo:
     CFBundleName: Moire
     CFBundleDisplayName: Moire
+    NSAppleEventsUsageDescription: Moire opens terminal editors such as nvim in Terminal.
     # Lets a folder be dropped on the Dock icon.
     CFBundleDocumentTypes:
       - CFBundleTypeName: Folder

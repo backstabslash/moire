@@ -11,6 +11,14 @@ export function useStored<T extends string>(key: string, fallback: T, allowed: r
   return [value, setValue] as const;
 }
 
+export function useStoredText(key: string) {
+  const [value, setValue] = useState(() => localStorage.getItem(`moire.${key}`) ?? "");
+  useEffect(() => {
+    localStorage.setItem(`moire.${key}`, value);
+  }, [key, value]);
+  return [value, setValue] as const;
+}
+
 export function useStoredNumber(key: string, fallback: number, min: number, max: number) {
   const [value, setValue] = useState(() => {
     const saved = Number(localStorage.getItem(`moire.${key}`));

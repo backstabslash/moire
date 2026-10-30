@@ -11,9 +11,9 @@ export function useTree(repo: RepoInfo | null, mode: CompareMode, modeKey: strin
     window.moire.tree(repo.root, mode).then(
       (data) => {
         if (stale) return;
-        setTree((cur) =>
-          cur?.root === repo.root && sameList(cur.data.files, data.files) && sameList(cur.data.ignored, data.ignored) ? cur : { root: repo.root, data },
-        );
+        const same = (cur: FileTree) =>
+          sameList(cur.files, data.files) && sameList(cur.ignored, data.ignored) && sameList(cur.unlisted ?? [], data.unlisted ?? []);
+        setTree((cur) => (cur?.root === repo.root && same(cur.data) ? cur : { root: repo.root, data }));
       },
       (e) => !stale && onError(e),
     );

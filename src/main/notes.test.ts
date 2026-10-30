@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { notesPath, parseNotes, readNotes } from "./notes";
-import { makeRepo } from "./test-repo";
+import { makeRepo, seed } from "./test-repo";
 
 describe("parseNotes", () => {
   it("keeps chapters in order and normalizes their ranges", () => {
@@ -59,9 +59,7 @@ describe("parseNotes", () => {
 
 describe("readNotes", () => {
   it("reads notes from the repo's git folder", async () => {
-    const r = makeRepo();
-    r.write("a.ts", "a\n");
-    r.commit("init");
+    const r = seed({ "a.ts": "a\n" });
     expect(await readNotes(r.root)).toMatchObject({ notes: null });
     const path = await notesPath(r.root);
     mkdirSync(dirname(path), { recursive: true });
@@ -71,9 +69,7 @@ describe("readNotes", () => {
   });
 
   const setup = async (files: string[]) => {
-    const r = makeRepo();
-    for (const name of files) r.write(name, "one\n");
-    r.commit("init");
+    const r = seed(Object.fromEntries(files.map((name) => [name, "one\n"])));
     const path = await notesPath(r.root);
     mkdirSync(dirname(path), { recursive: true });
     const write = (notes: unknown) => writeFileSync(path, typeof notes === "string" ? notes : JSON.stringify(notes));
@@ -107,26 +103,33 @@ describe("readNotes", () => {
   });
 
   it("follows a chapter's code when deciding whether it's done", async () => {
-    const { r, write, working } = await setup(["b.ts"]);
-    const lines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
-    r.write("a.ts", lines.join("\n") + "\n");
+    const { r, write, working } = await setup(["a.ts"]);
+    const original = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+    r.write("a.ts", original.join("\n") + "\n");
     r.commit("a");
-    lines[19] = "CHANGED";
+    const lines = original.with(19, "CHANGED");
     r.write("a.ts", lines.join("\n") + "\n");
     write({ chapters: [chapter("X", "a.ts", [20, 20], "CHANGED")] });
     expect(await working()).toEqual(["X"]);
-    r.write("a.ts", ["new", "new", "new", "new", "new", ...lines].join("\n") + "\n");
-    r.write("b.ts", "two\n");
-    r.git("commit", "-qm", "b", "--", "b.ts");
+    const moved = ["new", "new", "new", "new", "new"];
+    r.write("a.ts", [...moved, ...original].join("\n") + "\n");
+    r.git("add", "a.ts");
+    r.git("commit", "-qm", "lines above it");
+    r.write("a.ts", [...moved, ...lines].join("\n") + "\n");
     expect(await working()).toEqual(["X"]);
   });
 
   it("leaves chapters alone when HEAD moves past commits made elsewhere", async () => {
     const { r, write, working, committed } = await setup(["a.ts"]);
-    const tree = r.git("write-tree");
-    const theirs = r.git("commit-tree", tree, "-p", "HEAD", "-m", "upstream");
+    const original = Array.from({ length: 20 }, (_, i) => `line ${i + 1}\n`);
+    r.write("a.ts", original.join(""));
+    r.commit("a");
+    r.write("a.ts", ["upstream\n", ...original.slice(1)].join(""));
+    r.git("add", "a.ts");
+    const theirs = r.git("commit-tree", r.git("write-tree"), "-p", "HEAD", "-m", "upstream");
+    r.git("reset", "-q", "--hard");
     r.git("update-ref", "refs/heads/up", theirs);
-    r.write("a.ts", "two\n");
+    r.write("a.ts", [...original.slice(0, -1), "mine\n"].join(""));
     write({ chapters: [chapter("A", "a.ts")] });
     expect(await working()).toEqual(["A"]);
     r.git("stash", "-q");
@@ -149,6 +152,22 @@ describe("readNotes", () => {
     expect(await committed("HEAD~1")).toEqual(["A"]);
     expect(await committed()).toEqual(["B"]);
   });
+
+  it.each(["rebase-merge", "rebase-apply", "MERGE_HEAD", "MERGE_AUTOSTASH", "CHERRY_PICK_HEAD", "REVERT_HEAD", "index.lock"])(
+    "waits for a commit to settle while %s is there",
+    async (name) => {
+      const { r, write, working, committed } = await setup(["a.ts"]);
+      r.write("a.ts", "two\n");
+      write({ chapters: [chapter("A", "a.ts")] });
+      expect(await working()).toEqual(["A"]);
+      r.git("commit", "-qam", "a");
+      writeFileSync(join(r.root, ".git", name), "");
+      expect(await working()).toEqual(["A"]);
+      rmSync(join(r.root, ".git", name));
+      expect(await working()).toEqual([]);
+      expect(await committed()).toEqual(["A"]);
+    },
+  );
 
   it("settles a commit made while notes.json was half written", async () => {
     const { r, write, working, committed } = await setup(["a.ts"]);
@@ -173,9 +192,7 @@ describe("readNotes", () => {
     expect((await readNotes(r.root)).notes).toBeNull();
     expect((await readNotes(r.root, "HEAD")).notes?.chapters).toHaveLength(1);
 
-    const fresh = makeRepo();
-    fresh.write("a.ts", "one\n");
-    fresh.commit("init");
+    const fresh = seed({ "a.ts": "one\n" });
     const freshPath = await notesPath(fresh.root);
     mkdirSync(dirname(freshPath), { recursive: true });
     fresh.write("a.ts", "two\n");

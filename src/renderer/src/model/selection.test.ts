@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DiffLine, FileDiff } from "../../../shared/types";
 import { buildRows } from "./rows";
-import { carryKeys, gapKey, hunkOfKey, lineKey } from "./selection";
+import { carryKeys, gapKey, hunkOfKey, isPicked, lineKey } from "./selection";
 
 const opts = { layout: "split" as const, scope: "changed" as const, expanded: new Set<string>() };
 
@@ -53,6 +53,28 @@ describe("carryKeys", () => {
   it("gives up once a selected line is gone", () => {
     const edited = file([10, [ctx("}", 10), del("a = 1", 11), add("a = 3", 11), ctx("}", 12)]]);
     expect(carryKeys(rows(before), rows(edited), new Set(["0:1", "0:2"]))).toBeNull();
+  });
+});
+
+describe("isPicked", () => {
+  const base = { key: "r", hunk: 0 };
+  const split = { ...base, t: "split", kind: "chg", a: { no: 1, text: "a", sel: "0:0" }, b: { no: 1, text: "b", sel: "0:1" } } as const;
+
+  it("counts only the clicked side of a split row", () => {
+    expect(isPicked(split, "a", new Set(["0:0"]), "a")).toBe(true);
+    expect(isPicked(split, "b", new Set(["0:0"]), "a")).toBe(false);
+    expect(isPicked(split, null, new Set(["0:0"]), "a")).toBe(false);
+    expect(isPicked({ ...base, t: "split", kind: "chg", a: { no: 1, text: "a", sel: "0:0" } }, "b", new Set(["0:0"]), "a")).toBe(false);
+  });
+
+  it("ignores a side whose column isn't the selected one, as a context line shares its key", () => {
+    const ctx = { ...base, t: "split", kind: "ctx", a: { no: 1, text: "a", sel: "0:0" }, b: { no: 1, text: "a", sel: "0:0" } } as const;
+    expect(isPicked(ctx, "b", new Set(["0:0"]), "a")).toBe(false);
+    expect(isPicked(ctx, "a", new Set(["0:0"]), "a")).toBe(true);
+  });
+
+  it("reads a unified row's one line", () => {
+    expect(isPicked({ ...base, t: "uni", kind: "del", line: { no: 1, text: "a", sel: "0:0" } }, null, new Set(["0:0"]), "u")).toBe(true);
   });
 });
 

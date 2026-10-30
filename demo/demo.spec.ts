@@ -3,13 +3,20 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type CDPSession, expect, type Locator, type Page, test } from "@playwright/test";
-import { makeDemoRepo } from "./repo";
+import { lineOf, makeDemoRepo } from "./repo";
 
 const OUT = resolve(process.env.MOIRE_DEMO_OUT ?? "demo");
-const SIZE = { width: 1200, height: 750 };
+const SIZE = { width: 1360, height: 860 };
+const SIDEBAR = 200;
+const BAND = 38;
+const SCENES = ["Read why.", "Keep what's right.", "Throw out what isn't."];
+const INKS = ["var(--ink)", "var(--b-ink)", "var(--a-ink)"];
+
+type Demo = { caption?: string; say?: (text: string) => void; scene?: (index: number) => void };
 
 let page: Page;
-let at = { x: SIZE.width / 2, y: SIZE.height / 2 };
+const REST = { x: 1200, y: 650 };
+let at = REST;
 
 const hold = (ms: number) => page.waitForTimeout(ms);
 const ease = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
@@ -34,15 +41,27 @@ async function click(to: Locator) {
   await page.mouse.up();
 }
 
+const lineNumber = (line: number) => page.locator(".ln.b[data-line]", { hasText: new RegExp(`^${line}$`) });
+
+async function say(text: string) {
+  await page.evaluate((t) => (window as unknown as Demo).say?.(t), text);
+}
+
+async function scene(index: number) {
+  await page.evaluate((i) => (window as unknown as Demo).scene?.(i), index);
+}
+
 async function press(key: string, caption?: string, after = 900) {
-  await page.evaluate((c) => ((window as { caption?: string }).caption = c), caption);
+  await page.evaluate((c) => ((window as unknown as Demo).caption = c), caption);
   await page.keyboard.press(key);
-  await page.evaluate(() => delete (window as { caption?: string }).caption);
+  await page.evaluate(() => delete (window as unknown as Demo).caption);
   await hold(after);
 }
 
-// A pointer and a caption of the key pressed and what it does, since the recording has neither.
-function overlay() {
+function overlay({ band, scenes, inks }: { band: number; scenes: string[]; inks: string[] }) {
+  const style = document.createElement("style");
+  style.textContent = `.app { height: calc(100vh - ${band}px); margin-top: ${band}px; }`;
+  document.head.append(style);
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("width", "26");
@@ -55,54 +74,94 @@ function overlay() {
   arrow.setAttribute("stroke-linejoin", "round");
   svg.append(arrow);
   Object.assign(svg.style, { position: "fixed", left: "0", top: "0", zIndex: "99999", pointerEvents: "none", transition: "scale 90ms" });
-  const caption = document.createElement("div");
-  Object.assign(caption.style, {
+  const strip = document.createElement("div");
+  Object.assign(strip.style, {
     position: "fixed",
-    left: "50%",
-    bottom: "120px",
-    translate: "-50% 0",
-    zIndex: "99999",
-    pointerEvents: "none",
+    inset: "0 0 auto 0",
+    height: `${band}px`,
+    boxSizing: "border-box",
     display: "flex",
     alignItems: "center",
-    gap: "10px",
-    padding: "9px 16px 9px 10px",
-    borderRadius: "10px",
-    background: "rgba(20, 22, 26, 0.86)",
-    color: "#fff",
-    font: "500 19px var(--ui)",
-    opacity: "0",
-    transition: "opacity 180ms",
+    justifyContent: "space-between",
+    padding: "0 16px",
+    background: "var(--frame)",
+    borderBottom: "1px solid var(--rule)",
+    pointerEvents: "none",
   });
-  document.body.append(svg, caption);
+  const story = document.createElement("div");
+  Object.assign(story.style, { display: "flex", gap: "14px", font: "500 19px var(--ui)" });
+  const lines = scenes.map((text) => {
+    const line = document.createElement("span");
+    line.textContent = text;
+    Object.assign(line.style, { color: "var(--faint)", opacity: "0.5", transition: "color 0.25s, opacity 0.25s" });
+    return line;
+  });
+  story.append(...lines);
+  (window as unknown as { scene(index: number): void }).scene = (index) =>
+    lines.forEach((line, i) => {
+      const on = index === i || index >= scenes.length;
+      line.style.color = on ? inks[i] : "var(--faint)";
+      line.style.opacity = on ? "1" : "0.5";
+    });
+  const caption = document.createElement("div");
+  Object.assign(caption.style, {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    color: "var(--graphite)",
+    font: "400 16px var(--ui)",
+    opacity: "0",
+    transition: "opacity 0.18s ease-out",
+  });
+  strip.append(story, caption);
+  const controls = document.createElement("div");
+  Object.assign(controls.style, {
+    position: "fixed",
+    top: `${band}px`,
+    right: "0",
+    width: "140px",
+    height: "51px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "12px",
+    pointerEvents: "none",
+  });
+  for (const d of ["M7 10.5l5 5 5-5", "M12 6.5l5.5 5.5-5.5 5.5L6.5 12z", "M7.5 7.5l9 9M16.5 7.5l-9 9"]) {
+    const button = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    button.setAttribute("viewBox", "0 0 24 24");
+    button.setAttribute("width", "28");
+    button.setAttribute("height", "28");
+    button.innerHTML = `<circle cx="12" cy="12" r="12" fill="color-mix(in srgb, var(--ink) 10%, var(--frame))"/><path d="${d}" fill="none" stroke="var(--ink)" stroke-width="1.3" stroke-linejoin="round"/>`;
+    controls.append(button);
+  }
+  document.body.append(strip, controls, svg);
   addEventListener("mousemove", (e) => (svg.style.translate = `${e.clientX - 4}px ${e.clientY - 3}px`), true);
   addEventListener("mousedown", () => (svg.style.scale = "0.85"), true);
   addEventListener("mouseup", () => (svg.style.scale = "1"), true);
   let timer = 0;
+  const show = (key: string | undefined, text: string) => {
+    const cap = document.createElement("span");
+    cap.textContent = key ?? "";
+    Object.assign(cap.style, {
+      padding: "1px 7px",
+      borderRadius: "3px",
+      background: "color-mix(in srgb, var(--ink) 10%, transparent)",
+      color: "var(--ink)",
+      font: "400 14px/1.3 var(--code)",
+    });
+    caption.replaceChildren(...(key ? [cap] : []), text);
+    caption.style.opacity = "1";
+    clearTimeout(timer);
+    timer = window.setTimeout(() => (caption.style.opacity = "0"), 1500);
+  };
+  (window as unknown as { say(text: string): void }).say = (text) => show(undefined, text);
   addEventListener(
     "keydown",
     (e) => {
-      const text = (window as { caption?: string }).caption;
+      const text = (window as unknown as { caption?: string }).caption;
       if (!text || ["Shift", "Control", "Meta", "Alt"].includes(e.key)) return;
-      const cap = (label: string) => {
-        const kbd = document.createElement("span");
-        kbd.textContent = label;
-        Object.assign(kbd.style, {
-          minWidth: "16px",
-          padding: "2px 8px",
-          borderRadius: "6px",
-          background: "rgba(255, 255, 255, 0.16)",
-          border: "1px solid rgba(255, 255, 255, 0.28)",
-          font: "600 18px var(--code)",
-          textAlign: "center",
-        });
-        return kbd;
-      };
-      const keys = [e.shiftKey && "Shift", e.key.length === 1 ? e.key.toLowerCase() : e.key].filter((k): k is string => !!k);
-      caption.replaceChildren(...keys.map(cap), text);
-      caption.style.opacity = "1";
-      clearTimeout(timer);
-      timer = window.setTimeout(() => (caption.style.opacity = "0"), 1300);
+      show([e.ctrlKey && "ctrl", e.shiftKey && "shift", e.key.toLowerCase()].filter(Boolean).join(" "), text);
     },
     true,
   );
@@ -124,7 +183,7 @@ async function record(cdp: CDPSession, dir: string) {
 }
 
 function encode(frames: { file: string; t: number }[], dir: string, name: string, mp4: boolean) {
-  const list = frames.map((f, i) => `file '${f.file}'\nduration ${((frames[i + 1]?.t ?? f.t + 2) - f.t).toFixed(4)}`);
+  const list = frames.map((f, i) => `file '${f.file}'\nduration ${((frames[i + 1]?.t ?? f.t + 0.4) - f.t).toFixed(4)}`);
   writeFileSync(join(dir, "frames.txt"), `${list.join("\n")}\nfile '${frames.at(-1)!.file}'\n`);
   const input = ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", join(dir, "frames.txt")];
   mkdirSync(OUT, { recursive: true });
@@ -140,48 +199,52 @@ async function demo(theme: string, name: string, mp4 = false) {
   const frames = join(work, "frames");
   mkdirSync(frames);
   makeDemoRepo(repo);
-  const prefs = { theme, layout: "unified", scope: "changed", mode: "unstaged", file: "src/limiter.ts" };
+  const prefs = { theme, layout: "unified", scope: "changed", mode: "unstaged", file: "src/limiter.ts", sidebar: String(SIDEBAR), "notes-width": "300" };
   const app = await electron.launch({
     args: [resolve("."), `--user-data-dir=${join(work, "data")}`, repo],
     env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_PREFS: JSON.stringify(prefs) },
   });
-  at = { x: SIZE.width / 2, y: SIZE.height / 2 };
+  at = REST;
   try {
     page = await app.firstWindow();
     await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height), SIZE);
     await expect(page.locator(".file.is-active .name")).toHaveText("limiter.ts");
     await expect(page.locator('.cell span[style*="color"]').first()).toBeVisible();
-    await page.evaluate(overlay);
+    await page.evaluate(overlay, { band: BAND, scenes: SCENES, inks: INKS });
+    await scene(0);
     await page.mouse.move(at.x, at.y);
     await hold(400);
 
     const cdp = await page.context().newCDPSession(page);
     const stop = await record(cdp, frames);
-    await hold(1600);
+    await hold(900);
 
-    await press(".", "Next note", 1300);
-    await press(".", "Next note", 2600);
-    await press(".", "Next note", 1200);
+    await press(".", "Next note", 1400);
+    await press(".", "Next note", 2300);
+
+    await scene(1);
     await click(page.getByRole("button", { name: "Stage this chapter" }));
-    await glide({ x: 640, y: 560 }, 500);
+    await say("Stage this chapter");
+    await glide({ x: 700, y: 560 }, 400);
+    await hold(800);
+
+    // The blink toast explains keys the caption already shows.
+    const quiet = await page.addStyleTag({ content: ".toast { visibility: hidden; }" });
+    await press("Shift+B", "Blink old and new", 1800);
+    await press("Escape", undefined, 200);
+
+    await scene(2);
+    await say("Not in any chapter");
+    await click(page.locator(".uncovered button", { hasText: "server.ts" }));
+    await hold(500);
+    await click(lineNumber(lineOf("src/server.ts", "DEBUG")));
+    await glide({ x: 740, y: 700 }, 350);
+    await press("x", "Discard the line", 0);
+    await quiet.evaluate((el) => (el as HTMLElement).remove());
     await hold(1300);
 
-    await press("Shift+B", "Blink old and new", 2600);
-    await press("Escape", undefined, 400);
-
-    await click(page.locator(".uncovered button", { hasText: "server.ts" }));
-    await hold(900);
-    const debug = page.locator(".ln.b[data-line]", { hasText: /^11$/ });
-    await click(debug);
-    await hold(500);
-    await press("x", "Discard", 1500);
-
-    await press("2", "Staged changes", 1000);
-    const message = page.getByPlaceholder("Commit message");
-    await click(message);
-    await glide({ x: 420, y: 520 }, 500);
-    await page.keyboard.type("Token bucket per client", { delay: 45 });
-    await hold(2200);
+    await scene(SCENES.length);
+    await press("Shift+S", "Stage the rest", 2600);
     const recorded = await stop();
     encode(recorded, work, name, mp4);
   } finally {

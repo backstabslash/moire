@@ -1,23 +1,36 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { app, BrowserWindow, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, nativeTheme, screen, shell } from "electron";
 import type { RepoInfo } from "../shared/types";
+import { DEFAULT_SIZE, restoredBounds } from "./bounds";
 import { setShellPath } from "./git";
-import { launchRepo, registerIpc, showRepo, windowShowing } from "./ipc";
+import { askToCompare, launchRepo, registerIpc, showRepo, windowShowing } from "./ipc";
 import { isLaunchRequest, type LaunchRequest, launchRequest, loginPath, mergePath } from "./launch";
 import { log } from "./log";
 import { setupMenu } from "./menu";
 import { handlePreviewProtocol, registerPreviewScheme } from "./preview";
+import { loadState, saveState } from "./state";
 import { runningAsAppImage, startUpdates } from "./update";
 import { registerZoomIpc, setupZoom } from "./zoom";
 
-function createWindow(repo: Promise<RepoInfo | null>) {
+function savedBounds() {
+  const saved = loadState().window;
+  const bounds = restoredBounds(
+    saved,
+    screen.getAllDisplays().map((d) => d.workArea),
+  );
+  // A second window at the same spot would hide the first.
+  if (BrowserWindow.getAllWindows().length) return { width: bounds.width, height: bounds.height, maximized: false };
+  return { ...bounds, maximized: !!saved?.maximized };
+}
+
+function createWindow(repo: Promise<RepoInfo | null>, compare?: string[]) {
   const dark = nativeTheme.shouldUseDarkColors;
   const mac = process.platform === "darwin";
   const hidden = !app.isPackaged && !!process.env.MOIRE_HIDDEN;
+  const { maximized, ...bounds } = hidden ? { ...DEFAULT_SIZE, maximized: false } : savedBounds();
   const win = new BrowserWindow({
-    width: 1440,
-    height: 920,
+    ...bounds,
     minWidth: 900,
     show: false,
     backgroundColor: dark ? "#171c22" : "#f4f5f2",
@@ -33,7 +46,9 @@ function createWindow(repo: Promise<RepoInfo | null>) {
       offscreen: hidden,
     },
   });
-  showRepo(win.webContents, repo);
+  if (maximized) win.maximize();
+  if (!hidden) win.on("close", () => saveState({ window: { ...win.getNormalBounds(), maximized: win.isMaximized() } }));
+  showRepo(win.webContents, repo, compare);
   if (!hidden) win.once("ready-to-show", () => win.show());
   setupZoom(win);
   win.webContents.on("will-navigate", (e, url) => {
@@ -62,10 +77,11 @@ async function openRequest(req: LaunchRequest) {
   const repo = launchRepo(req, false);
   const info = await repo.catch(() => undefined);
   const existing = info && windowShowing(info.root);
-  if (!existing) return createWindow(repo);
+  if (!existing) return createWindow(repo, req.compare);
   if (existing.isMinimized()) existing.restore();
   existing.focus();
   if (process.platform === "darwin") app.focus({ steal: true });
+  if (req.compare) askToCompare(existing.webContents, req.compare);
 }
 
 function resolveShellPath() {
@@ -116,7 +132,7 @@ function start(request: LaunchRequest) {
   void app.whenReady().then(() => {
     handlePreviewProtocol();
     setupMenu();
-    createWindow(launchRepo(dropped ? { path: dropped, cwd: request.cwd } : request, true));
+    createWindow(launchRepo(dropped ? { path: dropped, cwd: request.cwd } : request, true), dropped ? undefined : request.compare);
     startUpdates();
   });
   app.on("window-all-closed", () => app.quit());

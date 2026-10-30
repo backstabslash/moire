@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Worktree } from "../../../shared/types";
 import { fuzzyMatch } from "../model/files";
+import { Icon } from "./Icon";
 
 interface Props {
   current: string | null;
@@ -15,6 +16,11 @@ export function RepoPicker({ current, onOpen, onBrowse, onClose }: Props) {
   const [query, setQuery] = useState("");
   const [hot, setHot] = useState(0);
   const popRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    listRef.current?.querySelector(".is-hot")?.scrollIntoView({ block: "nearest" });
+  }, [hot]);
 
   useEffect(() => {
     window.moire.recentRepos().then(
@@ -64,7 +70,7 @@ export function RepoPicker({ current, onOpen, onBrowse, onClose }: Props) {
           e.preventDefault();
         }}
       />
-      <div role="listbox" aria-label="Recent repositories">
+      <div role="listbox" aria-label="Recent repositories" ref={listRef}>
         {shown.map((path, i) => {
           const tree = i < others.length ? others[i] : null;
           return (
@@ -73,11 +79,12 @@ export function RepoPicker({ current, onOpen, onBrowse, onClose }: Props) {
               role="option"
               aria-selected={false}
               className={i === hot ? "is-hot" : ""}
-              onMouseEnter={() => setHot(i)}
+              onMouseMove={() => setHot(i)}
               onClick={() => choose(i)}
             >
+              <Icon name={tree ? "branch" : "folder"} />
               {path.split("/").pop()}
-              {tree && <span className="repo-tree">{[tree.branch ?? "detached", tree.changes ? `${tree.changes} changed` : "clean"].join(" · ")}</span>}
+              {tree && <span className="repo-tree">{[tree.branch ?? "detached", tree.changes ? `${tree.changes} changed` : "clean"].join(", ")}</span>}
               <small>{path}</small>
             </button>
           );
@@ -88,9 +95,10 @@ export function RepoPicker({ current, onOpen, onBrowse, onClose }: Props) {
           role="option"
           aria-selected={false}
           className={hot === shown.length ? "is-hot" : ""}
-          onMouseEnter={() => setHot(shown.length)}
+          onMouseMove={() => setHot(shown.length)}
           onClick={onBrowse}
         >
+          <Icon name="browse" />
           Browse…
           <small>Pick a folder</small>
         </button>

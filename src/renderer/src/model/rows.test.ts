@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { diffHunk } from "../../../main/test-repo";
 import type { FileDiff, Hunk } from "../../../shared/types";
-import { copyCode, copyMarkdown } from "./copy";
-import { fuzzyMatch } from "./files";
-import { modeNote } from "./modes";
-import { align, buildRows, followHunk, notUtf8, type Row, type Stub, withStubs } from "./rows";
-import { compile, type SearchOptions, searchFile } from "./search";
+import { align, buildRows, followHunk, hunkSpans, notUtf8, type Row, type Stub, withStubs } from "./rows";
 
 const opts = { layout: "split" as const, scope: "changed" as const, expanded: new Set<string>() };
 
@@ -13,23 +10,16 @@ function file(hunks: Hunk[], extra: Partial<FileDiff> = {}): FileDiff {
 }
 
 const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`);
-const hunk: Hunk = {
-  oldStart: 2,
-  oldLines: 7,
-  newStart: 2,
-  newLines: 7,
-  header: "",
-  lines: [
-    ...[2, 3, 4].map((n) => ({ kind: "ctx" as const, text: `line ${n}`, oldNo: n, newNo: n })),
-    { kind: "del", text: "line 5", oldNo: 5 },
-    { kind: "add", text: "line five", newNo: 5 },
-    ...[6, 7, 8].map((n) => ({ kind: "ctx" as const, text: `line ${n}`, oldNo: n, newNo: n })),
-  ],
-};
+const hunk = diffHunk(2, [" line 2", " line 3", " line 4", "-line 5", "+line five", " line 6", " line 7", " line 8"]);
 const newText = lines.map((l, i) => (i === 4 ? "line five" : l)).join("\n") + "\n";
 const oldText = lines.join("\n") + "\n";
 
 const kinds = (rows: Row[]) => rows.map((r) => (r.t === "fold" ? `fold${r.count}` : r.t));
+
+type FoldRow = Extract<Row, { t: "fold" }>;
+type HunkRow = Extract<Row, { t: "hunk" }>;
+const isFold = (r: Row): r is FoldRow => r.t === "fold";
+const isHunk = (r: Row): r is HunkRow => r.t === "hunk";
 
 describe("buildRows", () => {
   it("folds the gaps before and after a hunk, but shows a single unchanged line", () => {
@@ -49,7 +39,9 @@ describe("buildRows", () => {
   });
 
   it("expands one fold on request", () => {
-    const rows = buildRows(file([hunk]), { a: oldText, b: newText, hidden: false }, { ...opts, expanded: new Set(["gap1"]) });
+    const contents = { a: oldText, b: newText, hidden: false };
+    const { key } = buildRows(file([hunk]), contents, opts).filter(isFold)[0];
+    const rows = buildRows(file([hunk]), contents, { ...opts, expanded: new Set([key]) });
     expect(kinds(rows).filter((k) => k.startsWith("fold"))).toHaveLength(0);
     expect(rows.filter((r) => r.t === "split")).toHaveLength(10);
   });
@@ -61,6 +53,48 @@ describe("buildRows", () => {
     expect(pair).toMatchObject({ a: { no: 5, text: "line 5" }, b: { no: 5, text: "line five" } });
   });
 
+  describe("revealing a long fold in steps", () => {
+    const long = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`);
+    const text = long.join("\n") + "\n";
+    const at = (n: number) => diffHunk(n, [`-line ${n}`, `+new ${n}`]);
+    const contents = { a: text, b: text, hidden: false };
+    const folds = (expanded: string[] = [], hunks = [at(10), at(70)]) =>
+      buildRows(file(hunks), contents, { ...opts, expanded: new Set(expanded) }).filter(isFold);
+
+    it("offers both ways between hunks and only the way that exists at the ends", () => {
+      const [top, middle, end] = folds();
+      expect(top).toMatchObject({ count: 9 });
+      expect(middle).toMatchObject({ count: 59, steps: { down: expect.any(String), up: expect.any(String) } });
+      expect(end).toMatchObject({ count: 30, steps: { down: expect.any(String) } });
+      expect(end.steps).not.toHaveProperty("up");
+    });
+
+    it("shrinks the fold from the side that was stepped", () => {
+      const { down, up } = folds()[1].steps!;
+      const [, stepped] = folds([down!]);
+      expect(stepped).toMatchObject({ count: 39, newFrom: 31, steps: { up } });
+      expect(stepped.steps!.down).not.toBe(down);
+      const [, both] = folds([down!, up!]);
+      expect(both).toMatchObject({ count: 19, newFrom: 31 });
+      expect(both).not.toHaveProperty("steps");
+    });
+
+    it("drops the fold once the steps cover it, and the plain click still opens it all", () => {
+      const [top, middle, end] = folds();
+      const { down, up } = middle.steps!;
+      const next = folds([down!])[1].steps!.down!;
+      expect(folds([down!, next, up!]).map((r) => r.key)).toEqual([top.key, end.key]);
+      expect(folds([middle.key]).map((r) => r.key)).toEqual([top.key, end.key]);
+    });
+
+    it("shows the revealed lines in file order on either side of the fold", () => {
+      const { down, up } = folds()[1].steps!;
+      const rows = buildRows(file([at(10), at(70)]), contents, { ...opts, expanded: new Set([down!, up!]) });
+      const numbers = rows.flatMap((r) => (r.t === "split" && r.kind === "ctx" ? [r.b?.no] : []));
+      expect(numbers).toEqual([...Array.from({ length: 20 }, (_, i) => i + 11), ...Array.from({ length: 20 }, (_, i) => i + 50)]);
+    });
+  });
+
   it("keeps folds without contents but can't expand them, and skips the unknown tail", () => {
     const rows = buildRows(file([hunk]), null, opts);
     expect(rows[0]).toMatchObject({ t: "fold", count: 1, expandable: false });
@@ -68,24 +102,9 @@ describe("buildRows", () => {
   });
 
   it("handles a pure deletion at the end of a file", () => {
-    const del: Hunk = {
-      oldStart: 9,
-      oldLines: 2,
-      newStart: 8,
-      newLines: 0,
-      header: "",
-      lines: [
-        { kind: "del", text: "line 9", oldNo: 9 },
-        { kind: "del", text: "line 10", oldNo: 10 },
-      ],
-    };
+    const del = diffHunk(9, ["-line 9", "-line 10"], 8);
     const rows = buildRows(file([del]), { a: oldText, b: lines.slice(0, 8).join("\n") + "\n", hidden: false }, opts);
     expect(kinds(rows)).toEqual(["fold8", "hunk", "split", "split"]);
-  });
-
-  it("explains binary and oversized files instead of drawing rows", () => {
-    expect(buildRows(file([], { binary: true }), null, opts)[0]).toMatchObject({ t: "note" });
-    expect(buildRows(file([], { tooLarge: true }), null, opts)[0]).toMatchObject({ t: "note" });
   });
 
   it("marks unchanged lines staged earlier by index line, and counts them in folds", () => {
@@ -108,11 +127,38 @@ describe("buildRows", () => {
   });
 });
 
+describe("hunk headers", () => {
+  const withHeader = (header: string) => ({ ...hunk, oldStart: 4, newStart: 4, header });
+  const head = (rows: Row[]) => rows.find((r) => r.t === "hunk") as Row & { t: "hunk" };
+  const source = "  function outer() {\n" + lines.slice(1).join("\n") + "\n";
+
+  it("finds the whole line git quoted, on the old side", () => {
+    const rows = buildRows(file([withHeader("function outer")]), { a: source, b: source, hidden: false }, opts);
+    expect(head(rows).ctxLine).toEqual({ plate: 0, no: 1, text: "  function outer() {" });
+  });
+
+  it("falls back to git's text when no line matches or there are no contents", () => {
+    expect(head(buildRows(file([withHeader("gone")]), { a: source, b: source, hidden: false }, opts)).ctxLine).toBeUndefined();
+    expect(head(buildRows(file([withHeader("function outer")]), null, opts)).ctxLine).toBeUndefined();
+  });
+
+  it("spans each hunk's own rows, leaving out the unchanged rows between hunks", () => {
+    const later = diffHunk(12, [" x"]);
+    const rows = buildRows(file([hunk, later]), { a: oldText, b: newText, hidden: false }, { ...opts, layout: "unified", scope: "full" });
+    const spans = hunkSpans(rows);
+    expect(spans).toHaveLength(2);
+    expect(rows[spans[0].head].t).toBe("hunk");
+    expect(rows[spans[0].end].t).not.toBe("hunk");
+    expect((rows[spans[0].end] as Row & { hunk: number }).hunk).toBe(-1);
+    expect(spans[1].end).toBe(spans[1].head + 2);
+  });
+});
+
 describe("withStubs", () => {
   const contents = { a: oldText, b: newText, hidden: false };
 
   it("puts a staged hunk's stub where the hunk was, in line order, and drops it while the hunk is still there", () => {
-    const later = { ...hunk, newStart: 9, oldStart: 9, newLines: 1, oldLines: 1, lines: [{ kind: "ctx" as const, text: "line 9", oldNo: 9, newNo: 9 }] };
+    const later = diffHunk(9, [" line 9"]);
     const f = file([later]);
     const rows = buildRows(f, contents, opts);
     const stubbed = withStubs(rows, f, [
@@ -199,70 +245,7 @@ describe("align", () => {
   });
 });
 
-describe("copying selected lines", () => {
-  const contents = { a: oldText, b: newText, hidden: false };
-  const sides = { a: { kind: "index" as const, label: "Index" }, b: { kind: "worktree" as const, label: "Working tree" } };
-
-  it("copies code in file order, deletion before its replacement", () => {
-    const sel = new Set(["0:3", "0:4", "0:5"]);
-    expect(copyCode(file([hunk]), contents, new Set(), sel)).toEqual({ text: "line 5\nline five\nline 6\n", count: 3 });
-  });
-
-  it("copies one Markdown block per run of adjacent lines", () => {
-    const sel = new Set(["g1", "0:4", "0:6", "0:7"]);
-    expect(copyMarkdown(file([hunk]), contents, new Set(), sel, sides).text).toBe(
-      "src/a.ts line 1 (working tree)\n```typescript\nline 1\n```\n\n" +
-        "src/a.ts line 5 (added, working tree)\n```typescript\nline five\n```\n\n" +
-        "src/a.ts lines 7–8 (working tree)\n```typescript\nline 7\nline 8\n```\n",
-    );
-  });
-
-  it("keeps a diff block only when the signs say something", () => {
-    const mixed = copyMarkdown(file([hunk]), contents, new Set(), new Set(["0:4", "0:5"]), sides).text;
-    expect(mixed).toBe("src/a.ts lines 5–6 (working tree)\n```diff\n+line five\n line 6\n```\n");
-    const fresh = { ...file([hunk]), status: "untracked" as const };
-    expect(copyMarkdown(fresh, contents, new Set(), new Set(["0:4"]), sides).text).toBe(
-      "src/a.ts line 5 (new file, working tree)\n```typescript\nline five\n```\n",
-    );
-  });
-
-  it("numbers a run of deleted lines on the old side", () => {
-    expect(copyMarkdown(file([hunk]), contents, new Set(), new Set(["0:3"]), sides).text).toBe("src/a.ts line 5 (index)\n```diff\n-line 5\n```\n");
-  });
-});
-
-describe("search", () => {
-  const contents = { a: oldText, b: newText, hidden: false };
-  const find = (query: string, extra: Partial<SearchOptions> = {}) => {
-    const re = compile({ query, matchCase: false, regex: false, side: "both", ...extra });
-    return re instanceof RegExp ? searchFile(file([hunk]), contents, re, extra.side ?? "both", 100).map((h) => `${h.sel}@${h.start}`) : re;
-  };
-
-  it("finds hits in folded context and in changes, in file order", () => {
-    expect(find("line 1")).toEqual(["g1@0", "g10@0"]);
-    expect(find("FIVE")).toEqual(["0:4@5"]);
-    expect(find("line 5")).toEqual(["0:3@0"]);
-  });
-
-  it("limits hits to one side, and honours case and regex", () => {
-    expect(find("line 5", { side: "b" })).toEqual([]);
-    expect(find("five", { side: "a" })).toEqual([]);
-    expect(find("FIVE", { matchCase: true })).toEqual([]);
-    expect(find("line [89]", { regex: true })).toEqual(["0:7@0", "g9@0"]);
-    expect(find("line [89]")).toEqual([]);
-    expect(find("(", { regex: true })).toBe("invalid");
-    expect(find("")).toBeNull();
-  });
-});
-
-const change = (del: string[], add: string[]): Hunk => ({
-  oldStart: 1,
-  oldLines: del.length,
-  newStart: 1,
-  newLines: add.length,
-  header: "",
-  lines: [...del.map((text, i) => ({ kind: "del" as const, text, oldNo: i + 1 })), ...add.map((text, i) => ({ kind: "add" as const, text, newNo: i + 1 }))],
-});
+const change = (del: string[], add: string[]) => diffHunk(1, [...del.map((t) => `-${t}`), ...add.map((t) => `+${t}`)]);
 
 describe("what changed when there are no lines to show", () => {
   const note = (f: FileDiff) => buildRows(f, null, opts).map((r) => r.t === "note" && r.text);
@@ -312,30 +295,12 @@ describe("what changed when there are no lines to show", () => {
     expect(sub([x], [`${x}-dirty`])).toEqual(["Submodule has uncommitted changes inside it."]);
     expect(sub([], [y], { status: "added", newMode: "160000" })).toEqual(["Submodule added at b86909d."]);
   });
-
-  it("describes mode changes in plain words, with a short tag", () => {
-    expect(modeNote({ oldMode: "100644", newMode: "100755" })).toEqual({ words: "now executable", tag: "+x" });
-    expect(modeNote({ oldMode: "100644", newMode: "120000" })).toEqual({ words: "file type changed to symlink", tag: "link" });
-    expect(modeNote({ oldMode: "120000", newMode: "100755" })).toEqual({ words: "file type changed to file", tag: "file" });
-    expect(modeNote({ oldMode: "120000", newMode: "120000" })).toEqual({ words: "symlink", tag: "link" });
-    expect(modeNote({ newMode: "100755" })).toEqual({ words: "executable", tag: "+x" });
-    expect(modeNote({ oldMode: "100755" })).toBeNull();
-    expect(modeNote({})).toBeNull();
-  });
 });
 
 describe("noise folding", () => {
-  const ws: Hunk = {
-    oldStart: 2,
-    oldLines: 1,
-    newStart: 2,
-    newLines: 1,
-    header: "",
-    lines: [
-      { kind: "del", text: "  a = b", oldNo: 2 },
-      { kind: "add", text: "\ta  =  b", newNo: 2 },
-    ],
-  };
+  const ws = diffHunk(2, ["-  a = b", "+\ta  =  b"]);
+  const folded = (del: string[], add: string[], path = "a.ts") =>
+    buildRows(file([change(del, add)], { path }), null, opts).some((r) => isHunk(r) && !!r.folded);
 
   it("folds a noise file into one note until expanded", () => {
     const noisy = file([hunk], { noise: "Lockfile", additions: 1, deletions: 1 });
@@ -346,24 +311,25 @@ describe("noise folding", () => {
   it("folds whitespace-only hunks but not real changes", () => {
     const rows = buildRows(file([ws, hunk]), null, opts);
     expect(rows.filter((r) => r.t === "hunk").map((r) => r.t === "hunk" && !!r.folded)).toEqual([true, false]);
-    expect(buildRows(file([ws]), null, { ...opts, expanded: new Set(["ws0"]) }).some((r) => r.t === "split" && r.kind === "chg")).toBe(true);
+    const { keys } = rows.filter(isHunk)[0].folded!;
+    expect(buildRows(file([ws]), null, { ...opts, expanded: new Set(keys) }).some((r) => r.t === "split" && r.kind === "chg")).toBe(true);
     expect(buildRows(file([ws]), null, { ...opts, showAll: true }).some((r) => r.t === "split" && r.kind === "chg")).toBe(true);
   });
 
   it("doesn't fold spaces that join words, or reindents where indentation matters", () => {
-    const folded = (path: string, h: Hunk) => buildRows(file([h], { path }), null, opts).some((r) => r.t === "hunk" && !!r.folded);
-    const dedent = change(["if admin:", "    grant(user)"], ["if admin:", "grant(user)"]);
-    expect(folded("a.ts", change(['msg = "a b"'], ['msg = "ab"']))).toBe(false);
-    expect(folded("a.ts", change(["f(a,b)"], ["f(a, b)"]))).toBe(true);
-    expect(folded("a.ts", change(["f(a,", "  b)"], ["f(a, b)"]))).toBe(true);
-    expect(folded("a.ts", dedent)).toBe(true);
-    expect(folded("a.py", dedent)).toBe(false);
-    expect(folded("a.py", change(["x = 1  ", "y = 2"], ["x = 1", "", "y = 2"]))).toBe(true);
+    const dedent: [string[], string[]] = [
+      ["if admin:", "    grant(user)"],
+      ["if admin:", "grant(user)"],
+    ];
+    expect(folded(['msg = "a b"'], ['msg = "ab"'])).toBe(false);
+    expect(folded(["f(a,b)"], ["f(a, b)"])).toBe(true);
+    expect(folded(["f(a,", "  b)"], ["f(a, b)"])).toBe(true);
+    expect(folded(...dedent)).toBe(true);
+    expect(folded(...dedent, "a.py")).toBe(false);
+    expect(folded(["x = 1  ", "y = 2"], ["x = 1", "", "y = 2"], "a.py")).toBe(true);
   });
 
   it("counts whitespace inside string literals", () => {
-    const folded = (del: string[], add: string[], path = "a.ts") =>
-      buildRows(file([change(del, add)], { path }), null, opts).some((r) => r.t === "hunk" && !!r.folded);
     expect(folded(['s.split(" ")'], ['s.split("")'])).toBe(false);
     expect(folded(["xs.join(', ')"], ["xs.join(',')"])).toBe(false);
     expect(folded(["const s = `", "  a", "`;"], ["const s = `", "a", "`;"])).toBe(false);
@@ -374,48 +340,30 @@ describe("noise folding", () => {
   });
 
   it("never folds whitespace in formats where it matters", () => {
-    const folded = (path: string, del: string[], add: string[]) =>
-      buildRows(file([change(del, add)], { path }), null, opts).some((r) => r.t === "hunk" && !!r.folded);
-    expect(folded("README.md", ["line one  "], ["line one"])).toBe(false);
-    expect(folded("README.md", ["- item", "  - nested"], ["- item", "- nested"])).toBe(false);
-    expect(folded("notes.txt", ["a  b"], ["a b"])).toBe(true);
-    expect(folded("Makefile", ["X = a "], ["X = a"])).toBe(false);
-    expect(folded("data.tsv", ["a\tb"], ["a b"])).toBe(false);
+    expect(folded(["line one  "], ["line one"], "README.md")).toBe(false);
+    expect(folded(["- item", "  - nested"], ["- item", "- nested"], "README.md")).toBe(false);
+    expect(folded(["a  b"], ["a b"], "notes.txt")).toBe(true);
+    expect(folded(["X = a "], ["X = a"], "Makefile")).toBe(false);
+    expect(folded(["a\tb"], ["a b"], "data.tsv")).toBe(false);
   });
 
   it("offers to expand every whitespace fold in a file when there are several", () => {
     const rows = buildRows(file([ws, { ...ws, oldStart: 6, newStart: 6 }]), null, opts);
     const folds = rows.flatMap((r) => (r.t === "hunk" && r.folded ? [r.folded] : []));
     expect(folds).toHaveLength(2);
-    expect(folds.map((f) => f.allWhitespaceFolds)).toEqual([["ws0", "ws1"], undefined]);
+    expect(folds.map((f) => f.allWhitespaceFolds)).toEqual([folds.flatMap((f) => f.keys), undefined]);
     const one = buildRows(file([ws]), null, opts).find((r) => r.t === "hunk");
     expect(one?.t === "hunk" && one.folded && !one.folded.allWhitespaceFolds).toBe(true);
   });
 
-  it("folds minified files like generated ones", () => {
-    const min = file([hunk], { noise: "Minified file", additions: 1, deletions: 1 });
-    expect(buildRows(min, null, opts)[0]).toMatchObject({ text: "Minified file, 2 changed lines, folded away.", expand: "noise" });
-  });
-
   it("folds a whitespace-only hunk into one row with the unchanged lines around it", () => {
     const text = { a: lines.join("\n") + "\n", b: lines.join("\n") + "\n", hidden: false };
-    const real: Hunk = {
-      oldStart: 6,
-      oldLines: 1,
-      newStart: 6,
-      newLines: 1,
-      header: "",
-      lines: [
-        { kind: "del", text: "line 6", oldNo: 6 },
-        { kind: "add", text: "line six", newNo: 6 },
-      ],
-    };
+    const real = diffHunk(6, ["-line 6", "+line six"]);
     const rows = buildRows(file([ws, real]), text, opts);
     expect(kinds(rows)).toEqual(["hunk", "hunk", "split", "fold4"]);
     expect(rows[0]).toMatchObject({
       hunk: 0,
       folded: {
-        keys: ["gap0", "ws0", "gap1"],
         count: 4,
         gaps: [
           [1, 1],
@@ -423,20 +371,15 @@ describe("noise folding", () => {
         ],
       },
     });
-    const open = buildRows(file([ws, real]), text, { ...opts, expanded: new Set(["gap0", "ws0", "gap1"]) });
+    const { keys } = rows.filter(isHunk)[0].folded!;
+    expect(keys).toHaveLength(3);
+    const open = buildRows(file([ws, real]), text, { ...opts, expanded: new Set(keys) });
     expect(open.filter((r) => r.t === "hunk").map((r) => r.t === "hunk" && !!r.folded)).toEqual([false, false]);
-  });
-
-  it("fuzzy-matches paths", () => {
-    expect(fuzzyMatch("stts", "src/main/stage.test.ts")).toBe(true);
-    expect(fuzzyMatch("main stage", "src/main/stage.ts")).toBe(true);
-    expect(fuzzyMatch("zz", "src/main/stage.ts")).toBe(false);
   });
 });
 
 describe("unchanged files from the tree", () => {
   const unchanged = file([], { status: "unchanged" });
-  const sides = { a: { kind: "index" as const, label: "Index" }, b: { kind: "worktree" as const, label: "Working tree" } };
 
   it("shows every line unified, numbered on B, whatever the scope and layout", () => {
     const rows = buildRows(unchanged, { a: null, b: newText, hidden: false }, opts);
@@ -453,10 +396,5 @@ describe("unchanged files from the tree", () => {
       buildRows({ ...unchanged, ...extra }, { a: null, b: null, hidden: true }, opts).map((r) => r.t === "note" && r.text);
     expect(flagged({ binary: true })).toEqual(["Binary file, contents not shown."]);
     expect(flagged({ tooLarge: true })).toEqual(["File is over 2 MB, contents not shown."]);
-  });
-
-  it("copies selected lines as plain code from the working tree", () => {
-    const text = copyMarkdown(unchanged, { a: null, b: newText, hidden: false }, new Set(), new Set(["g4", "g5"]), sides).text;
-    expect(text).toBe("src/a.ts lines 4–5 (working tree)\n```typescript\nline 4\nline five\n```\n");
   });
 });

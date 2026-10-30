@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accelerator, COMMAND_IDS, DEFAULT_KEYS, defaultKeysFile, parseKey, resolveKeys, strokeLabel } from "./keymap";
+import { accelerator, COMMAND_IDS, DEFAULT_KEYMAP, DEFAULT_KEYS, defaultKeysFile, lookup, parseKey, resolveKeys, strokeLabel } from "./keymap";
 
 describe("parseKey", () => {
   it("reads letters, symbols, named keys and modifiers", () => {
@@ -22,6 +22,8 @@ describe("parseKey", () => {
 
 describe("resolveKeys", () => {
   it("has no clashes in the defaults", () => {
+    const all = COMMAND_IDS.flatMap((id) => DEFAULT_KEYS[id]);
+    expect(all.filter((key, i) => all.indexOf(key) !== i || DEFAULT_KEYMAP.prefixes.has(key))).toEqual([]);
     expect(resolveKeys(defaultKeysFile())).toEqual({ keys: DEFAULT_KEYS, problems: [] });
     expect(resolveKeys(null).problems).toEqual([]);
   });
@@ -38,6 +40,10 @@ describe("resolveKeys", () => {
     const { keys, problems } = resolveKeys(JSON.stringify({ stage: "x", discard: "s" }));
     expect(problems).toEqual([]);
     expect([keys.stage, keys.discard]).toEqual([["x"], ["s"]]);
+  });
+
+  it("ignores commands that have been removed, which old keys.json files still list", () => {
+    expect(resolveKeys(JSON.stringify({ grouping: "l" })).problems).toEqual([]);
   });
 
   it("reports unknown ids, bad keys and fixed commands, and keeps those defaults", () => {
@@ -66,6 +72,16 @@ describe("resolveKeys", () => {
   it("writes every remappable command into the starter file", () => {
     const written = JSON.parse(defaultKeysFile()) as Record<string, unknown>;
     expect(Object.keys(written).filter((k) => k !== "//")).toEqual(COMMAND_IDS.filter((id) => !id.startsWith("zoom")));
+  });
+});
+
+describe("lookup", () => {
+  it("waits for the second key of a sequence and falls back to a single key", () => {
+    expect(lookup(DEFAULT_KEYMAP, null, "g")).toBe("prefix");
+    expect(lookup(DEFAULT_KEYMAP, "g", "g")).toBe("firstHunk");
+    expect(lookup(DEFAULT_KEYMAP, "g", "j")).toBe("nextHunk");
+    expect(lookup(DEFAULT_KEYMAP, null, "G")).toBe("lastHunk");
+    expect(lookup(DEFAULT_KEYMAP, null, "q")).toBeNull();
   });
 });
 

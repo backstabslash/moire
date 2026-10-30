@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { buildKeymap, command, type CommandId, lookup } from "../../shared/keymap";
 import type { CompareMode, FileContents, FileDiff, Hunk, LineRef, NoteRange, NotesFile, Placement, RepoInfo, StageAction, Upstream } from "../../shared/types";
 import { CommitBox } from "./components/CommitBox";
 import { CommitHead } from "./components/CommitHead";
-import { type Blink, DiffView, type DiffViewHandle, type Preview } from "./components/DiffView";
+import { CommandPalette } from "./components/CommandPalette";
+import { type Blink, DiffView, type DiffViewHandle, type Preview, type Spot } from "./components/DiffView";
 import { NoChanges, NoRepo } from "./components/EmptyState";
 import { EncodingNotice } from "./components/EncodingNotice";
 import { FileMenu, type MenuAction, type MenuAt } from "./components/FileMenu";
@@ -11,33 +12,33 @@ import { HoverTip } from "./components/HoverTip";
 import { ClashBar, ClashView, DropFoot, DropSlots, DropStyle, ghostTree } from "./components/FilesIn";
 import { Key, keyText, MAC, setKeymap, useKeymap } from "./components/Key";
 import { KeysHelp } from "./components/KeysHelp";
-import { NotesPanel } from "./components/NotesPanel";
+import { NOTES_WIDTH, NotesPanel } from "./components/NotesPanel";
+import { EditorPicker } from "./components/EditorPicker";
 import { RepoPicker } from "./components/RepoPicker";
 import { SearchBar } from "./components/SearchBar";
 import { StagedNotice, StageProgress } from "./components/StageProgress";
-import { type FilesView, SIDE_WIDTH, Sidebar } from "./components/Sidebar";
+import { type FilesView, type Reveal, SIDE_WIDTH, Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
-import { DARK_IDS, LIGHT_IDS, THEME_IDS, type ThemeId, toneOf } from "./components/ThemePicker";
+import { CODE_SIZE, DARK_IDS, LIGHT_IDS, THEME_IDS, type ThemeId, toneOf } from "./components/ThemePicker";
 import { Toast, type ToastMsg } from "./components/Toast";
 import { type LastPicked, type PickerState, Toolbar } from "./components/Toolbar";
 import { highlight, warm } from "./highlight/client";
 import type { TokLines } from "./highlight/types";
-import { fileKey as fileKeyOf, fuzzyMatch, hashString, remember } from "./model/files";
+import { fileKey as fileKeyOf, fuzzyMatch, hashString, orderFiles, remember } from "./model/files";
 import { langFor } from "./model/lang";
-import { type Grouping, orderBy } from "./model/paired";
 import { previewOf } from "./model/preview";
-import { buildRows, followHunk, type Layout, notUtf8, type Row, type Scope, splitLines, type Stub, withStubs } from "./model/rows";
+import { buildRows, followHunk, hunkChanges, type Layout, type LineRow, notUtf8, type Row, type Scope, splitLines, type Stub, withStubs } from "./model/rows";
 import { type Placed, chapterRefs, placeRange, rangeStaged, uncovered } from "../../shared/chapters";
 import { lineKeys, type Mark, rowOfLine, stopsOf } from "./model/notes";
 import { copyCode, copyMarkdown, copySide } from "./model/copy";
 import { strokeOf, sameKey } from "./model/keyboard";
-import { type Col, carryKeys, changedRefs, hunkChange, hunkOfKey, hunkRefs, lineKey } from "./model/selection";
+import { type Col, carryKeys, changedRefs, hunkChange, hunkOfKey, hunkRefs, isPicked, lineKey } from "./model/selection";
 import { type Hit, hitKeys, hitRow } from "./model/search";
 import { useDiff } from "./useDiff";
 import { isIgnored, useFilesIn } from "./useFilesIn";
 import { useSearch } from "./useSearch";
 import { type SelectHow, useSelection } from "./useSelection";
-import { useStored, useStoredNumber } from "./useStored";
+import { useStored, useStoredNumber, useStoredText } from "./useStored";
 import { useTree } from "./useTree";
 
 type SimpleMode = "unstaged" | "staged" | "all";
@@ -46,8 +47,27 @@ const BLINK_MS = 650;
 const SEQUENCE_MS = 1000;
 const PREV_FILE_HOLD_MS = 100;
 const SPLIT_MIN_DIFF_WIDTH_PX = 1000;
-const NOTES_WIDTH = 330;
+const MIN_DIFF_WIDTH_PX = 360;
 const REMEMBERED_REPOS = 50;
+const FOLDER_MODE: CompareMode = { kind: "all" };
+const GIT_ONLY: CommandId[] = [
+  "unstaged",
+  "staged",
+  "all",
+  "commit",
+  "branches",
+  "compare",
+  "stage",
+  "discard",
+  "stageAll",
+  "discardFile",
+  "undo",
+  "allFiles",
+  "notes",
+  "nextNote",
+  "prevNote",
+  "pasteFiles",
+];
 type Version = "head" | "index" | "worktree";
 type OldAndNewSide = readonly [oldSide: Version, newSide: Version];
 const SIDES: Record<string, OldAndNewSide> = { unstaged: ["index", "worktree"], staged: ["head", "index"], all: ["head", "worktree"] };
@@ -62,6 +82,18 @@ interface Shown {
   key: string;
   contents: FileContents | null;
   tokens: [TokLines | null, TokLines | null] | null;
+}
+
+const darkDesktop = matchMedia("(prefers-color-scheme: dark)");
+
+function useSystemTone() {
+  return useSyncExternalStore(
+    (changed) => {
+      darkDesktop.addEventListener("change", changed);
+      return () => darkDesktop.removeEventListener("change", changed);
+    },
+    () => (darkDesktop.matches ? "dark" : "light"),
+  );
 }
 
 function openFiles(): Record<string, string> {
@@ -89,19 +121,24 @@ export function App() {
   const [simpleMode, setSimpleMode] = useStored<SimpleMode>("mode", "unstaged", ["unstaged", "staged", "all"]);
   const [special, setSpecial] = useState<CompareMode | null>(null);
   const [lastPicked, setLastPicked] = useState<LastPicked>({});
-  const wantMode = useMemo<CompareMode>(() => special ?? { kind: simpleMode }, [special, simpleMode]);
+  const folder = !!repo?.folder;
+  const wantMode = useMemo<CompareMode>(() => (folder ? FOLDER_MODE : (special ?? { kind: simpleMode })), [folder, special, simpleMode]);
   const [layout, setLayout] = useStored<Layout>("layout", "split", ["split", "unified"]);
   const [sideWidth, setSideWidth] = useStoredNumber("sidebar", SIDE_WIDTH.initial, SIDE_WIDTH.min, SIDE_WIDTH.max);
+  const [notesWidth, setNotesWidth] = useStoredNumber("notes-width", NOTES_WIDTH.initial, NOTES_WIDTH.min, NOTES_WIDTH.max);
   const [winWidth, setWinWidth] = useState(innerWidth);
-  const side = Math.min(sideWidth, Math.max(SIDE_WIDTH.min, Math.round(winWidth / 2)));
+  const side = Math.max(SIDE_WIDTH.min, Math.min(sideWidth, Math.round(winWidth / 2), winWidth - MIN_DIFF_WIDTH_PX));
   const [notesFile, setNotesFile] = useState<NotesFile | null>(null);
   const [notesPref, setNotesPref] = useStored<"on" | "off">("notes", "on", ["on", "off"]);
   const [stopAt, setStopAt] = useState<number | null>(null);
   const agentNotes = notesFile?.notes?.chapters.length ? notesFile.notes : null;
-  const notesOpen = !!agentNotes && notesPref === "on";
+  const notesFit = winWidth - side - NOTES_WIDTH.min >= MIN_DIFF_WIDTH_PX;
+  const notesOpen = !!agentNotes && notesPref === "on" && notesFit;
   const stops = useMemo(() => (agentNotes ? stopsOf(agentNotes) : []), [agentNotes]);
   const currentStop = stopAt !== null && stopAt < stops.length ? stopAt : null;
-  const narrow = winWidth - side - (notesOpen ? NOTES_WIDTH : 0) < SPLIT_MIN_DIFF_WIDTH_PX;
+  const notesRoom = Math.max(NOTES_WIDTH.min, winWidth - side - MIN_DIFF_WIDTH_PX);
+  const shownNotesWidth = Math.min(notesWidth, notesRoom);
+  const narrow = winWidth - side - (notesOpen ? shownNotesWidth : 0) < SPLIT_MIN_DIFF_WIDTH_PX;
   const [splitAnyway, setSplitAnyway] = useState(false);
   if (splitAnyway && !narrow) setSplitAnyway(false);
   const autoUnified = layout === "split" && narrow && !splitAnyway;
@@ -115,10 +152,19 @@ export function App() {
   );
   const [scope, setScope] = useStored<Scope>("scope", "changed", ["changed", "full"]);
   const [previewPref, setPreviewPref] = useStored<"on" | "off">("preview", "off", ["on", "off"]);
-  const [theme, setTheme] = useStored<ThemeId>("theme", matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light", THEME_IDS);
+  const [theme, setTheme] = useStored<ThemeId>("theme", darkDesktop.matches ? "dark" : "light", THEME_IDS);
   const [lightTheme, setLightTheme] = useStored<ThemeId>("theme-light", "light", LIGHT_IDS);
   const [darkTheme, setDarkTheme] = useStored<ThemeId>("theme-dark", "dark", DARK_IDS);
+  // New installs follow the desktop; anyone who already has a saved theme keeps it until they opt in.
+  const [followSystem, setFollowSystem] = useStored<"on" | "off">("theme-follow", localStorage.getItem("moire.theme") ? "off" : "on", ["on", "off"]);
+  const systemTone = useSystemTone();
+  const pickTheme = (id: ThemeId) => {
+    setTheme(id);
+    if (toneOf(id) !== systemTone) setFollowSystem("off");
+  };
   const [cvd, setCvd] = useStored<"on" | "off">("cvd", "off", ["on", "off"]);
+  const [codeFont, setCodeFont] = useStoredText("code-font");
+  const [codeSize, setCodeSize] = useStoredNumber("code-size", CODE_SIZE.initial, CODE_SIZE.min, CODE_SIZE.max);
   const [hints, setHints] = useStored<"on" | "off">("hints", "off", ["on", "off"]);
   const [hideStaged, setHideStaged] = useStored<"on" | "off">("hide-staged", "off", ["on", "off"]);
   const [blink, setBlink] = useState<(Blink & { auto: boolean }) | null>(null);
@@ -135,6 +181,9 @@ export function App() {
   const [contents, setContents] = useState<{ key: string; data: FileContents } | null>(null);
   const [tokens, setTokens] = useState<{ key: string; data: [TokLines | null, TokLines | null] } | null>(null);
   const [picker, setPicker] = useState<PickerState>(null);
+  const [themeMenu, setThemeMenu] = useState(false);
+  const [quietNotices, setQuietNotices] = useState<ReadonlySet<string>>(new Set());
+  const closeThemeMenu = useCallback(() => setThemeMenu(false), []);
   const [toast, setToast] = useState<ToastMsg | null>(null);
   const keymap = useKeymap();
   const keymapRef = useRef(keymap);
@@ -142,22 +191,35 @@ export function App() {
   const k = (id: CommandId) => keyText(keymap, id);
   const [help, setHelp] = useState(false);
   const closeHelp = useCallback(() => setHelp(false), []);
+  const [palette, setPalette] = useState(false);
+  const closePalette = useCallback(() => setPalette(false), []);
   const shownFiles = useRef<string[]>([]);
   const viewRef = useRef<DiffViewHandle>(null);
+  const spots = useRef(new Map<string, { hunk?: Hunk; at: Spot | null }>());
+  const undoSpots = useRef(new Map<string, { to: CompareMode["kind"]; path: string; line: number }>());
   const pendingFocus = useRef<"first" | "last" | null>(null);
   const restoreFile = useRef<string | null>(null);
   const contentCache = useRef(new Map<string, FileContents>());
   const tokenCache = useRef(new Map<string, [TokLines | null, TokLines | null]>());
 
-  const [filesView, setFilesView] = useStored<FilesView>("files", "changed", ["changed", "all"]);
+  const [storedView, setFilesView] = useStored<FilesView>("files", "changed", ["changed", "all"]);
+  const [stayInAll, setStayInAll] = useState(false);
+  const filesView: FilesView = folder || stayInAll ? "all" : storedView;
   const browsing = useRef(filesView === "all");
   browsing.current = filesView === "all";
-  const [grouping, setGrouping] = useStored<Grouping>("grouping", "paired", ["paired", "folder"]);
-  const arrive = useRef<{ to: CompareMode["kind"]; path: string; line: number | null; onOldSide: boolean; note: boolean } | null>(null);
-  const landing = useRef<{ to: CompareMode["kind"]; path: string; line: number; onOldSide: boolean } | null>(null);
+  const arrive = useRef<{
+    to: CompareMode["kind"];
+    path: string;
+    line: number | null;
+    onOldSide: boolean;
+    note: boolean;
+    undone?: boolean;
+    from?: string | null;
+  } | null>(null);
+  const landing = useRef<{ to: CompareMode["kind"]; path: string; line: number; onOldSide: boolean; undone?: boolean } | null>(null);
   const [landed, setLanded] = useState(0);
   const hidden = useCallback((m: CompareMode, f: FileDiff) => m.kind === "all" && hideStaged === "on" && f.staged === "full", [hideStaged]);
-  const visible = (m: CompareMode, files: FileDiff[]) => orderBy(grouping, files).filter((f) => !hidden(m, f));
+  const visible = (m: CompareMode, files: FileDiff[]) => orderFiles(files).filter((f) => !hidden(m, f));
   const { mode, diff, loadedAt, fresh, refreshTick, refresh, reset, busy, acting, startActing, settle } = useDiff(repo, wantMode, {
     async prefetch(root, m, result) {
       const open = result.files.find((f) => f.path === activeRef.current);
@@ -167,16 +229,23 @@ export function App() {
       if (data) remember(contentCache.current, openKey, data);
     },
     loaded(result, m, sameView) {
+      if (!!result.repo.folder !== folder) {
+        setStayInAll(folder);
+        setRepo(result.repo);
+      }
       setError(null);
       const ordered = visible(m, result.files);
       const has = (p: string | null) => ordered.some((f) => f.path === p);
       const wanted = localStorage.getItem("moire.file") ?? restoreFile.current;
       localStorage.removeItem("moire.file");
       restoreFile.current = null;
-      const land = arrive.current?.to === m.kind ? arrive.current : null;
-      arrive.current = null;
+      // A load that started before the undo landed doesn't have its hunk back yet; the settling one will.
+      const early = !!arrive.current?.undone && acting.current;
+      const left = !!arrive.current?.undone && arrive.current.from !== activeRef.current;
+      const land = !early && !left && arrive.current?.to === m.kind ? arrive.current : null;
+      if (!early) arrive.current = null;
       if (land?.line != null && has(land.path)) {
-        landing.current = { to: m.kind, path: land.path, line: land.line, onOldSide: land.onOldSide };
+        landing.current = { to: m.kind, path: land.path, line: land.line, onOldSide: land.onOldSide, undone: land.undone };
         setLanded((n) => n + 1);
       }
       if (land?.note && !has(land.path)) setToast({ text: `${land.path} has no changes in Unstaged or Staged`, undo: false });
@@ -220,7 +289,7 @@ export function App() {
   );
   const want = changedFile ?? browsedFile;
   const wantKey = useMemo(() => (want ? fileKeyOf(modeKey, want) : null), [want, modeKey]);
-  const files = useMemo(() => orderBy(grouping, diff?.files ?? []), [diff, grouping]);
+  const files = useMemo(() => orderFiles(diff?.files ?? []), [diff]);
   shownFiles.current = files.map((f) => f.path);
   const browsedSearch = useMemo(() => (browsedFile && browsedData ? { file: browsedFile, contents: browsedData } : null), [browsedFile, browsedData]);
   const search = useSearch(repo, mode, modeKey, files, active, browsedSearch, (e) => setError(message(e)));
@@ -261,6 +330,14 @@ export function App() {
   }, [repo, refreshTick, notesFor]);
 
   useLayoutEffect(() => {
+    if (followSystem === "on") setTheme(systemTone === "dark" ? darkTheme : lightTheme);
+  }, [followSystem, systemTone, darkTheme, lightTheme, setTheme]);
+
+  useEffect(() => {
+    document.title = repo ? `${repo.name} - Moire` : "Moire";
+  }, [repo]);
+
+  useLayoutEffect(() => {
     const root = document.documentElement;
     root.dataset.theme = theme;
     root.dataset.tone = toneOf(theme);
@@ -279,8 +356,18 @@ export function App() {
   }, [hints]);
 
   useEffect(() => {
+    const { style } = document.documentElement;
+    const name = codeFont.replace(/["\\;]/g, "").trim();
+    if (name) style.setProperty("--diff-font", `"${name}", var(--code)`);
+    else style.removeProperty("--diff-font");
+    style.setProperty("--diff-size", `${codeSize}px`);
+    style.setProperty("--row", `${Math.round(codeSize * 1.4)}px`);
+  }, [codeFont, codeSize]);
+
+  useEffect(() => {
     document.documentElement.style.setProperty("--side", `${side}px`);
-  }, [side]);
+    document.documentElement.style.setProperty("--notes", `${shownNotesWidth}px`);
+  }, [side, shownNotesWidth]);
 
   useEffect(() => {
     const onResize = () => setWinWidth(innerWidth);
@@ -419,26 +506,49 @@ export function App() {
   const [resetFor, setResetFor] = useState(shownView);
   const shownRef = useRef(shownView);
   shownRef.current = shownView;
+  const spotKey = `${repo?.root}:${shownView}`;
   if (resetFor !== shownView) {
     setResetFor(shownView);
     setExpanded(new Set());
-    setFocusHunk(0);
+    const saved = spots.current.get(spotKey)?.hunk;
+    setFocusHunk(saved && file ? followHunk(saved, file.hunks) : 0);
     setBlink(null);
     setStubs([]);
   }
 
-  const focused = useRef<{ path: string; hunk: Hunk } | null>(null);
-  useEffect(() => {
+  const focused = useRef<{ view: string; path: string; hunk: Hunk; index: number } | null>(null);
+  const actedOn = useRef<{ view: string; hunk: Hunk; next: number; left: number } | null>(null);
+  const stopStagedFrom = useRef<number | null>(null);
+  // Layout effect: a queued press mustn't see the new hunks with the old cursor.
+  useLayoutEffect(() => {
     const prev = focused.current;
     if (!file || !prev || prev.path !== file.path || file.hunks[focusHunk] === prev.hunk || !file.hunks.length) return;
-    const next = followHunk(prev.hunk, file.hunks);
+    const on = actedOn.current;
+    const gone = (h: Hunk) => !file.hunks.some((f) => f.oldStart === h.oldStart && hunkChanges(f) === hunkChanges(h));
+    const acted =
+      on?.view === shownRef.current &&
+      on.hunk.oldStart === prev.hunk.oldStart &&
+      on.hunk.newStart === prev.hunk.newStart &&
+      file.hunks.length <= on.left &&
+      gone(on.hunk)
+        ? on
+        : null;
+    if (acted) actedOn.current = null;
+    if (acted && acted.next >= file.hunks.length) queued.current = [];
+    // A press batched with a reload has already moved the cursor; prev is the hunk it left.
+    const moved = prev.view === shownRef.current && prev.index !== focusHunk;
+    const next = acted ? Math.min(acted.next, file.hunks.length - 1) : moved ? Math.min(focusHunk, file.hunks.length - 1) : followHunk(prev.hunk, file.hunks);
+    if (acted) requestAnimationFrame(() => viewRef.current?.showHunk?.(next));
     if (next === focusHunk) return;
     setFocusHunk(next);
     setBlink((b) => b && { ...b, hunk: next });
   }, [file]);
   useEffect(() => {
+    if (file) remember(spots.current, spotKey, { at: spots.current.get(spotKey)?.at ?? null, hunk: file.hunks[focusHunk] });
+  }, [spotKey, file, focusHunk]);
+  useEffect(() => {
     const hunk = file?.hunks[focusHunk];
-    focused.current = file && hunk ? { path: file.path, hunk } : null;
+    focused.current = file && hunk ? { view: shownRef.current, path: file.path, hunk, index: focusHunk } : null;
   }, [file, focusHunk]);
 
   const previewable = useMemo(() => (file ? previewOf(file) : null), [file]);
@@ -488,12 +598,13 @@ export function App() {
     setFocusHunk((f) => Math.min(f, Math.max(0, hunkRows.length - 1)));
     setBlink((b) => (b && b.hunk < hunkRows.length ? b : null));
     const land = landing.current;
-    if (land && file && hunkRows.length && land.path === file.path && land.to === mode.kind) {
+    if (land && file && fileKey === wantKey && hunkRows.length && land.path === file.path && land.to === mode.kind) {
       landing.current = null;
       const dist = (h: Hunk) => Math.abs((land.onOldSide ? h.oldStart : h.newStart) - land.line);
       const near = file.hunks.reduce((best, h, i) => (dist(h) < dist(file.hunks[best]) ? i : best), 0);
       setFocusHunk(near);
-      requestAnimationFrame(() => viewRef.current?.scrollToRow(hunkRows[near]));
+      const keepSpot = !land.undone && !!spots.current.get(spotKey)?.at;
+      requestAnimationFrame(() => (keepSpot ? viewRef.current?.showHunk?.(near) : viewRef.current?.scrollToRow(hunkRows[near])));
       return;
     }
     if (!pendingFocus.current || !hunkRows.length) return;
@@ -510,10 +621,21 @@ export function App() {
   const listed = useMemo(() => files.filter((f) => (!filter || fuzzyMatch(filter, f.path)) && !hidden(mode, f)), [files, filter, hidden, mode]);
   const showFiles = useCallback(
     (view: FilesView) => {
+      if (folder) return;
+      setStayInAll(false);
       setFilesView(view);
       if (view === "changed" && !files.some((f) => f.path === activeRef.current)) setActive(listed[0]?.path ?? null);
     },
-    [files, listed, setFilesView],
+    [folder, files, listed, setFilesView],
+  );
+  const [folderReveal, setFolderReveal] = useState<Reveal | null>(null);
+  const revealFolder = useCallback(
+    (dir: string) => {
+      setFilters((cur) => ({ ...cur, all: "" }));
+      showFiles("all");
+      setFolderReveal({ dir, at: performance.now() });
+    },
+    [showFiles],
   );
   useEffect(() => {
     for (const f of files) if (!f.binary) warm(langFor(f.path));
@@ -571,6 +693,7 @@ export function App() {
     if (hide && changedFile?.staged === "full") setActive(files.find((f) => f.staged !== "full")?.path ?? null);
   };
   const [repoPicker, setRepoPicker] = useState(false);
+  const [editorPicker, setEditorPicker] = useState<{ path?: string; line: number } | null>(null);
   const closeRepoPicker = useCallback(() => setRepoPicker(false), []);
   const [menu, setMenu] = useState<MenuAt | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -639,55 +762,63 @@ export function App() {
 
   const actions = mode.kind === "unstaged" || mode.kind === "staged" ? mode.kind : null;
   const notify = useCallback((text: string, undo = false) => setToast({ text, undo }), []);
-  const writable = diff?.b.kind === "worktree";
+  const writable = !folder && diff?.b.kind === "worktree";
   const filesIn = useFilesIn({ repo, writable, tree, view: filesView, onView: showFiles, open: active, notify, startActing, settle });
   const dropDir = filesIn.clash?.plan.dir ?? filesIn.drag?.target ?? null;
   const dropIgnored = dropDir !== null && isIgnored(tree, dropDir);
   const sideTree = useMemo(() => ghostTree(tree, filesIn.clash), [tree, filesIn.clash]);
 
-  const queued = useRef<{ action: StageAction; root: string; mode: "unstaged" | "staged" }[]>([]);
-  const act = async (action: StageAction, target: number | "file" | null, press?: (typeof queued.current)[number]) => {
-    if (!repo || !file || !actions) return;
-    if (wholeSide && target === null) target = "file";
-    if (press && (press.root !== repo.root || press.mode !== actions)) {
-      queued.current = [];
-      return;
-    }
-    if (acting.current) {
-      const keepsMeaningWhenQueued = target === null && action !== "discard" && !selection.size;
-      if (keepsMeaningWhenQueued) queued.current.push({ action, root: repo.root, mode: actions });
-      return;
-    }
-    if (file.status === "unchanged") return notify(`${file.path.split("/").pop()} has no changes here`);
-    let lines: LineRef[] | null = null;
-    const folded = file.noise && !expanded.has("noise");
-    if (target !== "file" && file.hunks.length && !folded && preview?.kind !== "image") {
-      const changed = changedRefs(file, selection);
-      if (target === null && selection.size && !changed.length) return notify("No changed lines selected");
-      const picked = changed.filter((r) => target === null || r.hunk === target);
-      const widened = wholeHunks ? [...new Set(picked.map((r) => r.hunk))].flatMap((h) => hunkRefs(file, h)) : picked;
-      lines = widened.length ? widened : hunkRefs(file, target ?? focusHunk);
-    }
+  const queued = useRef<{ action: StageAction; root: string; mode: "unstaged" | "staged"; path: string }[]>([]);
+  const refsFor = (target: number | "file" | null, keys: ReadonlySet<string>, hunk = focusHunk): LineRef[] | null => {
+    if (!file || target === "file" || !file.hunks.length || (file.noise && !expanded.has("noise")) || preview?.kind === "image") return null;
+    const picked = changedRefs(file, keys).filter((r) => target === null || r.hunk === target);
+    const widened = wholeHunks ? [...new Set(picked.map((r) => r.hunk))].flatMap((h) => hunkRefs(file, h)) : picked;
+    return widened.length ? widened : hunkRefs(file, target ?? hunk);
+  };
+  const send = async (action: StageAction, file: FileDiff, lines: LineRef[] | null) => {
+    if (!repo || !actions) return;
+    const whole = lines ? [...new Set(lines.map((r) => r.hunk))].filter((h) => lines.filter((r) => r.hunk === h).length === hunkRefs(file, h).length) : [];
+    // Set before act(): the watcher can deliver the new diff first.
+    actedOn.current = whole.includes(focusHunk)
+      ? { view: shownView, hunk: file.hunks[focusHunk], next: focusHunk - whole.filter((h) => h < focusHunk).length, left: file.hunks.length - whole.length }
+      : null;
     startActing();
     const view = shownView;
     const undoId = crypto.randomUUID();
+    const hunk = file.hunks[lines?.[0]?.hunk ?? focusHunk];
+    if (hunk) remember(undoSpots.current, undoId, { to: mode.kind, path: file.path, line: hunk.newStart });
     try {
       notify(await window.moire.act(repo.root, { mode: actions, action, file, lines, undoId }), true);
-      const whole =
-        action === "stage" && lines
-          ? [...new Set(lines.map((r) => r.hunk))].filter((h) => lines.filter((r) => r.hunk === h).length === hunkRefs(file, h).length)
-          : [];
-      const added = whole.map((h): Stub => {
+      if (action === "stage" && notesOpen && currentStop !== null && stagedStops.get(currentStop) !== "full") stopStagedFrom.current = currentStop;
+      const added = (action === "stage" ? whole : []).map((h): Stub => {
         const { newStart, oldStart, oldLines } = file.hunks[h];
         return { treeLine: newStart, indexLine: oldLines ? oldStart : oldStart + 1, count: hunkRefs(file, h).length, undoId, undoable: true };
       });
       if (shownRef.current === view) setStubs((cur) => [...outdated(cur), ...added]);
     } catch (e) {
       queued.current = [];
+      actedOn.current = null;
       notify(message(e));
     }
     clear();
     settle();
+  };
+  const act = async (action: StageAction, target: number | "file" | null, press?: (typeof queued.current)[number]) => {
+    if (!repo || !file || !actions) return;
+    if (wholeSide && target === null) target = "file";
+    if (press && (press.root !== repo.root || press.mode !== actions || press.path !== file.path)) {
+      queued.current = [];
+      return;
+    }
+    if (acting.current) {
+      const keepsMeaningWhenQueued = target === null && action !== "discard" && !selection.size;
+      if (keepsMeaningWhenQueued) queued.current.push({ action, root: repo.root, mode: actions, path: file.path });
+      return;
+    }
+    if (file.status === "unchanged") return notify(`${file.path.split("/").pop()} has no changes here`);
+    const lines = refsFor(target, selection);
+    if (lines && target === null && selection.size && !changedRefs(file, selection).length) return notify("No changed lines selected");
+    await send(action, file, lines);
   };
   const actRef = useRef(act);
   actRef.current = act;
@@ -798,6 +929,7 @@ export function App() {
     async (only?: string) => {
       if (!repo) return;
       const root = repo.root;
+      const from = activeRef.current;
       startActing();
       try {
         const result = await window.moire.undo(root, only);
@@ -805,6 +937,8 @@ export function App() {
         else if ("label" in result) {
           notify(`Undid: ${result.label}`);
           setStubs((cur) => cur.filter((stub) => stub.undoId !== result.id));
+          const spot = undoSpots.current.get(result.id);
+          if (spot?.to === mode.kind) arrive.current = { ...spot, onOldSide: false, note: false, undone: true, from };
         } else {
           const save = () => {
             startActing();
@@ -832,7 +966,7 @@ export function App() {
       }
       settle();
     },
-    [repo, notify, startActing, settle],
+    [repo, mode.kind, notify, startActing, settle],
   );
   const undo = useCallback(() => void undoEntry(), [undoEntry]);
 
@@ -842,6 +976,11 @@ export function App() {
         ? `No agent notes yet. An agent writes them to ${notesFile?.path ?? ".git/moire/notes.json"}`
         : `No agent notes for this ${notesFor ? "commit" : "comparison"}`,
     );
+  const toggleNotes = () => {
+    if (!agentNotes) return notesHelp();
+    if (!notesFit) return notify("No room for notes at this width. Widen the window or narrow the sidebar.");
+    setNotesPref(notesOpen ? "off" : "on");
+  };
   const rangeAt = (index: number) => {
     const stop = stops[index];
     return stop && agentNotes?.chapters[stop.chapter].ranges[stop.range];
@@ -951,6 +1090,16 @@ export function App() {
     else setStopAt(null);
   }, [busy]);
 
+  useEffect(() => {
+    const from = stopStagedFrom.current;
+    if (from === null || busy || queued.current.length) return;
+    stopStagedFrom.current = null;
+    if (stagedStops.get(from) !== "full") return;
+    const next = stops.findIndex((_, i) => i > from && stagedStops.get(i) !== "full" && shownPaths.has(rangeAt(i)!.path));
+    if (next >= 0) goToStop(next);
+    else setStopAt(null);
+  }, [busy]);
+
   const selectFile = useCallback(
     (delta: number, focus: "first" | "last" | null = null) => {
       const index = listed.findIndex((f) => f.path === active);
@@ -1003,6 +1152,7 @@ export function App() {
       setCommitted(null);
       setNotesFile(null);
       setStopAt(null);
+      setStayInAll(false);
       setRepo(info);
     },
     [reset],
@@ -1052,17 +1202,60 @@ export function App() {
     layoutShown.current = true;
   }, [autoUnified]);
 
+  const openAt = async (root: string, path: string, line: number) => {
+    const editor = await window.moire.openInEditor(root, path, line);
+    if (editor) notify(`Opened in ${editor}`);
+    else setEditorPicker({ path, line });
+  };
   const openEditor = () => {
     if (!repo || !file) return;
     if (file.status === "deleted") return notify(`${file.path.split("/").pop()} was deleted, so there's nothing to open`);
-    window.moire.openInEditor(repo.root, file.path, editorLine(file, rows, selection, focusHunk)).then(
-      (editor) => notify(`Opened in ${editor}`),
-      (e) => notify(message(e)),
-    );
+    openAt(repo.root, file.path, editorLine(file, rows, selection, focusHunk)).catch((e) => notify(message(e)));
+  };
+  const closeEditorPicker = useCallback(() => setEditorPicker(null), []);
+  const chooseEditor = (template: string) => {
+    const pending = editorPicker;
+    setEditorPicker(null);
+    window.moire
+      .chooseEditor(template)
+      .then((name) => (repo && pending?.path ? openAt(repo.root, pending.path, pending.line) : notify(`Files will open in ${name}`)))
+      .catch((e) => notify(message(e)));
   };
   const openMenu = (path: string, event: React.MouseEvent) => {
     event.preventDefault();
-    setMenu({ path, x: event.clientX, y: event.clientY });
+    setMenu({ path, x: event.clientX, y: event.clientY, file: files.find((f) => f.path === path) });
+  };
+  const openLineMenu = (row: LineRow, side: "a" | "b" | null, event: React.MouseEvent) => {
+    if (!file) return;
+    event.preventDefault();
+    if (row.hunk >= 0) setFocusHunk(row.hunk);
+    const onPicked = isPicked(row, side, selection, selCol);
+    if (!onPicked) clear();
+    const picked = onPicked ? selection : new Set<string>();
+    const canAct = changedRefs(file, picked).length > 0 || (row.hunk >= 0 && !picked.size);
+    const lines = canAct ? refsFor(onPicked && wholeSide ? "file" : null, picked, row.hunk) : null;
+    const line = {
+      no: file.status === "deleted" ? null : newSideLine(file, row),
+      inHunk: row.hunk >= 0,
+      text: viewRef.current?.selectedText?.() ?? "",
+      picked: picked.size,
+      scope: !canAct ? null : !lines ? ("file" as const) : picked.size ? lines.length : ("hunk" as const),
+      file,
+      lines,
+    };
+    setMenu({ path: file.path, x: event.clientX, y: event.clientY, line });
+  };
+  const actOnFile = async (action: "stage" | "unstage" | "discard", target: FileDiff) => {
+    if (!repo || !actions || acting.current) return;
+    startActing();
+    try {
+      notify(await window.moire.act(repo.root, { mode: actions, action, file: target, lines: null }), true);
+      setStubs(outdated);
+    } catch (e) {
+      notify(message(e));
+    }
+    clear();
+    settle();
   };
   const pickMenu = (action: MenuAction) => {
     if (!repo || !menu) return;
@@ -1071,6 +1264,10 @@ export function App() {
     const done = (text: string) => () => notify(text);
     const fail = (e: unknown) => notify(message(e));
     const line = file && path === file.path ? editorLine(file, rows, selection, focusHunk) : 1;
+    // The menu's own copies of the diff, so main refuses them if the file has moved on since the menu opened.
+    const actOnLines = async (action: StageAction) => {
+      if (menu.line && !acting.current) await send(action, menu.line.file, menu.line.lines);
+    };
     const run: Record<MenuAction, () => Promise<unknown>> = {
       copy: () => window.moire.copy(path).then(done(`Copied ${path}`)),
       "copy-abs": () => window.moire.copy(`${repo.root}/${path}`).then(done(`Copied ${repo.root}/${path}`)),
@@ -1081,9 +1278,18 @@ export function App() {
         copiedFile(name, picked.count);
       },
       reveal: () => window.moire.revealFile(repo.root, path),
-      editor: () => window.moire.openInEditor(repo.root, path, line).then((editor) => notify(`Opened in ${editor}`)),
+      editor: () => openAt(repo.root, path, line),
       open: () => window.moire.openWithDefault(repo.root, path).then(done(`Opened ${name}`)),
       "copy-here": () => filesIn.pickInto(menu.path),
+      "stage-file": async () => menu.file && (await actOnFile("stage", menu.file)),
+      "unstage-file": async () => menu.file && (await actOnFile("unstage", menu.file)),
+      "discard-file": async () => menu.file && (await actOnFile("discard", menu.file)),
+      "copy-text": () => window.moire.copy(menu.line?.text ?? "").then(done("Copied")),
+      "copy-lines": async () => runCommand("copyCode"),
+      "copy-markdown": async () => runCommand("copyMarkdown"),
+      "stage-here": () => actOnLines(actions === "staged" ? "unstage" : "stage"),
+      "discard-here": () => actOnLines("discard"),
+      "editor-line": () => openAt(repo.root, path, menu.line?.no ?? line),
     };
     run[action]().catch(fail);
   };
@@ -1113,6 +1319,37 @@ export function App() {
     [setSimpleMode],
   );
 
+  const root = repo?.root;
+  const compareRun = useRef(0);
+  useEffect(() => {
+    if (!root) return;
+    const take = async () => {
+      const args = await window.moire.takeCompare();
+      if (!args) return;
+      const run = ++compareRun.current;
+      if (args[0] === "pr") notify(`Fetching PR #${args[1]}…`);
+      try {
+        const next = await window.moire.compareMode(root, args);
+        if (run !== compareRun.current) return;
+        setMode(next);
+        if (args[0] === "pr") {
+          setToast(null);
+          // The refs have the same names after a re-fetch, so the mode alone wouldn't reload.
+          refresh();
+        }
+      } catch (e) {
+        if (run === compareRun.current) notify(message(e));
+      }
+    };
+    const start = () => void take();
+    start();
+    const off = window.moire.onCompare(start);
+    return () => {
+      compareRun.current++;
+      off();
+    };
+  }, [root, setMode, notify, refresh]);
+
   const run: Record<CommandId, () => void> = {
     nextHunk: () => moveHunk(1),
     prevHunk: () => moveHunk(-1),
@@ -1125,10 +1362,9 @@ export function App() {
     prevHit: () => search.step(-1),
     filterFiles: () => filterInput.current?.focus(),
     allFiles: () => showFiles(filesView === "all" ? "changed" : "all"),
-    grouping: () => setGrouping(grouping === "paired" ? "folder" : "paired"),
     nextNote: () => stepNote(1),
     prevNote: () => stepNote(-1),
-    notes: () => (agentNotes ? setNotesPref(notesOpen ? "off" : "on") : notesHelp()),
+    notes: toggleNotes,
     recentRepos: () => setRepoPicker(true),
     openRepo: pickRepo,
     stage: () =>
@@ -1146,6 +1382,7 @@ export function App() {
       if (hunkRows.length) toggleBlink(focusHunk);
     },
     openEditor: () => editorRef.current(),
+    chooseEditor: () => setEditorPicker({ line: 1 }),
     refresh,
     cancel: () => (blink ? setBlink(null) : selection.size ? clear() : closeSearch()),
     copyMarkdown: () => copyRef.current("markdown"),
@@ -1165,18 +1402,21 @@ export function App() {
     layout: () => chooseLayout(shownLayout === "split" ? "unified" : "split"),
     fullFile: () => setScope(scope === "full" ? "changed" : "full"),
     preview: () => (previewable && !previewable.forced ? togglePreview() : notify("Only Markdown and SVG files switch between preview and diff")),
-    theme: () => setTheme(toneOf(theme) === "dark" ? lightTheme : darkTheme),
+    theme: () => pickTheme(toneOf(theme) === "dark" ? lightTheme : darkTheme),
+    palette: () => setPalette((open) => !open),
     zoomIn: () => void window.moire.stepZoom(1),
     zoomOut: () => void window.moire.stepZoom(-1),
     zoomReset: () => void window.moire.stepZoom(0),
-    help: () => setHelp(true),
+    help: () => setHelp((open) => !open),
     editKeys: () => {
       setHelp(false);
       window.moire.editKeys().catch((e) => notify(message(e)));
     },
   };
-  const latest = useRef({ run, repo, picker, help });
-  latest.current = { run, repo, picker, help };
+  if (folder) for (const id of GIT_ONLY) run[id] = () => notify(`${repo!.name} isn't a git repository`);
+  const dialog = palette ? closePalette : editorPicker ? closeEditorPicker : repoPicker ? closeRepoPicker : themeMenu ? closeThemeMenu : null;
+  const latest = useRef({ run, repo, picker, help, dialog });
+  latest.current = { run, repo, picker, help, dialog };
   const runCommand = useCallback((id: CommandId) => {
     const { run, repo } = latest.current;
     if (!repo && !command(id).noRepo) return;
@@ -1187,13 +1427,17 @@ export function App() {
   const pending = useRef<{ stroke: string; at: number } | null>(null);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      const { run, repo, picker, help } = latest.current;
+      const { run, repo, picker, help, dialog } = latest.current;
       const stroke = strokeOf(event, MAC);
       if (!stroke) return;
       const prev = pending.current && event.timeStamp - pending.current.at < SEQUENCE_MS ? pending.current.stroke : null;
       pending.current = null;
       const inField = event.target instanceof HTMLElement && !!event.target.closest("input:not([type=checkbox]), select, textarea, .file-menu");
       const id = lookup(keymapRef.current, prev, stroke);
+      if (dialog && id !== "palette") {
+        if (stroke === "Escape") dialog();
+        return;
+      }
       if (id === "prefix") {
         if (!inField && !picker && !help && repo) pending.current = { stroke, at: event.timeStamp };
         return;
@@ -1226,61 +1470,75 @@ export function App() {
   const stagedOnly = mode.kind === "unstaged" && !files.length ? (diff?.progress?.stagedFiles ?? 0) : 0;
   const [committedSha, ...committedSubject] = committed?.split(" ") ?? [];
   const justCommitted = !!committed && !files.length && diff?.repo.head === committedSha && !special;
-  const emptyCopy: Pick<React.ComponentProps<typeof NoChanges>, "copy" | "actions"> = allHidden
-    ? { copy: ["Everything is staged.", "Turn off Hide staged to see the staged files."] }
-    : stagedOnly
-      ? {
-          copy: [
-            stagedOnly === 1 ? "Everything is staged." : `All ${stagedOnly} changes are staged.`,
-            `Review ${stagedOnly === 1 ? "it" : "them"} in the Staged view, then commit.`,
-          ],
-          actions: (
-            <>
-              <button className="btn" onClick={() => setMode({ kind: "staged" })}>
-                Review staged
-                <Key id="staged" />
-              </button>
-              <button className="btn" onClick={commitNow}>
-                Commit
-              </button>
-            </>
-          ),
-        }
-      : justCommitted
+  const emptyCopy: Pick<React.ComponentProps<typeof NoChanges>, "copy" | "actions"> = folder
+    ? {
+        copy: [`${repo!.name} isn't a git repository.`, "Pick a file on the left to read it. Reviewing changes needs a repository."],
+        actions: (
+          <button className="btn" onClick={pickRepo}>
+            Open a repository
+            <Key id="openRepo" />
+          </button>
+        ),
+      }
+    : allHidden
+      ? { copy: ["Everything is staged.", "Turn off Hide staged to see the staged files."] }
+      : stagedOnly
         ? {
             copy: [
-              "Committed.",
-              <>
-                <code>{committedSha}</code> {committedSubject.join(" ")}
-              </>,
+              stagedOnly === 1 ? "Everything is staged." : `All ${stagedOnly} changes are staged.`,
+              `Review ${stagedOnly === 1 ? "it" : "them"} in the Staged view, then commit.`,
             ],
             actions: (
-              <button className="btn" onClick={() => setMode({ kind: "commit", sha: committedSha })}>
-                Show commit
-              </button>
+              <>
+                <button className="btn" onClick={() => setMode({ kind: "staged" })}>
+                  Review staged
+                  <Key id="staged" />
+                </button>
+                <button className="btn" onClick={commitNow}>
+                  Commit
+                </button>
+              </>
             ),
           }
-        : mode.kind === "staged"
+        : justCommitted
           ? {
-              copy: ["Nothing staged.", `Stage hunks in Unstaged with ${k("stage") || "the Stage button"} as you review them. They wait here for the commit.`],
-              actions: (
+              copy: [
+                "Committed.",
                 <>
-                  <button className="btn" onClick={() => setMode({ kind: "unstaged" })}>
-                    Review unstaged
-                    <Key id="unstaged" />
-                  </button>
-                  <button className="btn" onClick={() => showFiles("all")}>
-                    All files
-                    <Key id="allFiles" />
-                  </button>
-                </>
+                  <code>{committedSha}</code> {committedSubject.join(" ")}
+                </>,
+              ],
+              actions: (
+                <button className="btn" onClick={() => setMode({ kind: "commit", sha: committedSha })}>
+                  Show commit
+                </button>
               ),
             }
-          : {};
+          : mode.kind === "staged"
+            ? {
+                copy: [
+                  "Nothing staged.",
+                  `Stage hunks in Unstaged with ${k("stage") || "the Stage button"} as you review them. They wait here for the commit.`,
+                ],
+                actions: (
+                  <>
+                    <button className="btn" onClick={() => setMode({ kind: "unstaged" })}>
+                      Review unstaged
+                      <Key id="unstaged" />
+                    </button>
+                    <button className="btn" onClick={() => showFiles("all")}>
+                      All files
+                      <Key id="allFiles" />
+                    </button>
+                  </>
+                ),
+              }
+            : {};
 
   const toolbar = (
     <Toolbar
       root={repo?.root ?? null}
+      folder={folder}
       mode={mode}
       a={diff?.a}
       b={diff?.b}
@@ -1288,19 +1546,30 @@ export function App() {
       autoLayout={autoUnified}
       scope={scope}
       theme={theme}
+      themeMenu={themeMenu}
+      onThemeMenu={setThemeMenu}
       cvd={cvd === "on"}
+      followSystem={followSystem === "on"}
       picker={picker}
       lastPicked={lastPicked}
       onPicker={setPicker}
       onMode={setMode}
       onLayout={chooseLayout}
       onScope={setScope}
-      onTheme={setTheme}
+      onTheme={pickTheme}
       onCvd={(on) => setCvd(on ? "on" : "off")}
+      onFollowSystem={(on) => setFollowSystem(on ? "on" : "off")}
+      codeFont={codeFont}
+      codeSize={codeSize}
+      onCodeFont={setCodeFont}
+      onCodeSize={setCodeSize}
       onSearch={openSearch}
       notes={agentNotes ? { open: notesOpen } : null}
-      onNotes={() => setNotesPref(notesOpen ? "off" : "on")}
+      onNotes={toggleNotes}
     />
+  );
+  const commandPalette = palette && (
+    <CommandPalette available={(id) => (repo ? !(folder && GIT_ONLY.includes(id)) : command(id).noRepo === true)} onRun={runCommand} onClose={closePalette} />
   );
   const keysHelp = help && (
     <KeysHelp hints={hints === "on"} onHints={(on) => setHints(on ? "on" : "off")} onClose={closeHelp} onEdit={() => runCommand("editKeys")} />
@@ -1316,6 +1585,7 @@ export function App() {
         <HoverTip />
         {repoPicker && <RepoPicker current={null} onOpen={openRecent} onBrowse={pickRepo} onClose={closeRepoPicker} />}
         {keysHelp}
+        {commandPalette}
       </div>
     );
   }
@@ -1344,8 +1614,6 @@ export function App() {
             upstream={upstream}
             view={filesView}
             onView={showFiles}
-            grouping={grouping}
-            onGrouping={setGrouping}
             files={listed}
             changed={files}
             tree={sideTree}
@@ -1361,6 +1629,7 @@ export function App() {
             onMenu={openMenu}
             onSwitchRepo={() => setRepoPicker(true)}
             onMode={setMode}
+            reveal={folderReveal}
             width={side}
             onWidth={setSideWidth}
           >
@@ -1419,6 +1688,8 @@ export function App() {
                     ? { index: hunkRows[pendingFocus.current === "first" ? 0 : hunkRows.length - 1], align: "start" }
                     : undefined
               }
+              spot={spots.current.get(spotKey)?.at}
+              onSpot={(at) => remember(spots.current, spotKey, { hunk: file.hunks[focusHunk], at })}
               layout={shownLayout}
               a={diff.a}
               b={diff.b}
@@ -1448,6 +1719,7 @@ export function App() {
               blink={blink}
               onBlink={toggleBlink}
               onMenu={openMenu}
+              onLineMenu={openLineMenu}
               onStub={(action, line) =>
                 action === "undo"
                   ? void undoEntry(stubs.findLast((s) => s.treeLine === line && s.undoable)?.undoId ?? "")
@@ -1455,15 +1727,24 @@ export function App() {
               }
               notice={
                 <>
-                  {file.changedSinceStaged && <StagedNotice newEdits={diff.a.kind === "index"} onMode={setMode} />}
+                  {file.changedSinceStaged && !quietNotices.has(`${repo.root}:${file.path}`) && (
+                    <StagedNotice
+                      newEdits={diff.a.kind === "index"}
+                      onMode={setMode}
+                      onClose={() => setQuietNotices((cur) => new Set(cur).add(`${repo.root}:${file.path}`))}
+                    />
+                  )}
                   {!preview && undecoded && <EncodingNotice staging={!!actions && file.status !== "unchanged"} />}
                 </>
               }
               notes={notesOpen && fileMarks ? { marks: fileMarks, chapter: currentStop === null ? null : stops[currentStop].chapter, stop: currentStop } : null}
+              onRevealFolder={revealFolder}
             />
           )}
           {notesOpen && agentNotes && (
             <NotesPanel
+              width={shownNotesWidth}
+              onWidth={setNotesWidth}
               notes={agentNotes}
               stops={stops}
               stop={currentStop}
@@ -1485,23 +1766,37 @@ export function App() {
       )}
       <DropSlots drag={filesIn.drag} slots={filesIn.slots} writable={writable} />
       <DropStyle drag={filesIn.drag} clash={filesIn.clash} ignored={dropIgnored} />
-      <StatusBar loadedAt={loadedAt} files={files} error={error} actions={actions} zoom={zoom} notes={!!agentNotes} onCommand={runCommand} />
+      <StatusBar loadedAt={loadedAt} files={files} error={error} actions={actions} zoom={zoom} folder={folder} notes={!!agentNotes} onCommand={runCommand} />
       <Toast toast={toast} onUndo={undo} />
       <HoverTip />
       {menu && (
-        <FileMenu at={menu} onDisk={files.find((f) => f.path === menu.path)?.status !== "deleted"} copyHere={writable} onPick={pickMenu} onClose={closeMenu} />
+        <FileMenu
+          at={menu}
+          onDisk={files.find((f) => f.path === menu.path)?.status !== "deleted"}
+          copyHere={writable}
+          actions={actions}
+          changed={files.some((f) => f.path === menu.path)}
+          onPick={pickMenu}
+          onClose={closeMenu}
+        />
       )}
       {repoPicker && <RepoPicker current={repo.root} onOpen={openRecent} onBrowse={pickRepo} onClose={closeRepoPicker} />}
+      {editorPicker && <EditorPicker onPick={chooseEditor} onClose={closeEditorPicker} />}
       {keysHelp}
+      {commandPalette}
     </div>
   );
+}
+
+function newSideLine(file: FileDiff, row: LineRow): number {
+  return Math.max(1, (row.t === "split" ? row.b?.no : row.b) ?? file.hunks[row.hunk]?.newStart ?? 1);
 }
 
 function editorLine(file: FileDiff, rows: Row[], selection: ReadonlySet<string>, focusHunk: number): number {
   for (const r of selection.size ? rows : []) {
     const picked = r.t === "split" ? [r.a, r.b].some((s) => s?.sel && selection.has(s.sel)) : r.t === "uni" && !!r.line.sel && selection.has(r.line.sel);
     if (!picked || (r.t !== "split" && r.t !== "uni")) continue;
-    return (r.t === "split" ? r.b?.no : r.b) ?? file.hunks[r.hunk]?.newStart ?? 1;
+    return newSideLine(file, r);
   }
   const hunk = file.hunks[focusHunk];
   return Math.max(1, hunk?.lines.find((l) => l.kind === "add")?.newNo ?? hunk?.newStart ?? 1);

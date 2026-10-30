@@ -18,8 +18,9 @@ export function KeysHelp({ hints, onHints, onClose, onEdit }: Props) {
   }, []);
 
   useEffect(() => {
+    // The status bar's button toggles this dialog, so closing here too would let its click reopen it.
     const away = (event: MouseEvent) => {
-      if (!ref.current?.contains(event.target as Node)) onClose();
+      if (!ref.current?.contains(event.target as Node) && !(event.target as Element).closest?.('[data-command="help"]')) onClose();
     };
     const esc = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -39,7 +40,7 @@ export function KeysHelp({ hints, onHints, onClose, onEdit }: Props) {
           <section key={group}>
             <h3>{group}</h3>
             {COMMAND_IDS.filter((id) => COMMANDS[id].group === group && keymap.keys[id].length).map((id) => (
-              <div className="keys-row" key={id} title={`"${id}" in keys.json`}>
+              <div className="keys-row" key={id} data-tip={`"${id}" in keys.json`}>
                 <span>{COMMANDS[id].label}</span>
                 <span>
                   {keymap.keys[id].map((key) => (

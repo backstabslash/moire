@@ -1,25 +1,17 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { git, initRepo, launch, shot, tmp } = harness();
 let repo: string;
-let userData: string;
 let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
 
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
-const shot = (name: string) => process.env.MOIRE_SHOTS && page.screenshot({ path: join(process.env.MOIRE_SHOTS, `${name}.png`) });
 const html = () => page.locator("html");
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   const body = Array.from({ length: 40 }, (_, i) => `export const v${i} = ${i}; // value ${i}`);
   writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
   git("add", "-A");
@@ -34,23 +26,8 @@ test.beforeAll(async () => {
   ];
   writeFileSync(join(repo, "a.ts"), changed.join("\n") + "\n");
 
-  app = await electron.launch({
-    args: [resolve("."), `--user-data-dir=${userData}`, repo],
-    env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_PREFS: '{"theme":"light"}' },
-  });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ app, page } = await launch(repo, { prefs: { theme: "light" } }));
   await expect(page.locator(".hunk-head")).toHaveCount(2);
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
 });
 
 test("the theme menu switches themes and colour-blind plates", async () => {
@@ -68,7 +45,19 @@ test("the theme menu switches themes and colour-blind plates", async () => {
   await page.getByRole("menuitemcheckbox", { name: /Colour-blind/ }).click();
   await page.keyboard.press("Escape");
   await expect(page.locator(".theme-pop")).toHaveCount(0);
-  await expect(page.locator(".theme-btn")).toContainText("Safelight");
+  await expect(page.locator(".theme-btn")).toHaveAccessibleName("Theme: Safelight");
+});
+
+test("the theme menu holds review keys, and Escape closes only the menu", async () => {
+  await page.keyboard.press("/");
+  await page.locator(".theme-btn").click();
+  for (const key of ["s", "x", "t"]) await page.keyboard.press(key);
+  expect(git("diff", "--cached")).toBe("");
+  expect(git("diff")).toContain("export const extra = true;");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".theme-pop")).toHaveCount(0);
+  await expect(page.locator(".search")).toBeVisible();
+  await page.locator(".search-nav[aria-label=Close]").click();
 });
 
 test("t swaps between the last light and the last dark theme", async () => {
@@ -83,7 +72,7 @@ test("t swaps between the last light and the last dark theme", async () => {
   await page.keyboard.press("t");
   await expect(html()).toHaveAttribute("data-theme", "pad");
   for (const [name, id] of [
-    [/^Plate Glass/, "light"],
+    [/^Plate$/, "light"],
     [/^Plate dark/, "dark"],
     [/Engineering/, "pad"],
     [/P7/, "p7"],
@@ -94,7 +83,18 @@ test("t swaps between the last light and the last dark theme", async () => {
     await expect(html()).toHaveAttribute("data-theme", id);
     await shot(`theme-${id}`);
   }
-  await pick(/^Plate Glass/);
+  await pick(/^Plate$/);
+});
+
+test("switching themes recolours code without highlighting again", async () => {
+  const keyword = page.locator(".cell.add span", { hasText: "export" }).first();
+  await expect(keyword).toHaveAttribute("style", /var\(--tok-kw\)/);
+  const colour = await keyword.evaluate((el) => getComputedStyle(el).color);
+  await page.keyboard.press("t");
+  await expect(keyword).not.toHaveCSS("color", colour);
+  await expect(keyword).toHaveAttribute("style", /var\(--tok-kw\)/);
+  await page.keyboard.press("t");
+  await expect(keyword).toHaveCSS("color", colour);
 });
 
 test("holding b shows plate A in place, and letting go shows plate B", async () => {
@@ -151,4 +151,54 @@ test("Ctrl+= zooms in, shows the level, and Ctrl+0 resets it", async () => {
   await page.locator(".status .zoom").click();
   await expect.poll(factor).toBe(1);
   await expect(page.locator(".status .zoom")).toHaveCount(0);
+});
+
+test("code font and size apply to the diff and survive a reload", async () => {
+  await page.locator(".theme-btn").click();
+  await page.getByLabel("Larger code").click();
+  await page.getByLabel("Code font").fill("Liberation Mono");
+  await shot("code-font");
+  await page.keyboard.press("Escape");
+  const cell = page.locator(".diff").first();
+  await expect.poll(() => cell.evaluate((el) => getComputedStyle(el).fontSize)).toBe("16px");
+  await expect.poll(() => cell.evaluate((el) => getComputedStyle(el).fontFamily)).toContain("Liberation Mono");
+  await page.reload();
+  await expect(page.locator(".diff").first()).toBeVisible();
+  await expect
+    .poll(() =>
+      page
+        .locator(".diff")
+        .first()
+        .evaluate((el) => getComputedStyle(el).fontSize),
+    )
+    .toBe("16px");
+});
+
+test("the theme follows the desktop until you pick the other tone", async () => {
+  ({ page } = await launch(repo, { data: tmp("data") }));
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(page.locator(".hunk-head").first()).toBeVisible();
+  const follow = page.getByRole("menuitemcheckbox", { name: /Follow system/ });
+  await expect(html()).toHaveAttribute("data-theme", "light");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(html()).toHaveAttribute("data-theme", "dark");
+
+  await page.locator(".theme-btn").click();
+  await expect(follow).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("menuitemradio", { name: /Safelight/ }).click();
+  await expect(follow).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(html()).toHaveAttribute("data-theme", "light");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(html()).toHaveAttribute("data-theme", "safelight");
+
+  await page.keyboard.press("t");
+  await expect(html()).toHaveAttribute("data-theme", "light");
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(html()).toHaveAttribute("data-theme", "light");
+  await page.locator(".theme-btn").click();
+  await expect(follow).toHaveAttribute("aria-checked", "false");
+  await page.keyboard.press("Escape");
 });

@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assetName,
@@ -46,7 +50,10 @@ describe("linux install", () => {
   });
 
   it("quotes paths with shell characters", () => {
-    expect(desktopEntry('/home/a "b"/moire', false)).toContain('Exec="/home/a \\"b\\"/moire/current/moire" %U');
+    const odd = '/a "$b`c\\d/moire';
+    const quoted = '"/a \\"\\$b\\`c\\\\d/moire/current/moire"';
+    expect(desktopEntry(odd, false)).toContain(`Exec=${quoted} %U`);
+    expect(binScript(odd, false)).toContain(`exec ${quoted} "$@"`);
   });
 });
 
@@ -56,6 +63,14 @@ describe("parseArgs", () => {
     expect(parseArgs(["-h"])).toMatchObject({ help: true, path: undefined });
     expect(parseArgs(["--version", "--uninstall"])).toMatchObject({ version: true, uninstall: true });
     expect(parseArgs(["--verbose", "."]).unknown).toBe("--verbose");
+  });
+
+  it("separates a path from a comparison, leaving comparisons unresolved", () => {
+    const none = () => false;
+    expect(parseArgs(["main..feature"], none)).toMatchObject({ path: undefined, compare: ["main..feature"] });
+    expect(parseArgs(["../repo", "HEAD~3"], none)).toMatchObject({ path: "../repo", compare: ["HEAD~3"] });
+    expect(parseArgs(["pr", "123", "--no-sandbox"], () => true)).toMatchObject({ path: undefined, compare: ["pr", "123"], noSandbox: true });
+    expect(parseArgs(["main"], () => true)).toMatchObject({ path: "main", compare: [] });
   });
 });
 
@@ -80,12 +95,43 @@ describe("launch and uninstall", () => {
   it("opens the app with the repo", () => {
     expect(launchCommand("linux", "/home/u", {}, true, "/r")).toEqual({ cmd: "/home/u/.local/share/moire/current/moire", args: ["--no-sandbox", "/r"] });
     expect(launchCommand("darwin", "/Users/u", {}, false, "/r")).toEqual({ cmd: "open", args: ["-na", "/Users/u/Applications/moire.app", "--args", "/r"] });
+    expect(launchCommand("linux", "/home/u", {}, false, "/r", ["pr", "1"]).args).toEqual(["/r", "pr", "1"]);
+    expect(launchCommand("darwin", "/Users/u", {}, false, "/r", ["a..b"]).args.slice(-2)).toEqual(["/r", "a..b"]);
   });
 
-  it("gives macOS a terminal command that passes an absolute path", () => {
-    const shim = macShim("/Users/u/Applications/moire.app");
-    expect(shim).toContain('dir="$PWD/${1:-.}"');
-    expect(shim).toContain('exec open -na "/Users/u/Applications/moire.app" --args "$dir"');
+  describe("the macOS terminal command", () => {
+    const opened = (/** @type {string[]} */ args) => {
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), "moire-shim-")));
+      mkdirSync(join(dir, "bin"));
+      mkdirSync(join(dir, "work", "repo"), { recursive: true });
+      mkdirSync(join(dir, "work", "pr"));
+      writeFileSync(join(dir, "bin", "open"), `#!/bin/sh\nfor a; do echo "$a"; done\n`, { mode: 0o755 });
+      writeFileSync(join(dir, "moire"), macShim("/A/moire.app"), { mode: 0o755 });
+      const out = execFileSync(join(dir, "moire"), args, { cwd: join(dir, "work"), env: { PATH: `${join(dir, "bin")}:/usr/bin:/bin` }, encoding: "utf8" });
+      rmSync(dir, { recursive: true, force: true });
+      return out
+        .trim()
+        .split("\n")
+        .slice(3)
+        .map((a) => a.replace(join(dir, "work"), "$PWD"));
+    };
+
+    it("always sends an absolute repo first, since open starts the app in /", () => {
+      expect(opened([])).toEqual(["$PWD"]);
+      expect(opened(["repo"])).toEqual(["$PWD/repo"]);
+      expect(opened(["/srv/repo"])).toEqual(["/srv/repo"]);
+    });
+
+    it("passes comparisons on, with or without a path", () => {
+      expect(opened(["main..feature"])).toEqual(["$PWD", "main..feature"]);
+      expect(opened(["/srv/repo", "HEAD~3"])).toEqual(["/srv/repo", "HEAD~3"]);
+      expect(opened(["repo", "pr", "123"])).toEqual(["$PWD/repo", "pr", "123"]);
+    });
+
+    it("reads pr 123 as a pull request even beside a folder called pr", () => {
+      expect(opened(["pr", "123"])).toEqual(["$PWD", "pr", "123"]);
+      expect(opened(["pr"])).toEqual(["$PWD/pr"]);
+    });
   });
 
   it("lists what install put in the home folder, and where settings live", () => {

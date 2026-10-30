@@ -184,7 +184,7 @@ export function ClashBar({ clash, onDecide, onCancel }: BarProps) {
       <button className="btn" onClick={() => onDecide("skip", all)}>
         Skip
       </button>
-      <button className="btn" title={`Copies it as ${keepName(name)}`} onClick={() => onDecide("keep", all)}>
+      <button className="btn" data-tip={`Copies it as ${keepName(name)}`} onClick={() => onDecide("keep", all)}>
         Keep both
       </button>
       <button className="btn primary" onClick={() => onDecide("replace", all)}>
@@ -274,6 +274,7 @@ export function ClashView({ clash, layout, scope }: ViewProps) {
       onBlink={noop}
       onMenu={noop}
       onStub={noop}
+      onLineMenu={noop}
     />
   );
 }

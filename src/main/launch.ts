@@ -1,22 +1,27 @@
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 export interface LaunchRequest {
   path?: string;
+  compare?: string[];
   cwd: string;
 }
 
 // In dev, argv[1] is the app folder that electron was started with.
-export function launchRequest(argv: string[], cwd: string, packaged: boolean): LaunchRequest {
-  const arg = argv.slice(packaged ? 1 : 2).find((a) => !a.startsWith("-"));
-  return arg ? { path: resolve(cwd, arg), cwd } : { cwd };
+export function launchRequest(argv: string[], cwd: string, packaged: boolean, exists = existsSync): LaunchRequest {
+  const args = argv.slice(packaged ? 1 : 2).filter((a) => !a.startsWith("-"));
+  const pr = args[0] === "pr" && /^\d+$/.test(args[1] ?? "");
+  const hasPath = !!args.length && !pr && (/^\.{0,2}\/|^\.{1,2}$/.test(args[0]) || exists(resolve(cwd, args[0])));
+  const compare = args.slice(hasPath ? 1 : 0);
+  return { ...(hasPath && { path: resolve(cwd, args[0]) }), ...(compare.length && { compare }), cwd };
 }
 
 export function isLaunchRequest(data: unknown): data is LaunchRequest {
   const d = data as LaunchRequest | null;
-  return typeof d?.cwd === "string" && (d.path === undefined || typeof d.path === "string");
+  const compare = d?.compare === undefined || (Array.isArray(d.compare) && d.compare.every((a) => typeof a === "string"));
+  return typeof d?.cwd === "string" && (d.path === undefined || typeof d.path === "string") && compare;
 }
 
 // Fedora Atomic and others link /home to /var/home, so $HOME and the paths the system reports differ.

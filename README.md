@@ -2,7 +2,7 @@
   <img src="build/icons/128x128.png" width="96" alt="Moire">
 </p>
 
-<p align="center"><b>Your agent touched 40 files. Read why, keep the good lines, throw out the rest.</b></p>
+<p align="center"><b>Your agent touched 40 files. Read why, keep what's right, throw out what isn't.</b></p>
 
 <p align="center">
   <a href="https://github.com/backstabslash/moire/actions/workflows/ci.yml"><img src="https://github.com/backstabslash/moire/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -12,10 +12,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
-Moire is a desktop diff viewer for git, built for reviewing what a coding agent changed. The agent explains its work as chapters beside the diff. You step through them, stage what's right and discard what isn't, down to a single line.
+Moire is a desktop diff viewer for reviewing what a coding agent changed. The agent explains its work as chapters beside the diff, and you stage what's right and discard what isn't, down to a single line.
 
-![Moire stepping through an agent's notes on a rate limiter rewrite: reading a chapter and its warning, staging the chapter, blinking a hunk, discarding a stray debug line, then writing the commit](demo/demo-light.gif#gh-light-mode-only)
-![Moire stepping through an agent's notes on a rate limiter rewrite: reading a chapter and its warning, staging the chapter, blinking a hunk, discarding a stray debug line, then writing the commit](demo/demo-dark.gif#gh-dark-mode-only)
+![Moire reviewing an agent's rate limiter rewrite: reading a chapter of its notes beside the diff, staging that chapter, blinking a one-character fix, discarding a stray debug line no chapter explains, then staging the rest](demo/demo-light.gif#gh-light-mode-only)
+![Moire reviewing an agent's rate limiter rewrite: reading a chapter of its notes beside the diff, staging that chapter, blinking a one-character fix, discarding a stray debug line no chapter explains, then staging the rest](demo/demo-dark.gif#gh-dark-mode-only)
 
 ### Read the agent's notes
 
@@ -29,7 +29,7 @@ It works with Claude Code, Codex, Cursor and other agents that read skills.
 
 ### Keep what's right, throw out the rest
 
-- Stage a whole chapter once you've read it, or stage, unstage and discard files, hunks and single lines, with undo
+- Stage a whole chapter once you've read it, or stage, unstage and discard files, hunks and single lines, with undo, from the keyboard or a right-click
 - Commit from the staged view
 - Copy selected lines as Markdown with path and line numbers, to paste back into the agent with your feedback
 - Blink a hunk between its old and new version in place, so a one-character change jumps out
@@ -38,9 +38,10 @@ It works with Claude Code, Codex, Cursor and other agents that read skills.
 
 - Side-by-side or unified, with syntax highlighting: unstaged, staged, everything since the last commit, a single commit, or one branch against another
 - Updates by itself as files change
+- Changed tests sit right under their code, so you read them together
 - Search across every changed file; lockfiles, generated files and whitespace-only changes are folded away
 - Changed images shown old and new; Markdown and SVG can be previewed rendered, with changed blocks marked
-- Keyboard-first, with keys you can remap, and six light and dark themes
+- Keyboard-first, with keys you can remap, a command palette, and six light and dark themes that can follow your desktop
 
 ## Install
 
@@ -60,9 +61,12 @@ Or download from [Releases](https://github.com/backstabslash/moire/releases):
 ```sh
 moire                 # the repo in the current folder, else the last one
 moire path/to/repo
+moire main..feature   # what feature adds since it left main
+moire HEAD~3          # the last three commits together
+moire pr 123          # a pull request against its base, fetched with gh
 ```
 
-`moire` returns right away and opens a new window if Moire is already running. The npx install adds the command on macOS too; with the `.dmg` alone, use `open -na moire --args "$PWD"`. Inside the app, `o` lists recent repos and the repo's other worktrees.
+A path can come first, as in `moire path/to/repo main..feature`. `moire` returns right away and opens a new window if Moire is already running. The npx install adds the command on macOS too; with the `.dmg` alone, use `open -na moire --args "$PWD"`. Inside the app, `o` lists recent repos and the repo's other worktrees.
 
 <details>
 <summary>Keyboard shortcuts</summary>
@@ -72,8 +76,10 @@ moire path/to/repo
 | `j` `k` | Next / previous hunk |
 | `g g` / `Shift+G` | First / last hunk |
 | `[` `]` | Previous / next file |
+| `,` `.` | Previous / next agent note |
+| `Shift+I` | Show or hide agent notes |
 | `1`–`5` | Unstaged, staged, all, commit, branch vs branch |
-| Click or drag line numbers | Select lines (Shift-click extends) |
+| Click or drag line numbers | Select lines (click again to clear, Shift-click extends) |
 | `Shift+J` / `Shift+K` | Extend / shrink the selection |
 | `s` | Stage the selection or focused hunk (unstage in the staged view) |
 | `Shift+S` | Stage every file (unstage all in the staged view) |
@@ -83,8 +89,10 @@ moire path/to/repo
 | `Ctrl+C` / `c` | Copy selected lines as code / as Markdown for an agent (`c` alone copies the focused hunk) |
 | `/` or `Ctrl+F` | Search |
 | `p` or `Ctrl+P` | Filter the file list |
+| `Ctrl+Shift+P` | Command palette |
 | `a` | Changed files or all files, gitignored ones included |
-| `e` | Open the file in your editor at that line (set `MOIRE_EDITOR`, e.g. `code -g {file}:{line}`, to choose) |
+| `e` | Open the file in your editor at that line (asks the first time if it can't find one, or set `MOIRE_EDITOR`, e.g. `code -g {file}:{line}`) |
+| `E` | Choose the editor |
 | `o` | Recent repos and the repo's other worktrees |
 | `Ctrl+O` | Open a repository |
 | `f` | Show full files |

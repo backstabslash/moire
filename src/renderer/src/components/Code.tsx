@@ -1,4 +1,5 @@
 import type { Tok } from "../highlight/types";
+import { type Swatch, swatches } from "../model/swatch";
 import type { Range } from "../model/words";
 
 interface Piece {
@@ -8,6 +9,7 @@ interface Piece {
   hit?: number;
   wbr?: boolean;
   join?: boolean;
+  swatch?: string;
 }
 
 const ITALIC = 1;
@@ -60,12 +62,14 @@ interface CodeProps {
   mark: "w-add" | "w-del";
   hits?: Range[];
   current?: number;
+  styles?: boolean;
 }
 
-export function Code({ text, tokens, words, mark, hits, current }: CodeProps) {
+export function Code({ text, tokens, words, mark, hits, current, styles }: CodeProps) {
   if (!text) return "​";
   let pieces: Piece[] = tokens && tokensMatch(tokens, text) ? tokens.map(([t, color, fontStyle]) => ({ text: t, color, fontStyle })) : [{ text, fontStyle: 0 }];
   if (text.length > NARROWEST_PANE_CHARS) pieces = splitAtWrapPoints(pieces, text);
+  pieces = withSwatches(pieces, swatches(text, !!styles));
   if (hits?.length) pieces = splitAt(pieces, hits, (_, i) => i + 1);
   const isCurrent = (hit: number) => hits?.[hit - 1]?.[0] === current;
   if (!words?.length) return withHits(pieces, isCurrent);
@@ -101,6 +105,29 @@ export function Code({ text, tokens, words, mark, hits, current }: CodeProps) {
   return out;
 }
 
+function withSwatches(pieces: Piece[], spots: Swatch[]): Piece[] {
+  const valid = spots.filter((s) => CSS.supports("color", s.color));
+  if (!valid.length) return pieces;
+  const out: Piece[] = [];
+  let pos = 0;
+  let s = 0;
+  for (const piece of pieces) {
+    let offset = 0;
+    while (s < valid.length && valid[s].at < pos + piece.text.length) {
+      const cut = valid[s].at - pos;
+      if (cut > offset) out.push({ ...piece, text: piece.text.slice(offset, cut) });
+      const next = valid[s + 1]?.at ?? Infinity;
+      const end = Math.min(piece.text.length, next - pos);
+      out.push({ ...piece, text: piece.text.slice(cut, end), swatch: valid[s].color, wbr: cut === 0 && piece.wbr, join: cut === 0 && piece.join });
+      offset = end;
+      s++;
+    }
+    if (offset < piece.text.length) out.push({ ...piece, text: piece.text.slice(offset), wbr: offset === 0 && piece.wbr, join: offset === 0 && piece.join });
+    pos += piece.text.length;
+  }
+  return out;
+}
+
 function splitAt(pieces: Piece[], ranges: Range[], hit: (r: Range, i: number) => number | undefined): Piece[] {
   const out: Piece[] = [];
   let pos = 0;
@@ -119,6 +146,7 @@ function splitAt(pieces: Piece[], ranges: Range[], hit: (r: Range, i: number) =>
         hit: (inside && hit(ranges[r], r)) || piece.hit,
         wbr: first && piece.wbr,
         join: first && piece.join,
+        swatch: first ? piece.swatch : undefined,
       });
       offset += take;
       pos += take;
@@ -153,7 +181,7 @@ function showBidi(text: string): React.ReactNode {
   if (!BIDI.test(text)) return text;
   return text.split(BIDI).map((s, i) =>
     i % 2 ? (
-      <span key={i} className="bidi" title={`U+${s.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`}>
+      <span key={i} className="bidi" data-tip={`U+${s.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`}>
         ⇄
       </span>
     ) : (
@@ -164,6 +192,7 @@ function showBidi(text: string): React.ReactNode {
 
 function renderPiece(p: Piece, key: number): React.ReactNode {
   if (p.wbr) return [<wbr key={`w${key}`} />, renderPiece({ ...p, wbr: false }, key)];
+  if (p.swatch) return [<i key={`s${key}`} className="swatch" style={{ background: p.swatch }} />, renderPiece({ ...p, swatch: undefined }, key)];
   const text = showBidi(p.join ? WORD_JOINER + p.text : p.text);
   if (!p.color && !p.fontStyle) return typeof text === "string" ? text : <span key={key}>{text}</span>;
   const style: React.CSSProperties = { color: p.color || undefined };

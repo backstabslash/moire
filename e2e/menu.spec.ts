@@ -1,28 +1,18 @@
-import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { clipboard, git, initRepo, launch, shot } = harness();
 let repo: string;
-let userData: string;
 let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
 
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
-
-const shot = (name: string) => process.env.MOIRE_SHOTS && page.screenshot({ path: join(process.env.MOIRE_SHOTS, `${name}.png`) });
 const menu = () => page.getByRole("menu");
 const items = () => menu().getByRole("menuitem");
-const clipboard = () => app.evaluate(({ clipboard }) => clipboard.readText());
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   mkdirSync(join(repo, "site"));
   writeFileSync(join(repo, "site", "old.html"), "<p>old</p>\n");
   git("add", "-A");
@@ -32,9 +22,7 @@ test.beforeAll(async () => {
   chmodSync(join(repo, "site", "build"), 0o755);
   rmSync(join(repo, "site", "old.html"));
 
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1" } });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ app, page } = await launch(repo));
   await app.evaluate(({ shell }) => {
     shell.openPath = async () => "";
     shell.showItemInFolder = () => {};
@@ -42,20 +30,19 @@ test.beforeAll(async () => {
   await expect(page.locator(".file")).toHaveCount(3);
 });
 
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
-});
-
 test("right-clicking a file copies its paths", async () => {
   await page.locator('[data-tip^="site/index.html"]').click({ button: "right" });
   await expect(menu()).toContainText("site/index.html");
-  await expect(items()).toHaveText(["Copy relative path", "Copy absolute path", "Copy contents", /^Show in /, "Open in editor", "Open with default app"]);
+  await expect(items()).toHaveText([
+    "Stage file",
+    "Discard file",
+    "Copy relative path",
+    "Copy absolute path",
+    "Copy contents",
+    /^Show in /,
+    "Open in editor",
+    "Open with default app",
+  ]);
   await expect(page.locator(".file.is-menu .name")).toHaveText("index.html");
   await shot("menu-light");
   await page.keyboard.press("Escape");
@@ -65,13 +52,13 @@ test("right-clicking a file copies its paths", async () => {
   await page.keyboard.press("Escape");
   await page.keyboard.press("t");
   await page.locator('[data-tip^="site/index.html"]').click({ button: "right" });
-  await items().first().click();
+  await items().filter({ hasText: "Copy relative path" }).click();
   await expect(menu()).toBeHidden();
   await expect(page.locator(".toast.show")).toContainText("Copied site/index.html");
   expect(await clipboard()).toBe("site/index.html");
 
   await page.locator('[data-tip^="site/index.html"]').click({ button: "right" });
-  await page.keyboard.press("ArrowDown");
+  for (const _ of "123") await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   expect(await clipboard()).toBe(join(repo, "site", "index.html"));
 });
@@ -94,7 +81,7 @@ test("a deleted file only offers its paths, Escape closes, and the pane header h
 
   await page.locator('[data-tip^="site/index.html"]').click();
   await page.locator(".panes-head").click({ button: "right" });
-  await items().first().click();
+  await items().filter({ hasText: "Copy relative path" }).click();
   expect(await clipboard()).toBe("site/index.html");
 });
 

@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { app, BrowserWindow, Menu, type MenuItemConstructorOptions, shell } from "electron";
 import { accelerator, command, type CommandId, COMMANDS } from "../shared/keymap";
 import { loadKeys, watchKeys } from "./keys";
@@ -39,7 +38,7 @@ export function buildMenu(): void {
   };
   const item = (id: CommandId, label = COMMANDS[id].label): MenuItemConstructorOptions => ({ id, label, click: () => send(id), ...shortcut(id) });
   const sep: MenuItemConstructorOptions = { type: "separator" };
-  const recent = (loadState().recent ?? []).filter((r) => existsSync(join(r, ".git")));
+  const recent = (loadState().recent ?? []).filter((r) => existsSync(r));
   const about: MenuItemConstructorOptions = { role: "about", label: "About Moire" };
   const updates: MenuItemConstructorOptions[] = app.isPackaged ? [{ label: "Check for updates…", click: () => checkForUpdates(true) }] : [];
 
@@ -94,10 +93,10 @@ export function buildMenu(): void {
         item("fullFile"),
         item("preview"),
         item("allFiles"),
-        item("grouping"),
         item("notes"),
         item("refresh"),
         sep,
+        item("palette"),
         item("theme"),
         item("zoomIn"),
         item("zoomOut"),
@@ -137,6 +136,7 @@ export function buildMenu(): void {
         item("selectAll"),
         item("pasteFiles"),
         item("openEditor"),
+        item("chooseEditor"),
       ],
     },
     {

@@ -1,7 +1,7 @@
 import { type FSWatcher, watch } from "node:fs";
 import { lstat, readdir } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { git, gitInput } from "./git";
+import { folderDirs, git, ignoredPaths, isFolder } from "./git";
 
 const QUIET_MS = 150;
 const MAX_WAIT_MS = 1000;
@@ -23,11 +23,14 @@ export class RepoWatcher {
   private quiet: NodeJS.Timeout | null = null;
   private maxWait: NodeJS.Timeout | null = null;
   private closed = false;
+  readonly folder: boolean;
 
   constructor(
     readonly root: string,
     private onChange: () => void,
-  ) {}
+  ) {
+    this.folder = isFolder(root);
+  }
 
   async start(): Promise<void> {
     const [gitDir, commonDir] = await Promise.all([git(this.root, ["rev-parse", "--absolute-git-dir"]), git(this.root, ["rev-parse", "--git-common-dir"])]);
@@ -36,7 +39,7 @@ export class RepoWatcher {
     this.remotes = join(common, "refs", "remotes");
     this.notes = join(gitDir.trim(), "moire");
     await this.sync();
-    if (RECURSIVE) return;
+    if (RECURSIVE || this.folder) return;
     const empty = await git(this.root, ["ls-files", "--others", "--exclude-standard", "--directory", "-z"]);
     await this.watchNewDirs(empty.split("\0").flatMap((p) => (p.endsWith("/") ? [join(this.root, p.slice(0, -1))] : [])));
   }
@@ -63,14 +66,18 @@ export class RepoWatcher {
     if (RECURSIVE) {
       dirs.add(this.root);
     } else {
-      const [tracked, untracked] = await Promise.all([
-        git(this.root, ["ls-files", "-z"]),
-        git(this.root, ["ls-files", "--others", "--exclude-standard", "-z"]),
-      ]);
       dirs.add(this.root);
       for (const dir of this.openIgnoredDirs) dirs.add(dir);
-      for (const path of `${tracked}\0${untracked}`.split("\0")) {
-        for (let dir = dirname(path); path && dir !== "." && !dirs.has(join(this.root, dir)); dir = dirname(dir)) dirs.add(join(this.root, dir));
+      if (this.folder) {
+        for (const dir of await folderDirs(this.root)) dirs.add(resolve(this.root, dir));
+      } else {
+        const [tracked, untracked] = await Promise.all([
+          git(this.root, ["ls-files", "-z"]),
+          git(this.root, ["ls-files", "--others", "--exclude-standard", "-z"]),
+        ]);
+        for (const path of `${tracked}\0${untracked}`.split("\0")) {
+          for (let dir = dirname(path); path && dir !== "." && !dirs.has(join(this.root, dir)); dir = dirname(dir)) dirs.add(join(this.root, dir));
+        }
       }
       const emptyDirs = [...this.emptyNewDirs];
       const gone = await Promise.all(
@@ -142,7 +149,10 @@ export class RepoWatcher {
     const full = name ? join(dir, name) : dir;
     if (kind === "rename" && this.openIgnoredDirs.has(dirname(full))) this.listed = true;
     const inGit = [...this.gitDirs].find((g) => full === g || full.startsWith(g + sep));
-    if (inGit) {
+    // A folder's own .gitignore may match .git, and then git init would pass as an ignored change.
+    if (this.folder && relative(this.root, full).split(sep)[0] === ".git") {
+      this.gitTouched = true;
+    } else if (inGit) {
       const rel = relative(inGit, full);
       const refs =
         dir === join(inGit, "refs") || ["heads", "remotes"].some((kind) => dir === join(inGit, "refs", kind) || rel.startsWith(join("refs", kind) + sep));
@@ -183,15 +193,4 @@ export class RepoWatcher {
 async function allIgnored(root: string, paths: string[]): Promise<boolean> {
   if (!paths.length) return true;
   return (await ignoredPaths(root, paths)).size === new Set(paths).size;
-}
-
-async function ignoredPaths(root: string, paths: string[]): Promise<Set<string>> {
-  if (!paths.length) return new Set();
-  try {
-    const out = await gitInput(root, ["check-ignore", "-z", "--stdin"], paths.join("\0") + "\0");
-    return new Set(out.split("\0").filter(Boolean));
-  } catch {
-    // exit code 1 means none of them are ignored
-    return new Set();
-  }
 }

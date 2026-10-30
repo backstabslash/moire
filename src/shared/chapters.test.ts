@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { changedLines, chapterRefs, hasChanges, placeRange, rangeStaged, uncovered } from "./chapters";
-import type { FileDiff, Hunk, Placement } from "./types";
-
-const text = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+import { chapterFile as file, chapterHunks as hunks, chapterText as text, diffHunk } from "../main/test-repo";
+import type { FileDiff, Placement } from "./types";
 
 describe("placeRange", () => {
   it("keeps line numbers when the code still matches or wasn't given", () => {
@@ -26,23 +25,6 @@ describe("placeRange", () => {
   });
 });
 
-const hunks: Hunk[] = [
-  {
-    oldStart: 10,
-    oldLines: 1,
-    newStart: 10,
-    newLines: 1,
-    header: "",
-    lines: [
-      { kind: "del", text: "line 10", oldNo: 10 },
-      { kind: "add", text: "line ten", newNo: 10 },
-    ],
-  },
-  { oldStart: 20, oldLines: 1, newStart: 19, newLines: 0, header: "", lines: [{ kind: "del", text: "line 20", oldNo: 20 }] },
-  { oldStart: 25, oldLines: 0, newStart: 25, newLines: 1, header: "", lines: [{ kind: "add", text: "extra", newNo: 25 }] },
-];
-const file: FileDiff = { path: "a.ts", status: "modified", binary: false, additions: 2, deletions: 2, hunks };
-
 describe("chapters and coverage", () => {
   it("places deleted lines at the line that now follows them", () => {
     expect(changedLines(file).map((c) => [c.newLine, c.del])).toEqual([
@@ -64,15 +46,7 @@ describe("chapters and coverage", () => {
   });
 
   it("gives blank lines no range covers to the chapter of the nearest changed line", () => {
-    const add = (newNo: number, text: string) => ({ kind: "add" as const, text, newNo });
-    const spaced: FileDiff = {
-      ...file,
-      hunks: [
-        { oldStart: 4, oldLines: 0, newStart: 5, newLines: 2, header: "", lines: [add(5, "x"), add(6, "")] },
-        { oldStart: 9, oldLines: 0, newStart: 12, newLines: 1, header: "", lines: [add(12, "")] },
-        { oldStart: 10, oldLines: 0, newStart: 14, newLines: 1, header: "", lines: [add(14, "y")] },
-      ],
-    };
+    const spaced: FileDiff = { ...file, hunks: [diffHunk(4, ["+x", "+"], 5), diffHunk(9, ["+"], 12), diffHunk(10, ["+y"], 14)] };
     const [a, b] = [
       { start: 5, end: 5 },
       { start: 14, end: 14 },

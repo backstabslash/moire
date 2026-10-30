@@ -11,7 +11,7 @@ export default async function warmup() {
   git("init", "-q", "-b", "main");
   writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
   git("add", "-A");
-  git("-c", "user.email=e2e@example.com", "-c", "user.name=e2e", "commit", "-qm", "init");
+  git("-c", "user.email=e2e@example.com", "-c", "user.name=e2e", "-c", "commit.gpgsign=false", "commit", "-qm", "init");
   writeFileSync(join(repo, "a.ts"), "export const a = 2;\n");
   const app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1" } });
   try {

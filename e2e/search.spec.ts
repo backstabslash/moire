@@ -1,51 +1,31 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { git, initRepo, launch, shot } = harness();
 let repo: string;
-let userData: string;
-let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
 
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
 const body = Array.from({ length: 60 }, (_, i) => `export const v${i} = ${i};`);
-const shot = (name: string) => process.env.MOIRE_SHOTS && page.screenshot({ path: join(process.env.MOIRE_SHOTS, `${name}.png`) });
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
   writeFileSync(join(repo, "b.ts"), body.join("\n") + "\n");
+  writeFileSync(join(repo, "IDEAS.md"), "# Ideas\n\n- a file tree\n");
   git("add", "-A");
   git("commit", "-qm", "init");
   writeFileSync(join(repo, "a.ts"), body.map((l, i) => (i === 3 ? l.replace("= 3", "= 30") : l)).join("\n") + "\n");
   writeFileSync(join(repo, "b.ts"), body.map((l, i) => (i === 25 ? l.replace("= 25", "= 99") : l)).join("\n") + "\n");
 
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1" } });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ page } = await launch(repo));
   await expect(page.locator(".file")).toHaveCount(2);
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
 });
 
 test("search finds hits in folded context and in other files", async () => {
   await page.keyboard.press("Control+f");
-  const input = page.getByRole("searchbox").or(page.getByLabel("Search"));
+  const input = page.getByRole("textbox", { name: "Search" });
   await expect(input).toBeFocused();
   await input.fill("v25 ");
   await expect(page.locator(".search-status")).toHaveText("1 of 3");
@@ -61,9 +41,9 @@ test("search finds hits in folded context and in other files", async () => {
   await input.press("Shift+Enter");
   await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
 
-  await page.getByTitle("Search side B only").click();
+  await page.getByRole("button", { name: "Search side B only" }).click();
   await expect(page.locator(".search-status")).toHaveText(/of 2$/);
-  await page.getByTitle("Regular expression").click();
+  await page.getByRole("button", { name: "Regular expression" }).click();
   await input.fill("v2[0-9] = 99");
   await expect(page.locator(".search-status")).toHaveText("1 of 1");
   await expect(page.locator(".file.is-active .name")).toHaveText("b.ts");
@@ -96,4 +76,29 @@ test("opening and closing search leaves the diff lines where they were", async (
   await expect(page.locator(".search")).toHaveCount(0);
   expect(await top()).toBe(before);
   await page.keyboard.press("f");
+});
+
+test("search covers a whole unchanged file, and its Markdown preview keeps the query", async () => {
+  await page.keyboard.press("a");
+  await page.getByRole("navigation", { name: "All files" }).locator('[data-tip^="IDEAS.md"]').click();
+  await expect(page.locator(".row.uni .cell")).toHaveText(["# Ideas", "", "- a file tree"]);
+
+  await page.keyboard.press("/");
+  await expect(page.locator(".search input")).toBeFocused();
+  await page.locator(".search input").fill("tree");
+  await expect(page.locator(".search-status")).toHaveText("1 of 1");
+  await expect(page.locator("mark.hit.is-current")).toHaveText("tree");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("m");
+  await expect(page.locator("article.md h1")).toHaveText("Ideas");
+  await page.keyboard.press("/");
+  await expect(page.locator(".search input")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect.poll(() => page.evaluate(() => CSS.highlights.get("moire-hit-now")?.size ?? 0)).toBe(0);
+  await page.keyboard.press("/");
+  await expect(page.locator(".search input")).toHaveValue("tree");
+  await expect.poll(() => page.evaluate(() => CSS.highlights.get("moire-hit-now")?.size ?? 0)).toBe(1);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("m");
+  await page.keyboard.press("a");
 });

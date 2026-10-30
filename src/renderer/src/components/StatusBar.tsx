@@ -19,11 +19,12 @@ interface Props {
   actions: "unstaged" | "staged" | null;
   zoom: number;
   hints?: boolean;
+  folder?: boolean;
   notes?: boolean;
   onCommand(id: CommandId): void;
 }
 
-export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true, notes = false, onCommand }: Props) {
+export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true, folder = false, notes = false, onCommand }: Props) {
   const keymap = useKeymap();
   const hint = (ids: CommandId[], text: string, run = ids[0]) => {
     const bound = ids.filter((id) => keymap.keys[id].length);
@@ -31,7 +32,7 @@ export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true,
     const keys = bound.map((id) => keyLabel(keymap, id, MAC));
     const title = bound.map((id) => `${COMMANDS[id].label} (${keyText(keymap, id)})`).join(", ");
     return (
-      <button title={title} onClick={() => onCommand(run)}>
+      <button data-tip={title} data-command={run} onClick={() => onCommand(run)}>
         <kbd>{keys.join("") === "12345" ? "1–5" : keys.join(" ")}</kbd>
         {text}
       </button>
@@ -67,31 +68,35 @@ export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true,
         </span>
       )}
       {zoom !== 1 && (
-        <button className="zoom" title="Reset zoom to 100%" onClick={() => window.moire.resetZoom()}>
+        <button className="zoom" data-tip="Reset zoom to 100%" onClick={() => window.moire.resetZoom()}>
           {Math.round(zoom * 100)}%
         </button>
       )}
       {error && (
-        <span className="error" title={error}>
+        <span className="error" data-tip={error}>
           {error}
         </span>
       )}
       <span className="keys">
         {hints && (
           <span className="keys-list">
-            {hint(["nextHunk", "prevHunk"], "hunk")}
-            {hint(["prevFile", "nextFile"], "file", "nextFile")}
+            {!folder && hint(["nextHunk", "prevHunk"], "hunk")}
+            {!folder && hint(["prevFile", "nextFile"], "file", "nextFile")}
             {notes && hint(["prevNote", "nextNote"], "note", "nextNote")}
-            {hint(["blinkHold"], "blink", "blink")}
+            {!folder && hint(["blinkHold"], "blink", "blink")}
             {actions && hint(["stage"], actions === "staged" ? "unstage" : "stage")}
             {actions === "unstaged" && hint(["discard"], "discard")}
             {actions && hint(["undo"], "undo")}
             {hint(["copyMarkdown"], "copy")}
             {hint(["search"], "search")}
             {hint(["openEditor"], "editor")}
-            {hint(["fullFile"], "full file")}
-            {hint(["layout"], "layout")}
-            {hint(["unstaged", "staged", "all", "commit", "branches"], "compare", "compare")}
+            {!folder && (
+              <>
+                {hint(["fullFile"], "full file")}
+                {hint(["layout"], "layout")}
+                {hint(["unstaged", "staged", "all", "commit", "branches"], "compare", "compare")}
+              </>
+            )}
           </span>
         )}
         {hint(["help"], "all keys")}
@@ -99,7 +104,7 @@ export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true,
       {update && (
         <button
           className="update"
-          title={update.manualReason ? `${update.manualReason} Opens the release page.` : `Restarts moire on version ${update.version}`}
+          data-tip={update.manualReason ? `${update.manualReason} Opens the release page.` : `Restarts moire on version ${update.version}`}
           onClick={() => void window.moire.applyUpdate()}
         >
           {update.manualReason ? `Get moire ${update.version}` : "Restart to update"}

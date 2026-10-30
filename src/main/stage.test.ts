@@ -1,16 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import type { FileDiff, LineRef, StageRequest } from "../shared/types";
 import { diff, UNTRACKED_READ_LIMIT } from "./git";
-import { act, actAll, adoptLegacyUndo, commit, dropDiscarded, saveDiscarded, setWorktree, undo } from "./stage";
-import { dirs, makeRepo } from "./test-repo";
+import { act, actAll, adoptLegacyUndo, commit, dropDiscarded, saveDiscarded, serial, setWorktree, undo } from "./stage";
+import { dirs, type Files, makeRepo, type Repo, seed } from "./test-repo";
 
-type Repo = ReturnType<typeof makeRepo>;
-
-function setup() {
-  const r = makeRepo();
+function setup(committed?: Files, edits?: Files) {
+  const r = committed ? seed(committed, edits) : makeRepo();
   const file = async (mode: "unstaged" | "staged" | "all", path: string) => (await diff(r.root, { kind: mode })).files.find((f) => f.path === path);
   const run = (mode: StageRequest["mode"], action: StageRequest["action"], f: FileDiff, lines: LineRef[] | null = null) =>
     act(r.root, { mode, action, file: f, lines });
@@ -45,11 +44,8 @@ function mutate(text: string, rand: () => number): string {
 describe("staging piece by piece", () => {
   for (let seed = 1; seed <= 12; seed++) {
     it(`matches git add, hunk by hunk and line by line (seed ${seed})`, async () => {
-      const r = setup();
       const rand = random(seed);
-      r.write("f.txt", seed % 3 === 0 ? body(60).slice(0, -1) : body(60));
-      r.commit("init");
-      r.write("f.txt", mutate(body(60), rand));
+      const r = setup({ "f.txt": seed % 3 === 0 ? body(60).slice(0, -1) : body(60) }, { "f.txt": mutate(body(60), rand) });
       const target = worktreeBlob(r, "f.txt");
 
       for (let i = 0; i < 200; i++) {
@@ -81,9 +77,7 @@ describe("staging piece by piece", () => {
 
 describe("staging special files", () => {
   it("stages part of an untracked file and keeps its exec bit", async () => {
-    const r = setup();
-    r.write("keep.txt", "keep\n");
-    r.commit("init");
+    const r = setup({ "keep.txt": "keep\n" });
     writeFileSync(join(r.root, "new.sh"), "one\ntwo\nthree", { mode: 0o755 });
     const f = (await r.file("unstaged", "new.sh"))!;
     expect(await r.run("unstaged", "stage", f, [{ hunk: 0, line: 0 }])).toBe("Staged 1 line in new.sh");
@@ -95,10 +89,7 @@ describe("staging special files", () => {
   });
 
   it("stages a deletion and a binary file whole", async () => {
-    const r = setup();
-    r.write("gone.txt", "bye\n");
-    r.write("bin.dat", Buffer.from([0, 1, 2]));
-    r.commit("init");
+    const r = setup({ "gone.txt": "bye\n", "bin.dat": Buffer.from([0, 1, 2]) });
     rmSync(join(r.root, "gone.txt"));
     r.write("bin.dat", Buffer.from([0, 9, 9]));
     await r.run("unstaged", "stage", (await r.file("unstaged", "gone.txt"))!, null);
@@ -107,9 +98,7 @@ describe("staging special files", () => {
   });
 
   it("unstages part of a rename, then the whole rename", async () => {
-    const r = setup();
-    r.write("old.txt", body(20));
-    r.commit("init");
+    const r = setup({ "old.txt": body(20) });
     r.git("mv", "old.txt", "new.txt");
     r.write("new.txt", body(20).replace("line 3\n", "line three\n").replace("line 17\n", "line seventeen\n"));
     r.git("add", "new.txt");
@@ -123,10 +112,8 @@ describe("staging special files", () => {
   });
 
   it("stages and discards a rename git doesn't know about yet as a whole", async () => {
-    const r = setup();
     const edited = body(20).replace("line 3\n", "line three\n").replace("line 17\n", "line seventeen\n");
-    r.write("old.txt", body(20));
-    r.commit("init");
+    const r = setup({ "old.txt": body(20) });
     renameSync(join(r.root, "old.txt"), join(r.root, "new.txt"));
     r.write("new.txt", edited);
     const f = (await r.file("unstaged", "new.txt"))!;
@@ -148,9 +135,7 @@ describe("staging special files", () => {
   });
 
   it("stages and discards untracked files past the read limit", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.commit("init");
+    const r = setup({ "a.txt": "a\n" });
     for (let i = 0; i <= UNTRACKED_READ_LIMIT + 1; i++) r.write(`node_modules/m${String(i).padStart(5, "0")}.js`, "x\n");
     const [stage, discard] = (await diff(r.root, { kind: "unstaged" })).files.slice(-2);
     expect(stage).toMatchObject({ unread: true });
@@ -171,20 +156,24 @@ describe("staging special files", () => {
 
 describe("safety", () => {
   it("won't stage part of a file whose new lines aren't UTF-8", async () => {
-    const r = setup();
-    r.write("a.txt", "one\ntwo\n");
-    r.commit("init");
-    r.write("a.txt", Buffer.from("one\ncaf\xe9\ntwo\nthree\n", "latin1"));
+    const r = setup({ "a.txt": "one\ntwo\n" }, { "a.txt": Buffer.from("one\ncaf\xe9\ntwo\nthree\n", "latin1") });
     const f = (await r.file("unstaged", "a.txt"))!;
     await expect(r.run("unstaged", "stage", f, [allLines(f)[0]])).rejects.toThrow("isn't UTF-8");
     expect(r.git("diff", "--cached")).toBe("");
   });
 
+  it("won't change part of a file with a bad byte outside the hunk", async () => {
+    const after = Buffer.from(`caf\xe9\n${body(20).replace("line 20", "twenty")}`, "latin1");
+    const r = setup({ "a.txt": Buffer.from(`caf\xe9\n${body(20)}`, "latin1") }, { "a.txt": after });
+    const f = (await r.file("unstaged", "a.txt"))!;
+    await expect(r.run("unstaged", "stage", f, [allLines(f)[0]])).rejects.toThrow("isn't UTF-8");
+    expect(r.git("diff", "--cached")).toBe("");
+    await expect(r.run("unstaged", "discard", f, [allLines(f)[0]])).rejects.toThrow("isn't UTF-8");
+    expect(readFileSync(join(r.root, "a.txt"))).toEqual(after);
+  });
+
   it("refuses when the file changed since the diff was read", async () => {
-    const r = setup();
-    r.write("a.txt", body(10));
-    r.commit("init");
-    r.write("a.txt", body(10).replace("line 5", "five"));
+    const r = setup({ "a.txt": body(10) }, { "a.txt": body(10).replace("line 5", "five") });
     const f = (await r.file("unstaged", "a.txt"))!;
     r.write("a.txt", body(10).replace("line 5", "FIVE"));
     await expect(r.run("unstaged", "stage", f, null)).rejects.toThrow("a.txt changed since you looked");
@@ -192,22 +181,25 @@ describe("safety", () => {
   });
 
   it("refuses when a file with too many changes to show changed since", async () => {
-    const r = setup();
-    r.write("big.txt", "start\n");
-    r.commit("init");
-    r.write("big.txt", `${"x".repeat(99)}\n`.repeat(30000));
+    const r = setup({ "big.txt": "start\n" }, { "big.txt": `${"x".repeat(99)}\n`.repeat(30000) });
     const f = (await r.file("unstaged", "big.txt"))!;
     expect(f).toMatchObject({ tooLarge: true, hunks: [] });
-    r.write("big.txt", `${"x".repeat(99)}\n`.repeat(30000) + "SECRET=1\n");
+    r.write("big.txt", `${"y".repeat(99)}\n` + `${"x".repeat(99)}\n`.repeat(29999));
+    await expect(r.run("unstaged", "stage", f, null)).rejects.toThrow("big.txt changed since you looked");
+    expect(r.git("diff", "--cached")).toBe("");
+  });
+
+  it("refuses when an untracked file too big to show changed since, at the same size", async () => {
+    const r = setup({ "a.txt": "a\n" }, { "big.txt": `${"x".repeat(99)}\n`.repeat(30000) });
+    const f = (await r.file("unstaged", "big.txt"))!;
+    expect(f).toMatchObject({ tooLarge: true, hunks: [] });
+    r.write("big.txt", `${"y".repeat(99)}\n`.repeat(30000));
     await expect(r.run("unstaged", "stage", f, null)).rejects.toThrow("big.txt changed since you looked");
     expect(r.git("diff", "--cached")).toBe("");
   });
 
   it("refuses actions that don't belong to the view, and context-only selections", async () => {
-    const r = setup();
-    r.write("a.txt", "a\nb\n");
-    r.commit("init");
-    r.write("a.txt", "a\nc\n");
+    const r = setup({ "a.txt": "a\nb\n" }, { "a.txt": "a\nc\n" });
     const f = (await r.file("unstaged", "a.txt"))!;
     await expect(r.run("unstaged", "stage", f, [{ hunk: 0, line: 0 }])).rejects.toThrow("No changed lines selected");
     await expect(r.run("unstaged", "unstage", f, null)).rejects.toThrow("Can't unstage in the unstaged view");
@@ -215,9 +207,7 @@ describe("safety", () => {
   });
 
   it("keeps a renamed file when its discard can't get the index lock", async () => {
-    const r = setup();
-    r.write("old.txt", body(20));
-    r.commit("init");
+    const r = setup({ "old.txt": body(20) });
     renameSync(join(r.root, "old.txt"), join(r.root, "new.txt"));
     const f = (await r.file("unstaged", "new.txt"))!;
     writeFileSync(join(r.root, ".git", "index.lock"), "");
@@ -226,10 +216,7 @@ describe("safety", () => {
   });
 
   it("waits for another process's index lock", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.commit("init");
-    r.write("a.txt", "b\n");
+    const r = setup({ "a.txt": "a\n" }, { "a.txt": "b\n" });
     const lock = join(r.root, ".git", "index.lock");
     writeFileSync(lock, "");
     setTimeout(() => rmSync(lock), 300);
@@ -240,9 +227,7 @@ describe("safety", () => {
 
 describe("undo", () => {
   it("brings back discarded lines and a discarded untracked file", async () => {
-    const r = setup();
-    r.write("a.txt", body(20));
-    r.commit("init");
+    const r = setup({ "a.txt": body(20) });
     const edited = body(20).replace("line 2\n", "two\n").replace("line 15\n", "fifteen\n");
     r.write("a.txt", edited);
     r.write("scratch.txt", "notes\n");
@@ -260,12 +245,7 @@ describe("undo", () => {
   });
 
   it("undoes a given entry only while it's the newest", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.write("b.txt", "a\n");
-    r.commit("init");
-    r.write("a.txt", "b\n");
-    r.write("b.txt", "b\n");
+    const r = setup({ "a.txt": "a\n", "b.txt": "a\n" }, { "a.txt": "b\n", "b.txt": "b\n" });
     await act(r.root, { mode: "unstaged", action: "stage", file: (await r.file("unstaged", "a.txt"))!, lines: null, undoId: "first" });
     await r.run("unstaged", "stage", (await r.file("unstaged", "b.txt"))!, null);
     await expect(undo(r.root, "first")).rejects.toThrow('"Staged b.txt" came after it');
@@ -277,10 +257,7 @@ describe("undo", () => {
   });
 
   it("undoes staging, and refuses once the file moved on", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.commit("init");
-    r.write("a.txt", "b\n");
+    const r = setup({ "a.txt": "a\n" }, { "a.txt": "b\n" });
     await r.run("unstaged", "stage", (await r.file("unstaged", "a.txt"))!, null);
     expect(await undo(r.root)).toMatchObject({ label: "Staged a.txt" });
     expect(r.git("show", ":a.txt")).toBe("a");
@@ -294,20 +271,14 @@ describe("undo", () => {
   });
 
   it("undoes staging a file with a tab in its name", async () => {
-    const r = setup();
-    r.write("a\tb.txt", "a\n");
-    r.commit("init");
-    r.write("a\tb.txt", "b\n");
+    const r = setup({ "a\tb.txt": "a\n" }, { "a\tb.txt": "b\n" });
     await r.run("unstaged", "stage", (await r.file("unstaged", "a\tb.txt"))!, null);
     expect(await undo(r.root)).toMatchObject({ label: "Staged a\tb.txt" });
     expect(r.git("diff", "--cached")).toBe("");
   });
 
   it("deletes a discarded git add -N file and brings it back untracked", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.commit("init");
-    r.write("new.txt", "fresh\n");
+    const r = setup({ "a.txt": "a\n" }, { "new.txt": "fresh\n" });
     r.git("add", "-N", "new.txt");
     await r.run("unstaged", "discard", (await r.file("unstaged", "new.txt"))!, null);
     expect(existsSync(join(r.root, "new.txt"))).toBe(false);
@@ -317,10 +288,7 @@ describe("undo", () => {
   });
 
   it("refuses to undo a stage once someone else committed it", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.commit("init");
-    r.write("a.txt", "b\n");
+    const r = setup({ "a.txt": "a\n" }, { "a.txt": "b\n" });
     await r.run("unstaged", "stage", (await r.file("unstaged", "a.txt"))!, null);
     r.git("commit", "-q", "-m", "agent");
     await expect(undo(r.root)).rejects.toThrow("a commit was made since");
@@ -328,9 +296,7 @@ describe("undo", () => {
   });
 
   it("leaves the file alone when git has pruned the discard backup", async () => {
-    const r = setup();
-    r.write("a.txt", body(20));
-    r.commit("init");
+    const r = setup({ "a.txt": body(20) });
     const edited = body(20).replace("line 2\n", "two\n").replace("line 15\n", "fifteen\n");
     r.write("a.txt", edited);
     const f = (await r.file("unstaged", "a.txt"))!;
@@ -343,10 +309,7 @@ describe("undo", () => {
   });
 
   it("pins discard backups so git gc keeps them, and unpins them once undone", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.commit("init");
-    r.write("a.txt", "precious\n");
+    const r = setup({ "a.txt": "a\n" }, { "a.txt": "precious\n" });
     await r.run("unstaged", "discard", (await r.file("unstaged", "a.txt"))!, null);
     const backup = execFileSync("git", ["-C", r.root, "hash-object", "--stdin"], { input: "precious\n", encoding: "utf8" }).trim();
     expect(r.git("ls-tree", "refs/moire/discards")).toContain(backup);
@@ -357,9 +320,7 @@ describe("undo", () => {
   });
 
   it("keeps a discard whose file changed since, and saves it next to the file", async () => {
-    const r = setup();
-    r.write("a.txt", body(10));
-    r.commit("init");
+    const r = setup({ "a.txt": body(10) });
     const edited = body(10).replace("line 5\n", "five\n");
     r.write("a.txt", edited);
     await r.run("unstaged", "discard", (await r.file("unstaged", "a.txt"))!, null);
@@ -374,13 +335,20 @@ describe("undo", () => {
     expect(await undo(r.root)).toBeNull();
   });
 
+  it("saves a refused discard under a free name, leaving an earlier save alone", async () => {
+    const r = setup({ "a.txt": "a\n" }, { "a.txt": "precious\n" });
+    await r.run("unstaged", "discard", (await r.file("unstaged", "a.txt"))!, null);
+    r.write("a.txt", "agent rewrote it\n");
+    r.write("a.txt.orig", "an earlier save\n");
+    const refused = await undo(r.root);
+    expect(refused).toMatchObject({ saveAs: "a.txt.orig.2" });
+    expect(await saveDiscarded(r.root, (refused as { id: string }).id)).toBe("Saved a.txt.orig.2");
+    expect(readFileSync(join(r.root, "a.txt.orig"), "utf8")).toBe("an earlier save\n");
+    expect(readFileSync(join(r.root, "a.txt.orig.2"), "utf8")).toBe("precious\n");
+  });
+
   it("offers a refused discard again until it's dismissed, then undoes older entries", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.write("b.txt", "b\n");
-    r.commit("init");
-    r.write("a.txt", "A\n");
-    r.write("b.txt", "B\n");
+    const r = setup({ "a.txt": "a\n", "b.txt": "b\n" }, { "a.txt": "A\n", "b.txt": "B\n" });
     await r.run("unstaged", "stage", (await r.file("unstaged", "b.txt"))!, null);
     await r.run("unstaged", "discard", (await r.file("unstaged", "a.txt"))!, null);
     r.write("a.txt", "again\n");
@@ -400,14 +368,9 @@ describe("undo history", () => {
   const logOf = (r: Repo) => JSON.parse(readFileSync(join(r.root, ".git", "moire-undo.json"), "utf8")) as { label: string }[];
 
   it("lives in each repo, apart from other repos", async () => {
-    const one = setup();
-    const two = setup();
-    for (const r of [one, two]) {
-      r.write("a.txt", "a\n");
-      r.commit("init");
-      r.write("a.txt", "b\n");
-      await r.run("unstaged", "stage", (await r.file("unstaged", "a.txt"))!, null);
-    }
+    const one = setup({ "a.txt": "a\n" }, { "a.txt": "b\n" });
+    const two = setup({ "a.txt": "a\n" }, { "a.txt": "b\n" });
+    for (const r of [one, two]) await r.run("unstaged", "stage", (await r.file("unstaged", "a.txt"))!, null);
     expect(logOf(one).map((e) => e.label)).toEqual(["Staged a.txt"]);
     expect(await undo(one.root)).toMatchObject({ label: "Staged a.txt" });
     expect(await undo(one.root)).toBeNull();
@@ -415,9 +378,7 @@ describe("undo history", () => {
   });
 
   it("keeps a worktree's history and backups apart, safe from gc in the main checkout", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.commit("init");
+    const r = setup({ "a.txt": "a\n" });
     const wt = `${r.root}-wt`;
     dirs.push(wt);
     r.git("worktree", "add", "-q", wt);
@@ -432,9 +393,7 @@ describe("undo history", () => {
   });
 
   it("sets aside an unreadable history instead of overwriting it", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.commit("init");
+    const r = setup({ "a.txt": "a\n" });
     const log = join(r.root, ".git", "moire-undo.json");
     writeFileSync(log, "{ not json");
     expect(await undo(r.root)).toBeNull();
@@ -442,25 +401,21 @@ describe("undo history", () => {
   });
 
   it("keeps more discards than stages", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.commit("init");
-    const discard = { id: "d", label: "Discarded old.txt", steps: [{ path: "old.txt", worktree: [null, null] }] };
+    const r = setup({ "a.txt": "a\n" });
+    const discards = Array.from({ length: 250 }, (_, i) => ({ id: `d${i}`, label: `Discarded ${i}`, steps: [{ path: "x", worktree: [null, null] }] }));
     const stages = Array.from({ length: 150 }, (_, i) => ({ id: `s${i}`, label: `Staged ${i}`, steps: [{ path: "x", index: [null, null] }] }));
-    writeFileSync(join(r.root, ".git", "moire-undo.json"), JSON.stringify([discard, ...stages]));
+    writeFileSync(join(r.root, ".git", "moire-undo.json"), JSON.stringify([...discards, ...stages]));
     r.write("a.txt", "b\n");
     await r.run("unstaged", "stage", (await r.file("unstaged", "a.txt"))!, null);
     const log = logOf(r);
-    expect(log).toHaveLength(101);
-    expect(log[0].label).toBe("Discarded old.txt");
+    expect(log).toHaveLength(300);
+    expect(log[0].label).toBe("Discarded 50");
+    expect(log[200].label).toBe("Staged 51");
     expect(log.at(-1)!.label).toBe("Staged a.txt");
   });
 
   it("adopts this repo's entries from the old shared undo.json", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.commit("init");
-    r.write("a.txt", "b\n");
+    const r = setup({ "a.txt": "a\n" }, { "a.txt": "b\n" });
     r.git("add", "a.txt");
     const blob = (path: string) => ({ mode: "100644", sha: r.git("rev-parse", path) });
     const legacy = join(r.root, ".git", "legacy-undo.json");
@@ -479,12 +434,10 @@ describe("undo history", () => {
 
 describe("staged markers in the all view", () => {
   it("marks staged lines and files", async () => {
-    const r = setup();
-    r.write("a.txt", body(20));
-    r.write("b.txt", "b\n");
-    r.commit("init");
-    r.write("a.txt", body(20).replace("line 2\n", "two\n").replace("line 18\n", "eighteen\n"));
-    r.write("b.txt", "B\n");
+    const r = setup(
+      { "a.txt": body(20), "b.txt": "b\n" },
+      { "a.txt": body(20).replace("line 2\n", "two\n").replace("line 18\n", "eighteen\n"), "b.txt": "B\n" },
+    );
     r.git("add", "b.txt");
     r.write("c.txt", "new\n");
     const f = (await r.file("unstaged", "a.txt"))!;
@@ -506,13 +459,13 @@ describe("staged markers in the all view", () => {
 
 describe("commit", () => {
   it("commits the index, drops stage undo entries and reports hook failures", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.commit("init");
-    r.write("a.txt", "b\n");
+    const r = setup({ "a.txt": "a\n", "b.txt": "b\n" }, { "a.txt": "b\n", "b.txt": "precious\n" });
+    await r.run("unstaged", "discard", (await r.file("unstaged", "b.txt"))!, null);
     await r.run("unstaged", "stage", (await r.file("unstaged", "a.txt"))!, null);
     expect(await commit(r.root, "Change a\n\nBody")).toMatch(/^[0-9a-f]{7,} Change a$/);
     expect(r.git("log", "-1", "--format=%B")).toBe("Change a\n\nBody");
+    expect(await undo(r.root)).toMatchObject({ label: "Discarded b.txt" });
+    expect(readFileSync(join(r.root, "b.txt"), "utf8")).toBe("precious\n");
     expect(await undo(r.root)).toBeNull();
 
     r.write(".git/hooks/pre-commit", "#!/bin/sh\necho 'lint failed' >&2\nexit 1\n");
@@ -526,10 +479,7 @@ describe("commit", () => {
 
 describe("files staged, then changed again", () => {
   it("can stage the new edits", async () => {
-    const r = setup();
-    r.write("a.txt", body(20));
-    r.commit("init");
-    r.write("a.txt", body(20).replace("line 2\n", "line two\n"));
+    const r = setup({ "a.txt": body(20) }, { "a.txt": body(20).replace("line 2\n", "line two\n") });
     await r.run("unstaged", "stage", (await r.file("unstaged", "a.txt"))!);
     await r.file("unstaged", "a.txt");
     r.write("a.txt", body(20).replace("line 2\n", "line two\n").replace("line 18\n", "line eighteen\n"));
@@ -541,11 +491,11 @@ describe("files staged, then changed again", () => {
 
 describe("files as a full refresh returns them", () => {
   it("stages and unstages single lines of a partly staged file", async () => {
-    const r = setup();
     const long = Array.from({ length: 60 }, (_, i) => `    expect(res.progress).toEqual({ staged: ${i}, total: 3 });\n`);
-    r.write("g.ts", long.join(""));
-    r.commit("init");
-    r.write("g.ts", long.map((l, i) => (i % 12 === 4 ? l.replace(" });", ", lines: { staged: 4, total: 9 } });") : l)).join(""));
+    const r = setup(
+      { "g.ts": long.join("") },
+      { "g.ts": long.map((l, i) => (i % 12 === 4 ? l.replace(" });", ", lines: { staged: 4, total: 9 } });") : l)).join("") },
+    );
     r.git("add", "g.ts");
     for (let i = 0; i < 3; i++) {
       const f = (await r.file("staged", "g.ts"))!;
@@ -566,15 +516,14 @@ describe("files as a full refresh returns them", () => {
   });
 
   it("acts on every kind of file in both views", async () => {
-    const r = setup();
-    r.write("partly.txt", body(30));
-    r.write("again.txt", body(10));
-    r.write("old.txt", body(10));
-    r.write("pnpm-lock.yaml", "lockfileVersion: 9\n");
-    r.commit("init");
-    r.write("partly.txt", body(30).replace("line 2\n", "two\n").replace("line 25\n", "twenty-five\n"));
-    r.write("again.txt", body(10).replace("line 2\n", "two\n"));
-    r.write("pnpm-lock.yaml", "lockfileVersion: 10\n");
+    const r = setup(
+      { "partly.txt": body(30), "again.txt": body(10), "old.txt": body(10), "pnpm-lock.yaml": "lockfileVersion: 9\n" },
+      {
+        "partly.txt": body(30).replace("line 2\n", "two\n").replace("line 25\n", "twenty-five\n"),
+        "again.txt": body(10).replace("line 2\n", "two\n"),
+        "pnpm-lock.yaml": "lockfileVersion: 10\n",
+      },
+    );
     r.git("add", "-A");
     await r.file("unstaged", "again.txt");
     r.write("again.txt", body(10).replace("line 2\n", "two\n").replace("line 9\n", "nine\n"));
@@ -596,11 +545,7 @@ describe("files as a full refresh returns them", () => {
 
 describe("whole files and views", () => {
   it("stages every file in the view as one undo step, and unstages them the same way", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.write("gone.txt", "bye\n");
-    r.commit("init");
-    r.write("a.txt", "A\n");
+    const r = setup({ "a.txt": "a\n", "gone.txt": "bye\n" }, { "a.txt": "A\n" });
     rmSync(join(r.root, "gone.txt"));
     r.write("new.txt", "new\n");
     const files = (await diff(r.root, { kind: "unstaged" })).files;
@@ -617,12 +562,7 @@ describe("whole files and views", () => {
   });
 
   it("refuses to stage all when any file changed since", async () => {
-    const r = setup();
-    r.write("a.txt", "a\n");
-    r.write("b.txt", "b\n");
-    r.commit("init");
-    r.write("a.txt", "A\n");
-    r.write("b.txt", "B\n");
+    const r = setup({ "a.txt": "a\n", "b.txt": "b\n" }, { "a.txt": "A\n", "b.txt": "B\n" });
     const files = (await diff(r.root, { kind: "unstaged" })).files;
     r.write("b.txt", "BB\n");
     await expect(actAll(r.root, { mode: "unstaged", files })).rejects.toThrow("b.txt changed since you looked");
@@ -639,10 +579,7 @@ describe("whole files and views", () => {
   });
 
   it("discards a whole binary file, and undo brings it back", async () => {
-    const r = setup();
-    r.write("bin.dat", Buffer.from([0, 1, 2]));
-    r.commit("init");
-    r.write("bin.dat", Buffer.from([0, 9, 9]));
+    const r = setup({ "bin.dat": Buffer.from([0, 1, 2]) }, { "bin.dat": Buffer.from([0, 9, 9]) });
     expect(await r.run("unstaged", "discard", (await r.file("unstaged", "bin.dat"))!, null)).toBe("Discarded bin.dat");
     expect(readFileSync(join(r.root, "bin.dat"))).toEqual(Buffer.from([0, 1, 2]));
     await undo(r.root);
@@ -652,9 +589,7 @@ describe("whole files and views", () => {
 
 describe("merge conflicts", () => {
   function conflicted() {
-    const r = setup();
-    r.write("c.txt", "base\n");
-    r.commit("init");
+    const r = setup({ "c.txt": "base\n" });
     r.git("checkout", "-q", "-b", "other");
     r.write("c.txt", "theirs\n");
     r.commit("theirs");
@@ -694,6 +629,34 @@ describe("merge conflicts", () => {
   });
 });
 
+describe("links and type changes", () => {
+  it("won't stage or discard part of a file that became a symlink", async () => {
+    const r = setup({ "a.txt": "a\nb\n" });
+    rmSync(join(r.root, "a.txt"));
+    symlinkSync("b.txt", join(r.root, "a.txt"));
+    const f = (await r.file("unstaged", "a.txt"))!;
+    expect(f).toMatchObject({ oldMode: "100644", newMode: "120000" });
+    await expect(r.run("unstaged", "stage", f, [allLines(f)[0]])).rejects.toThrow("a.txt can only be staged whole");
+    await expect(r.run("unstaged", "discard", f, [allLines(f)[0]])).rejects.toThrow("a.txt can only be discarded whole");
+    expect(r.git("diff", "--cached")).toBe("");
+    expect(readlinkSync(join(r.root, "a.txt"))).toBe("b.txt");
+  });
+
+  it("won't stage or discard part of a symlink's new target", async () => {
+    const r = setup();
+    symlinkSync("one", join(r.root, "link"));
+    r.commit("init");
+    rmSync(join(r.root, "link"));
+    symlinkSync("two", join(r.root, "link"));
+    const f = (await r.file("unstaged", "link"))!;
+    expect(f).toMatchObject({ oldMode: "120000", newMode: "120000" });
+    await expect(r.run("unstaged", "stage", f, [allLines(f)[0]])).rejects.toThrow("link is a symlink and can only be staged whole");
+    await expect(r.run("unstaged", "discard", f, [allLines(f)[0]])).rejects.toThrow("link is a symlink and can only be discarded whole");
+    expect(r.git("diff", "--cached")).toBe("");
+    expect(readlinkSync(join(r.root, "link"))).toBe("two");
+  });
+});
+
 describe("files git converts", () => {
   it("refuses to discard single lines of a file with converted line endings, but discards it whole", async () => {
     const r = setup();
@@ -723,12 +686,8 @@ describe("files git converts", () => {
 
 describe("submodules", () => {
   it("says a submodule can only be staged whole instead of failing in git", async () => {
-    const sub = makeRepo();
-    sub.write("a.txt", "one\n");
-    sub.commit("init");
-    const r = setup();
-    r.write("keep.txt", "keep\n");
-    r.commit("init");
+    const sub = seed({ "a.txt": "one\n" });
+    const r = setup({ "keep.txt": "keep\n" });
     r.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", sub.root, "sub");
     r.commit("add sub");
 
@@ -742,6 +701,25 @@ describe("submodules", () => {
     const moved = (await r.file("staged", "sub"))!;
     await expect(r.run("staged", "unstage", moved, [{ hunk: 0, line: 1 }])).rejects.toThrow("sub is a submodule and can only be unstaged whole");
     expect(await r.run("staged", "unstage", moved, null)).toBe("Unstaged sub");
+  });
+});
+
+describe("serial", () => {
+  it("runs actions one at a time and in order, carrying on past a failure", async () => {
+    const order: string[] = [];
+    const first = serial(async () => {
+      order.push("first starts");
+      await sleep(20);
+      order.push("first ends");
+      throw new Error("first failed");
+    });
+    const second = serial(async () => {
+      order.push("second");
+      return 2;
+    });
+    await expect(first).rejects.toThrow("first failed");
+    expect(await second).toBe(2);
+    expect(order).toEqual(["first starts", "first ends", "second"]);
   });
 });
 

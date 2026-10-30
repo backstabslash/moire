@@ -3,7 +3,7 @@
 Installs and opens [moire](https://github.com/backstabslash/moire), a desktop app for reviewing code changes in a git repo.
 
 ```sh
-npx @backstabslash/moire [path]
+npx @backstabslash/moire [path] [main..feature | HEAD~3 | pr 123]
 ```
 
 The first run downloads the latest release from GitHub and installs it: to `~/Applications/moire.app` on macOS, or to `~/.local/share/moire` on Linux with an app menu entry and a `moire` command in `~/.local/bin`. Later runs update it when a new release is out, then open the repo at `path` (default: the current directory). moire needs `git` on your PATH.

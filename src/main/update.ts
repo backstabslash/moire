@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { app, BrowserWindow, dialog, type MessageBoxOptions, net, Notification, shell } from "electron";
 import { AppImageUpdater } from "electron-updater";
 import type { UpdateNotice } from "../shared/types";
-import { installedVersion, installKind, type MoveIn, newer, npxRoot, type Release, updateNpx, whyManual } from "./install";
+import { installedVersion, installKind, type MoveIn, newer, npxRoot, refreshMacShim, type Release, updateNpx, whyManual } from "./install";
 import { real } from "./launch";
 import { log } from "./log";
 import { loadState } from "./state";
@@ -203,6 +203,7 @@ export function checkForUpdates(manual = false) {
 export function startUpdates() {
   if (!app.isPackaged) return;
   app.on("will-quit", moveStagedIn);
+  if (process.platform === "darwin" && installedByNpx()) refreshMacShim(npxRoot(process.platform, process.env, homedir()), homedir());
   checkForUpdates();
   setInterval(() => checkForUpdates(), CHECK_EVERY);
 }

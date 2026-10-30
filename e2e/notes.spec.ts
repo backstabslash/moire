@@ -1,19 +1,15 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { git, idle, initRepo, launch, shot } = harness();
 let repo: string;
-let userData: string;
 let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
 
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
 const body = Array.from({ length: 60 }, (_, i) => `export const v${i} = ${i};`);
 const edit = (...at: number[]) => body.map((l, i) => (at.includes(i) ? l.replace(`= ${i}`, `= ${i}0`) : l));
-const shot = (name: string) => process.env.MOIRE_SHOTS && page.screenshot({ path: join(process.env.MOIRE_SHOTS, `${name}.png`) });
 const writeNotes = (notes: unknown) => writeFileSync(join(repo, ".git", "moire", "notes.json"), JSON.stringify(notes));
 
 const NOTES = {
@@ -36,11 +32,7 @@ const NOTES = {
 };
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   for (const name of ["a.ts", "b.ts", "c.ts"]) writeFileSync(join(repo, name), body.join("\n") + "\n");
   git("add", "-A");
   git("commit", "-qm", "init");
@@ -50,20 +42,8 @@ test.beforeAll(async () => {
   mkdirSync(join(repo, ".git", "moire"));
   writeNotes(NOTES);
 
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1" } });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ app, page } = await launch(repo));
   await expect(page.locator(".file")).toHaveCount(3);
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
 });
 
 test("chapters list in reading order and show what they leave out", async () => {
@@ -124,6 +104,111 @@ test("I or the toolbar's Notes button hides the panel and its marks", async () =
   await expect(page.locator(".notes-panel")).toBeVisible();
 });
 
+test("at the smallest window controls stay in their bars, and notes give way to the diff", async () => {
+  const resize = (w: number, h: number) => app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setSize(w, h), [w, h]);
+  const box = async (selector: string) => (await page.locator(selector).first().boundingBox())!;
+  const right = async (selector: string) => ((b) => b.x + b.width)(await box(selector));
+  await resize(900, 600);
+  await expect.poll(() => page.evaluate(() => innerWidth)).toBe(900);
+  await page.locator(".hunk-head").first().hover();
+  expect(await right(".pane-h .actions")).toBe(await right(".hh-actions"));
+  expect(await right(".hh-actions")).toBeLessThanOrEqual(await right(".hunk-head"));
+  expect(await right(".picker")).toBeLessThanOrEqual((await box(".tool-btn")).x);
+  await page.locator(".theme-btn").click();
+  const menu = await box(".theme-pop");
+  expect(menu.y + menu.height).toBeLessThanOrEqual(600);
+  await page.keyboard.press("Escape");
+
+  const edge = await box(".side-resize");
+  await page.mouse.move(edge.x + 2, edge.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(600, edge.y + 200);
+  await page.mouse.up();
+  await expect(page.locator(".notes-panel")).toHaveCount(0);
+  expect((await box(".main")).width).toBeGreaterThanOrEqual(360);
+  await page.locator(".side-resize").dblclick();
+  await resize(1440, 920);
+  await expect(page.locator(".notes-panel")).toBeVisible();
+});
+
+test("only the open chapter shows its text, and the others keep it in a tooltip", async () => {
+  await page.locator(".chapter-head").first().click();
+  await expect(page.locator(".note-text")).toHaveCount(1);
+  await expect(page.locator(".chapter.is-current .note-text")).toBeVisible();
+  await expect(page.locator(".chapter-head").nth(1)).toHaveAttribute("data-tip", /^Callers\n/);
+});
+
+test("the panel's edge drags to resize, and a double-click resets it", async () => {
+  const panel = page.locator(".notes-panel");
+  const width = async () => (await panel.boundingBox())!.width;
+  const before = await width();
+  const edge = (await page.locator(".notes-resize").boundingBox())!;
+  await page.mouse.move(edge.x + edge.width / 2, edge.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(edge.x + edge.width / 2 - 120, edge.y + 200, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(width).toBe(before + 120);
+  await page.locator(".notes-resize").dblclick();
+  await expect.poll(width).toBe(before);
+});
+
+test("staging a chapter's hunk moves on to the next range, and other hunks leave the place alone", async () => {
+  const stop = page.locator(".stop.is-current .stop-where");
+  await page.locator(".chapter-head").first().click();
+  await expect(page.locator(".file.is-active .name")).toHaveText("b.ts");
+  await page.keyboard.press("s");
+  await expect(stop).toContainText("a.ts:4");
+  await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
+  await expect(page.locator(".row.note-now .ln.b")).toHaveText("4");
+
+  await page.locator(".file", { hasText: "c.ts" }).click();
+  await expect(page.locator(".file.is-active .name")).toHaveText("c.ts");
+  await page.keyboard.press("s");
+  await expect.poll(() => git("diff", "--cached", "--name-only").trim().split("\n")).toEqual(["b.ts", "c.ts"]);
+  await expect(stop).toContainText("a.ts:4");
+
+  await page.locator(".file", { hasText: "a.ts" }).click();
+  await page.locator(".stop.is-current").click();
+  await expect(page.locator(".row.note-now .ln.b")).toHaveText("4");
+  await page.keyboard.press("s");
+  await expect(page.locator(".chapter.is-current .chapter-title")).toHaveText("Callers");
+  await expect(page.locator(".row.note-now .ln.b")).toHaveText(["40", "41", "42"]);
+  await expect(page.locator(".row.note-now").first()).toBeInViewport();
+
+  git("reset", "-q");
+  await expect(page.locator(".file")).toHaveCount(3);
+});
+
+test("with notes hidden, staging a chapter's hunk stays put", async () => {
+  await page.locator(".chapter-head").first().click();
+  await page.keyboard.press(".");
+  await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
+  await page.keyboard.press("Shift+I");
+  await expect(page.locator(".notes-panel")).toHaveCount(0);
+  await page.keyboard.press("s");
+  await expect.poll(() => git("diff", "--cached", "--name-only").trim()).toBe("a.ts");
+  await idle();
+  await expect(page.locator(".notes-panel")).toHaveCount(0);
+  await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
+
+  await page.keyboard.press("Shift+I");
+  await expect(page.locator(".notes-panel")).toBeVisible();
+  git("reset", "-q");
+  await expect(page.locator(".file")).toHaveCount(3);
+});
+
+test("a partly staged chapter opens at its first unstaged range, in the same tab", async () => {
+  git("add", "b.ts");
+  await expect(page.locator(".file")).toHaveCount(2);
+  await page.locator(".chapter-head").nth(1).click();
+  await page.locator(".chapter-head").first().click();
+  await expect(page.locator(".stop.is-current .stop-where")).toContainText("a.ts:4");
+  await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
+  await expect(page.getByRole("button", { name: /^Unstaged/ })).toBeVisible();
+  git("reset", "-q");
+  await expect(page.locator(".file")).toHaveCount(3);
+});
+
 test("a chapter stages all its ranges at once, then the next one opens", async () => {
   await page.locator(".chapter-head").first().click();
   await page.getByRole("button", { name: "Stage this chapter" }).click();
@@ -138,10 +223,7 @@ test("a chapter stages all its ranges at once, then the next one opens", async (
   expect(git("diff", "--cached", "a.ts")).not.toContain("v40");
 });
 
-test("a staged chapter shows a lined-up grating, and its ranges open in the Staged tab", async () => {
-  const finished = page.locator(".chapter").first();
-  await expect(finished.locator(".reg")).toHaveCount(0);
-  expect(await finished.evaluate((el) => getComputedStyle(el).backgroundImage)).toContain("repeating-linear-gradient");
+test("a staged chapter's ranges open in the Staged tab", async () => {
   await page.locator(".chapter-head").first().click();
   await expect(page.locator(".picker-btn")).toHaveText("Staged");
   await expect(page.locator(".file.is-active .name")).toHaveText("b.ts");
@@ -167,4 +249,16 @@ test("committing moves a chapter to its commit", async () => {
   await expect(page.locator(".uncovered")).toHaveCount(0);
   await page.keyboard.press("1");
   await expect(page.locator(".chapter-title")).toHaveText(["Callers"]);
+});
+
+test("a long notes summary clamps to three lines and opens", async () => {
+  const summary = Array.from({ length: 40 }, (_, i) => `Sentence number ${i} about this change.`).join(" ");
+  writeNotes({ summary, chapters: [{ title: "One", ranges: ["a.ts"] }] });
+  const text = page.locator(".notes-summary p");
+  await expect(text).toContainText("Sentence number 39");
+  const clamped = (await text.boundingBox())!.height;
+  await shot("notes-summary");
+  await page.locator(".notes-summary button").click();
+  await expect(page.locator(".notes-summary button")).toHaveText("Show less");
+  expect((await text.boundingBox())!.height).toBeGreaterThan(clamped);
 });

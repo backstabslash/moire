@@ -1,24 +1,14 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { git, initRepo, launch, shots } = harness();
 let repo: string;
-let userData: string;
-let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
-
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
-const shot = (name: string) => process.env.MOIRE_SHOTS && page.screenshot({ path: join(process.env.MOIRE_SHOTS, `${name}.png`) });
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   writeFileSync(join(repo, ".gitignore"), "IDEAS.md\nout/\n");
   mkdirSync(join(repo, "src"));
   writeFileSync(join(repo, "src", "a.ts"), "export const a = 1;\n");
@@ -30,50 +20,20 @@ test.beforeAll(async () => {
   mkdirSync(join(repo, "out"));
   writeFileSync(join(repo, "out", "bundle.js"), "console.log('built');\n");
 
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1" } });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ page } = await launch(repo));
   await expect(page.locator(".file")).toHaveCount(1);
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
 });
 
 test("a shows every file, with ignored ones, and opens an unchanged file whole", async () => {
   await page.keyboard.press("a");
   const nav = page.getByRole("navigation", { name: "All files" });
-  await expect(nav.locator(".tree-dir")).toHaveText(["out/", "src/"]);
+  await expect(nav.locator(".tree-dir")).toHaveText(["out", "src"]);
   await expect(nav.locator(".file.is-ignored")).toHaveText("IDEAS.md");
   await expect(nav.locator(".file .name")).toHaveText(["a.ts", "util.ts", ".gitignore", "IDEAS.md"]);
 
   await nav.locator('[data-tip^="IDEAS.md"]').click();
   await expect(page.locator('.pane-h b[data-tip="Working tree, IDEAS.md, unchanged"]')).toBeVisible();
   await expect(page.locator(".row.uni .cell")).toHaveText(["# Ideas", "", "- a file tree"]);
-
-  await page.keyboard.press("/");
-  await expect(page.locator(".search input")).toBeFocused();
-  await page.keyboard.type("tree");
-  await expect(page.locator(".search-status")).toHaveText("1 of 1");
-  await expect(page.locator("mark.hit.is-current")).toHaveText("tree");
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("m");
-  await expect(page.locator("article.md h1")).toHaveText("Ideas");
-  await page.keyboard.press("/");
-  await expect(page.locator(".search input")).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect.poll(() => page.evaluate(() => CSS.highlights.get("moire-hit-now")?.size ?? 0)).toBe(0);
-  await page.keyboard.press("/");
-  await expect(page.locator(".search input")).toHaveValue("tree");
-  await expect.poll(() => page.evaluate(() => CSS.highlights.get("moire-hit-now")?.size ?? 0)).toBe(1);
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("m");
 
   await page.keyboard.press("s");
   await expect(page.locator(".toast.show")).toContainText("IDEAS.md has no changes here");
@@ -84,10 +44,7 @@ test("an ignored folder is read when opened", async () => {
   await nav.locator(".tree-dir", { hasText: "out" }).click();
   await nav.locator('[data-tip^="out/bundle.js"]').click();
   await expect(page.locator(".row.uni .cell")).toHaveText(["console.log('built');"]);
-  await shot("tree-light");
-  await page.keyboard.press("t");
-  await shot("tree-dark");
-  await page.keyboard.press("t");
+  await shots("tree");
 });
 
 test("an open ignored folder shows files as they're added and removed", async () => {

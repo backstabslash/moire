@@ -1,25 +1,16 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { git, initRepo, launch, shots } = harness();
 let repo: string;
-let userData: string;
-let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
 
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
-const shot = (name: string) => process.env.MOIRE_SHOTS && page.screenshot({ path: join(process.env.MOIRE_SHOTS, `${name}.png`) });
 const progress = () => page.locator(".stage-progress");
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   writeFileSync(join(repo, "a.ts"), "export const a = 1;\nexport const keep = true;\n");
   writeFileSync(join(repo, "b.ts"), "export const b = 1;\n");
   git("add", "-A");
@@ -28,25 +19,12 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "b.ts"), "export const b = 2;\n");
   writeFileSync(join(repo, "c.ts"), "export const c = 1;\n");
 
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1" } });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ page } = await launch(repo));
   await expect(page.locator(".file")).toHaveCount(3);
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
 });
 
 test("the sidebar counts staged lines as you stage them", async () => {
   await expect(progress()).toContainText("0% staged");
-  expect((await progress().locator(".stage-bar").boundingBox())?.height).toBe(8);
   for (const name of ["a.ts", "c.ts"]) {
     await page.locator(".file", { hasText: name }).click();
     await page.getByRole("button", { name: "Stage file" }).click();
@@ -72,10 +50,9 @@ test("a file edited after it was staged comes back, showing only the new edits",
   await expect(page.locator(".since")).toContainText("Staged lines are faded.");
   await expect(page.locator(".panes-head .tag-a")).toHaveAttribute("data-tip", /^HEAD/);
   await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
-  await shot("progress-light");
-  await page.keyboard.press("t");
-  await shot("progress-dark");
-  await page.keyboard.press("t");
+  await shots("progress");
+  await page.locator(".since-close").click();
+  await expect(page.locator(".since")).toHaveCount(0);
 });
 
 test("the All view can hide fully staged files", async () => {

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_KEYMAP, lookup } from "../../../shared/keymap";
 import { type KeyPress, sameKey, strokeOf } from "./keyboard";
 
 const press = (key: string, code: string, mods: Partial<KeyPress> & { altGr?: boolean } = {}): KeyPress => ({
@@ -61,16 +60,6 @@ describe("strokeOf", () => {
   it("skips dead keys and composition", () => {
     expect(strokeOf(press("Dead", "BracketLeft"), false)).toBeNull();
     expect(strokeOf({ ...press("a", "KeyA"), isComposing: true }, false)).toBeNull();
-  });
-});
-
-describe("lookup", () => {
-  it("waits for the second key of a sequence and falls back to a single key", () => {
-    expect(lookup(DEFAULT_KEYMAP, null, "g")).toBe("prefix");
-    expect(lookup(DEFAULT_KEYMAP, "g", "g")).toBe("firstHunk");
-    expect(lookup(DEFAULT_KEYMAP, "g", "j")).toBe("nextHunk");
-    expect(lookup(DEFAULT_KEYMAP, null, "G")).toBe("lastHunk");
-    expect(lookup(DEFAULT_KEYMAP, null, "q")).toBeNull();
   });
 });
 

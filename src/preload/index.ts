@@ -10,6 +10,7 @@ import type {
   CopyPlan,
   CopyResult,
   DiffResult,
+  EditorChoices,
   FileContents,
   FileDiff,
   FileTree,
@@ -27,6 +28,14 @@ import type {
 const api = {
   platform: process.platform,
   initialRepo: (): Promise<RepoInfo | null> => ipcRenderer.invoke("repo:initial"),
+  takeCompare: (): Promise<string[] | null> => ipcRenderer.invoke("repo:take-compare"),
+  onCompare: (listener: () => void): (() => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("repo:compare", handler);
+    return () => {
+      ipcRenderer.off("repo:compare", handler);
+    };
+  },
   openRepo: (path: string): Promise<RepoInfo> => ipcRenderer.invoke("repo:open", path),
   pickRepo: (from?: string): Promise<RepoInfo | null> => ipcRenderer.invoke("repo:pick", from),
   recentRepos: (): Promise<string[]> => ipcRenderer.invoke("repo:recent"),
@@ -90,6 +99,7 @@ const api = {
   commits: (root: string, limit: number): Promise<CommitInfo[]> => ipcRenderer.invoke("git:commits", root, limit),
   commitDetail: (root: string, rev: string): Promise<CommitDetail> => ipcRenderer.invoke("git:commit-detail", root, rev),
   branches: (root: string): Promise<Refs> => ipcRenderer.invoke("git:branches", root),
+  compareMode: (root: string, args: string[]): Promise<CompareMode> => ipcRenderer.invoke("git:compare", root, args),
   upstream: (root: string): Promise<Upstream | null> => ipcRenderer.invoke("git:upstream", root),
   act: (root: string, req: StageRequest): Promise<string> => ipcRenderer.invoke("git:act", root, req),
   actAll: (root: string, req: StageAllRequest): Promise<string> => ipcRenderer.invoke("git:act-all", root, req),
@@ -98,7 +108,9 @@ const api = {
   dropDiscarded: (root: string, id: string): Promise<void> => ipcRenderer.invoke("git:drop-discarded", root, id),
   commit: (root: string, message: string): Promise<string> => ipcRenderer.invoke("git:commit", root, message),
   notes: (root: string, commit?: string): Promise<NotesFile> => ipcRenderer.invoke("notes:get", root, commit),
-  openInEditor: (root: string, path: string, line: number): Promise<string> => ipcRenderer.invoke("editor:open", root, path, line),
+  openInEditor: (root: string, path: string, line: number): Promise<string | null> => ipcRenderer.invoke("editor:open", root, path, line),
+  editors: (): Promise<EditorChoices> => ipcRenderer.invoke("editor:list"),
+  chooseEditor: (template: string): Promise<string> => ipcRenderer.invoke("editor:choose", template),
   revealFile: (root: string, path: string): Promise<void> => ipcRenderer.invoke("file:reveal", root, path),
   openWithDefault: (root: string, path: string): Promise<void> => ipcRenderer.invoke("file:open", root, path),
   copy: (text: string): Promise<void> => ipcRenderer.invoke("clipboard:write", text),

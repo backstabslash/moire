@@ -1,16 +1,12 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { git, initRepo, launch } = harness();
 let repo: string;
-let userData: string;
-let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
 
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
 const nav = () => page.getByRole("navigation", { name: "All files" });
 const dir = (path: string) => nav().locator(`.tree-dir[data-dir="${path}"]`);
 
@@ -35,11 +31,7 @@ const recordTreeStates = () =>
 const seen = () => page.evaluate(() => [...(window as unknown as { seen: Set<string> }).seen]);
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   for (const d of ["src", "docs", "lib/deep"]) mkdirSync(join(repo, d), { recursive: true });
   writeFileSync(join(repo, "src", "a.ts"), "export const a = 1;\n");
   writeFileSync(join(repo, "docs", "guide.md"), "# Guide\n");
@@ -50,20 +42,8 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "docs", "guide.md"), "# Guide\n\nMore.\n");
   git("add", "docs/guide.md");
 
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1" } });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ page } = await launch(repo));
   await expect(page.locator(".file")).toHaveCount(1);
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
 });
 
 test("opened folders survive mode switches, and the tree never blanks meanwhile", async () => {
@@ -79,7 +59,7 @@ test("opened folders survive mode switches, and the tree never blanks meanwhile"
     await expect(page.locator(".picker-btn")).toHaveText(names[key]);
   }
   await page.waitForTimeout(300);
-  expect(await seen()).toEqual(["lib/deep/,src/"]);
+  expect(await seen()).toEqual(["lib/deep,src"]);
 });
 
 test("a twice keeps opened folders, open from the first frame", async () => {
@@ -89,14 +69,14 @@ test("a twice keeps opened folders, open from the first frame", async () => {
   await page.keyboard.press("a");
   await expect(nav().locator('[data-tip^="lib/deep/x.ts"]')).toBeVisible();
   await page.waitForTimeout(300);
-  expect(await seen()).toEqual(["lib/deep/,src/"]);
+  expect(await seen()).toEqual(["lib/deep,src"]);
 });
 
 test("the active file's folder can be closed, and opens again when a file in it is picked", async () => {
-  await expect(dir("src/")).toHaveText("src/");
+  await expect(dir("src/")).toHaveText("src");
   await dir("src/").click();
   await expect(nav().locator('[data-tip^="src/a.ts"]')).toHaveCount(0);
-  await expect(dir("src/")).toHaveText("src/1");
+  await expect(dir("src/")).toHaveText("src1");
   await page.keyboard.press("a");
   await page.keyboard.press("a");
   await expect(dir("src/")).toHaveAttribute("aria-expanded", "false");
@@ -114,7 +94,7 @@ test("the active file's folder can be closed, and opens again when a file in it 
 
 test("a folder holding just one folder shares its row, which opens and closes both", async () => {
   await expect(dir("lib/")).toHaveCount(0);
-  await expect(dir("lib/deep/")).toHaveText("lib/deep/");
+  await expect(dir("lib/deep/")).toHaveText("lib/deep");
   await dir("lib/deep/").click();
   await expect(dir("lib/deep/")).toHaveAttribute("aria-expanded", "false");
   await expect(nav().locator('[data-path="lib/deep/x.ts"]')).toHaveCount(0);
@@ -122,8 +102,8 @@ test("a folder holding just one folder shares its row, which opens and closes bo
   writeFileSync(join(repo, "lib", "y.ts"), "export const y = 1;\n");
   await page.keyboard.press("r");
   await expect(dir("lib/")).toHaveAttribute("aria-expanded", "false");
-  await expect(dir("lib/")).toHaveText("lib/1");
+  await expect(dir("lib/")).toHaveText("lib1");
   await dir("lib/").click();
   await expect(dir("lib/deep/")).toHaveAttribute("aria-expanded", "false");
-  await expect(dir("lib/")).toHaveText("lib/");
+  await expect(dir("lib/")).toHaveText("lib");
 });

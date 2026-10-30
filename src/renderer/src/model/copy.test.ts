@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { DiffLine, FileDiff, Hunk } from "../../../shared/types";
-import { copySide, textBetween } from "./copy";
+import { diffHunk } from "../../../main/test-repo";
+import type { FileDiff } from "../../../shared/types";
+import { copyCode, copyMarkdown, copySide, textBetween } from "./copy";
 import { buildRows, type Row } from "./rows";
 
 const old = Array.from({ length: 20 }, (_, i) => `const v${i + 1} = ${i + 1};`);
@@ -8,26 +9,9 @@ const changed = old.map((l, i) => (i === 4 || i === 15 ? l.replace("=", "= 10 *"
 const oldText = old.join("\n") + "\n";
 const newText = changed.join("\n") + "\n";
 
-function hunk(at: number): Hunk {
-  const ctx = (n: number): DiffLine => ({ kind: "ctx", text: old[n - 1], oldNo: n, newNo: n });
-  return {
-    oldStart: at - 3,
-    oldLines: 7,
-    newStart: at - 3,
-    newLines: 7,
-    header: "",
-    lines: [
-      ctx(at - 3),
-      ctx(at - 2),
-      ctx(at - 1),
-      { kind: "del", text: old[at - 1], oldNo: at },
-      { kind: "add", text: changed[at - 1], newNo: at },
-      ctx(at + 1),
-      ctx(at + 2),
-      ctx(at + 3),
-    ],
-  };
-}
+const ctx = (n: number) => ` ${old[n - 1]}`;
+const hunk = (at: number) =>
+  diffHunk(at - 3, [ctx(at - 3), ctx(at - 2), ctx(at - 1), `-${old[at - 1]}`, `+${changed[at - 1]}`, ctx(at + 1), ctx(at + 2), ctx(at + 3)]);
 
 const file: FileDiff = { path: "a.ts", status: "modified", binary: false, additions: 2, deletions: 2, hunks: [hunk(5), hunk(16)] };
 const contents = { a: oldText, b: newText, hidden: false };
@@ -71,5 +55,40 @@ describe("copySide", () => {
     expect(copySide({ a: null, b: "x\n", hidden: false }, "a")).toBeNull();
     expect(copySide({ a: null, b: null, hidden: true }, "b")).toBeNull();
     expect(copySide(null, "b")).toBeNull();
+  });
+});
+
+describe("copying selected lines", () => {
+  const sides = { a: { kind: "index" as const, label: "Index" }, b: { kind: "worktree" as const, label: "Working tree" } };
+
+  it("copies code in file order, deletion before its replacement", () => {
+    expect(copyCode(file, contents, new Set(), new Set(["0:3", "0:4", "0:5"]))).toEqual({ text: `${old[4]}\n${changed[4]}\n${old[5]}\n`, count: 3 });
+  });
+
+  it("copies one Markdown block per run of adjacent lines", () => {
+    expect(copyMarkdown(file, contents, new Set(), new Set(["g1", "0:4", "0:6", "0:7"]), sides).text).toBe(
+      `a.ts line 1 (working tree)\n\`\`\`typescript\n${old[0]}\n\`\`\`\n\n` +
+        `a.ts line 5 (added, working tree)\n\`\`\`typescript\n${changed[4]}\n\`\`\`\n\n` +
+        `a.ts lines 7–8 (working tree)\n\`\`\`typescript\n${old[6]}\n${old[7]}\n\`\`\`\n`,
+    );
+  });
+
+  it("keeps a diff block only when the signs say something", () => {
+    expect(copyMarkdown(file, contents, new Set(), new Set(["0:4", "0:5"]), sides).text).toBe(
+      `a.ts lines 5–6 (working tree)\n\`\`\`diff\n+${changed[4]}\n ${old[5]}\n\`\`\`\n`,
+    );
+    expect(copyMarkdown({ ...file, status: "untracked" }, contents, new Set(), new Set(["0:4"]), sides).text).toBe(
+      `a.ts line 5 (new file, working tree)\n\`\`\`typescript\n${changed[4]}\n\`\`\`\n`,
+    );
+  });
+
+  it("numbers a run of deleted lines on the old side", () => {
+    expect(copyMarkdown(file, contents, new Set(), new Set(["0:3"]), sides).text).toBe(`a.ts line 5 (index)\n\`\`\`diff\n-${old[4]}\n\`\`\`\n`);
+  });
+
+  it("copies selected lines of an unchanged file as plain code from the working tree", () => {
+    const unchanged: FileDiff = { ...file, status: "unchanged", hunks: [] };
+    const text = copyMarkdown(unchanged, { a: null, b: newText, hidden: false }, new Set(), new Set(["g4", "g5"]), sides).text;
+    expect(text).toBe(`a.ts lines 4–5 (working tree)\n\`\`\`typescript\n${old[3]}\n${changed[4]}\n\`\`\`\n`);
   });
 });

@@ -1,55 +1,31 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { clipboard, git, idle, initRepo, launch, shot, shots, userData } = harness();
 let repo: string;
-let userData: string;
 let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
 
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
-const shot = (name: string) => process.env.MOIRE_SHOTS && page.screenshot({ path: join(process.env.MOIRE_SHOTS, `${name}.png`) });
-const clipboard = () => app.evaluate(({ clipboard }) => clipboard.readText());
 const clickMenu = (id: string) => app.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.click(), id);
 const hunks = (text: string) => text.split("\n").filter((l) => l.startsWith("@@")).length;
 const body = Array.from({ length: 60 }, (_, i) => `export const v${i} = ${i};`);
 const edited = body.map((l, i) => (i % 15 === 3 ? l.replace("=", "= 1 +") : l)).join("\n") + "\n";
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
   writeFileSync(join(repo, "b.ts"), body.join("\n") + "\n");
   git("add", "-A");
   git("commit", "-qm", "init");
   writeFileSync(join(repo, "a.ts"), edited);
   writeFileSync(join(repo, "b.ts"), body.slice(2).join("\n") + "\n");
-  writeFileSync(join(userData, "keys.json"), JSON.stringify({ stage: "w", stge: "x" }));
+  writeFileSync(join(userData(), "keys.json"), JSON.stringify({ stage: "w", stge: "x" }));
 
-  app = await electron.launch({
-    args: [resolve("."), `--user-data-dir=${userData}`, repo],
-    env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_PREFS: '{"theme":"light"}' },
-  });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ app, page } = await launch(repo, { prefs: { theme: "light" } }));
   await expect(page.locator(".file")).toHaveCount(2);
   await expect(page.locator(".hunk-head")).toHaveCount(4);
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
 });
 
 test("keys.json remaps a key, every label follows, and mistakes are reported", async () => {
@@ -66,16 +42,16 @@ test("keys.json remaps a key, every label follows, and mistakes are reported", a
 });
 
 test("pressing stage while one runs queues it, so three presses stage three hunks", async () => {
-  await expect(page.locator(".app")).toHaveAttribute("aria-busy", "false");
+  await idle();
   await page.keyboard.press("w");
   await page.keyboard.press("w");
   await page.keyboard.press("w");
   await expect.poll(() => hunks(git("diff", "--cached"))).toBe(3);
-  await expect(page.locator(".app")).toHaveAttribute("aria-busy", "false");
+  await idle();
   expect(hunks(git("diff", "--", "a.ts"))).toBe(1);
   await page.locator(".toast button").click();
   for (let i = 0; i < 2; i++) {
-    await expect(page.locator(".app")).toHaveAttribute("aria-busy", "false");
+    await idle();
     await clickMenu("undo");
   }
   await expect.poll(() => git("diff", "--cached")).toBe("");
@@ -101,9 +77,20 @@ test("? shows every key, remapped ones included, and closes with ? or Esc", asyn
   await page.keyboard.press("?");
   await expect(help).toBeHidden();
   await page.keyboard.press("t");
-  await page.locator(".status .keys button", { hasText: "all keys" }).click();
+});
+
+test("the status bar's help button opens the shortcuts, and a second click closes them", async () => {
+  const button = page.locator('[data-command="help"]');
+  const help = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await button.click();
   await expect(help).toBeVisible();
-  await page.keyboard.press("Escape");
+  await button.click();
+  await expect(help).toHaveCount(0);
+  await button.click();
+  await page.locator(".keys-groups").click();
+  await expect(help).toBeVisible();
+  await page.locator(".brand").click();
+  await expect(help).toHaveCount(0);
 });
 
 test("buttons show their keys only when the shortcuts dialog says so, and the dialog shows the version", async () => {
@@ -148,16 +135,13 @@ test("g g and G jump to the first and last hunk, and c copies the focused hunk",
 test("a selection gets copy buttons, and Shift+J extends it", async () => {
   await page.locator(".ln.b.add[data-line]").first().click();
   const head = page.locator(".hunk-head.has-sel");
-  await expect(head.locator(".hh-copy")).toHaveText(["Copyctrl c", "Markdownc"]);
+  await expect(head.locator(".hh-copy")).toHaveText([/^Copy/, /^Markdown/]);
   await page.keyboard.press("Shift+J");
   await page.keyboard.press("Shift+J");
   await expect(page.locator(".ln.b.sel")).toHaveCount(3);
   await page.keyboard.press("Shift+K");
   await expect(page.locator(".ln.b.sel")).toHaveCount(2);
-  await shot("selection-buttons-light");
-  await page.keyboard.press("t");
-  await shot("selection-buttons-dark");
-  await page.keyboard.press("t");
+  await shots("selection-buttons");
   await head.getByRole("button", { name: /^Copy/ }).click();
   expect(await clipboard()).toBe("export const v3 = 1 + 3;\nexport const v4 = 4;\n");
   await head.getByRole("button", { name: /^Markdown/ }).click();
@@ -182,13 +166,13 @@ test("arrow keys walk the file list after a click there, and the toolbar opens s
 });
 
 test("editing keys.json applies without a restart", async () => {
-  writeFileSync(join(userData, "keys.json"), JSON.stringify({ stage: "s", nextFile: "n" }));
+  writeFileSync(join(userData(), "keys.json"), JSON.stringify({ stage: "s", nextFile: "n" }));
   await expect(page.locator(".toast.show")).toHaveText("keys.json: nextFile and nextHit both use n, so nextFile keeps its default.");
   await expect(page.locator(".status .keys button", { hasText: "stage" }).locator("kbd")).toHaveText("s");
 });
 
 test("Edit keyboard shortcuts writes the defaults when there's no file and opens it", async () => {
-  const file = join(userData, "keys.json");
+  const file = join(userData(), "keys.json");
   rmSync(file);
   await app.evaluate(({ shell }) => {
     const opened: string[] = [];

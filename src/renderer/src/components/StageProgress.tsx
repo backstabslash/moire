@@ -41,7 +41,7 @@ export function StageProgress({ staged, total, files, changed, hideStaged, onHid
   );
 }
 
-export function StagedNotice({ newEdits, onMode }: { newEdits: boolean; onMode(mode: CompareMode): void }) {
+export function StagedNotice({ newEdits, onMode, onClose }: { newEdits: boolean; onMode(mode: CompareMode): void; onClose(): void }) {
   return (
     <div className="since">
       <p>{newEdits ? "Staged, then changed again. These are the new edits." : "Staged, then changed again. Staged lines are faded."}</p>
@@ -55,6 +55,9 @@ export function StagedNotice({ newEdits, onMode }: { newEdits: boolean; onMode(m
           <Key id="all" />
         </button>
       </div>
+      <button className="since-close" aria-label="Close" data-tip="Hide this for the file" onClick={onClose}>
+        ×
+      </button>
     </div>
   );
 }

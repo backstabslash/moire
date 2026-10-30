@@ -2,6 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { CompareMode, DiffResult, RepoInfo } from "../../shared/types";
 import { fileKey, remember } from "./model/files";
 
+// Matches the .file.is-fresh animation.
+const FRESH_MS = 2400;
+
 interface Loaded {
   view: string;
   mode: CompareMode;
@@ -73,6 +76,12 @@ export function useDiff(repo: RepoInfo | null, wantMode: CompareMode, events: Di
       refresh();
     });
   }, [repo, refresh]);
+
+  useEffect(() => {
+    if (!fresh) return;
+    const t = setTimeout(() => setFresh(null), FRESH_MS);
+    return () => clearTimeout(t);
+  }, [fresh]);
 
   const preloadViews = useCallback((root: string, except: string, force: boolean) => {
     for (const kind of ["unstaged", "staged", "all"] as const) {

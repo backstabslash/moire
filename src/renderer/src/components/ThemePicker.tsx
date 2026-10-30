@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
+import { Icon } from "./Icon";
 import { Key, keyText, useKeymap } from "./Key";
 
 export const THEMES = [
-  { id: "light", name: "Plate", tone: "light", note: "Glass plate on a light table. The default." },
-  { id: "dark", name: "Plate dark", tone: "dark", note: "The same plates in a dim room." },
-  { id: "pad", name: "Engineering pad", tone: "light", note: "Green computation paper, red and blue pencil." },
-  { id: "p7", name: "P7 phosphor", tone: "dark", note: "Radar scope. Old code is the yellow afterglow, new code the blue flash." },
-  { id: "safelight", name: "Safelight", tone: "dark", note: "Darkroom amber with no blue light, for late nights." },
-  { id: "cyanotype", name: "Cyanotype", tone: "dark", note: "Prussian blue print, sensitiser yellow for new code." },
+  { id: "light", name: "Plate", tone: "light" },
+  { id: "dark", name: "Plate dark", tone: "dark" },
+  { id: "pad", name: "Engineering pad", tone: "light" },
+  { id: "p7", name: "P7 phosphor", tone: "dark" },
+  { id: "safelight", name: "Safelight", tone: "dark" },
+  { id: "cyanotype", name: "Cyanotype", tone: "dark" },
 ] as const;
 
 export type ThemeId = (typeof THEMES)[number]["id"];
@@ -17,14 +18,23 @@ export const LIGHT_IDS = THEME_IDS.filter((id) => toneOf(id) === "light");
 export const DARK_IDS = THEME_IDS.filter((id) => toneOf(id) === "dark");
 
 interface Props {
+  open: boolean;
+  onOpen(open: boolean): void;
   theme: ThemeId;
   cvd: boolean;
+  follow: boolean;
   onTheme(theme: ThemeId): void;
   onCvd(on: boolean): void;
+  onFollow(on: boolean): void;
+  codeFont: string;
+  codeSize: number;
+  onCodeFont(font: string): void;
+  onCodeSize(size: number): void;
 }
 
-export function ThemePicker({ theme, cvd, onTheme, onCvd }: Props) {
-  const [open, setOpen] = useState(false);
+export const CODE_SIZE = { initial: 15, min: 11, max: 20 };
+
+export function ThemePicker({ open, onOpen, theme, cvd, follow, onTheme, onCvd, onFollow, codeFont, codeSize, onCodeFont, onCodeSize }: Props) {
   const boxRef = useRef<HTMLDivElement>(null);
   const current = THEMES.find((t) => t.id === theme) ?? THEMES[0];
   const toggle = keyText(useKeymap(), "theme");
@@ -32,18 +42,11 @@ export function ThemePicker({ theme, cvd, onTheme, onCvd }: Props) {
   useEffect(() => {
     if (!open) return;
     const away = (event: MouseEvent) => {
-      if (!boxRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const esc = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (!boxRef.current?.contains(event.target as Node)) onOpen(false);
     };
     window.addEventListener("mousedown", away);
-    window.addEventListener("keydown", esc);
-    return () => {
-      window.removeEventListener("mousedown", away);
-      window.removeEventListener("keydown", esc);
-    };
-  }, [open]);
+    return () => window.removeEventListener("mousedown", away);
+  }, [open, onOpen]);
 
   return (
     <div className="themes" ref={boxRef}>
@@ -51,14 +54,14 @@ export function ThemePicker({ theme, cvd, onTheme, onCvd }: Props) {
         className="theme-btn"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={toggle ? `Theme (${toggle} switches light and dark)` : "Theme"}
-        onClick={() => setOpen(!open)}
+        aria-label={`Theme: ${current.name}`}
+        data-tip={toggle ? `${current.name} (${toggle} switches light and dark)` : current.name}
+        onClick={() => onOpen(!open)}
       >
         <span className="pair" aria-hidden="true">
           <i />
           <i />
         </span>
-        {current.name}
         <Key id="theme" />
       </button>
       {open && (
@@ -70,24 +73,41 @@ export function ThemePicker({ theme, cvd, onTheme, onCvd }: Props) {
                 <i />
                 <i />
               </span>
-              <span>
-                {t.name}
-                <small>{t.note}</small>
-              </span>
+              <span>{t.name}</span>
             </button>
           ))}
           <div className="sep" />
+          <button className="cvd-opt" role="menuitemcheckbox" aria-checked={follow} onClick={() => onFollow(!follow)}>
+            <span className="cvd-pair" aria-hidden="true">
+              <Icon name="system" />
+            </span>
+            <span>Follow system</span>
+            <span className="switch" aria-hidden="true" />
+          </button>
           <button className="cvd-opt" role="menuitemcheckbox" aria-checked={cvd} onClick={() => onCvd(!cvd)}>
             <span className="cvd-pair" aria-hidden="true">
               <i style={{ background: "#c45a00" }} />
               <i style={{ background: "#1f62c4" }} />
             </span>
-            <span>
-              Colour-blind safe plates
-              <small>Orange for A, blue for B, in any theme.</small>
-            </span>
+            <span>Colour-blind safe plates</span>
             <span className="switch" aria-hidden="true" />
           </button>
+          <div className="sep" />
+          <div className="code-type">
+            <label>
+              <span>Code font</span>
+              <input value={codeFont} placeholder="Commit Mono" spellCheck={false} onChange={(e) => onCodeFont(e.target.value)} />
+            </label>
+            <span className="code-size" role="group" aria-label="Code size">
+              <button aria-label="Smaller code" disabled={codeSize <= CODE_SIZE.min} onClick={() => onCodeSize(codeSize - 1)}>
+                −
+              </button>
+              <output>{codeSize}</output>
+              <button aria-label="Larger code" disabled={codeSize >= CODE_SIZE.max} onClick={() => onCodeSize(codeSize + 1)}>
+                +
+              </button>
+            </span>
+          </div>
         </div>
       )}
     </div>

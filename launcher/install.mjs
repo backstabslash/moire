@@ -25,17 +25,21 @@ import { pipeline } from "node:stream/promises";
 
 const releases = process.env.MOIRE_RELEASES || "https://api.github.com/repos/backstabslash/moire/releases/latest";
 
-export const usage = "usage: npx @backstabslash/moire [path] [--no-sandbox] [--uninstall] [--version] [--help]";
+export const usage = "usage: npx @backstabslash/moire [path] [main..feature | HEAD~3 | pr 123] [--no-sandbox] [--uninstall] [--version] [--help]";
 
-/** @param {string[]} args */
-export function parseArgs(args) {
+/** @param {string[]} args @param {(path: string) => boolean} [exists] */
+export function parseArgs(args, exists = existsSync) {
+  const words = args.filter((a) => !a.startsWith("-"));
+  const pr = words[0] === "pr" && /^\d+$/.test(words[1] ?? "");
+  const hasPath = words.length > 0 && !pr && (/^\.{0,2}\/|^\.{1,2}$/.test(words[0]) || exists(words[0]));
   const known = ["--help", "-h", "--version", "-v", "--uninstall", "--no-sandbox"];
   return {
     help: args.includes("--help") || args.includes("-h"),
     version: args.includes("--version") || args.includes("-v"),
     uninstall: args.includes("--uninstall"),
     noSandbox: args.includes("--no-sandbox"),
-    path: args.find((a) => !a.startsWith("-")),
+    path: hasPath ? words[0] : undefined,
+    compare: words.slice(hasPath ? 1 : 0),
     unknown: args.find((a) => a.startsWith("-") && !known.includes(a)),
   };
 }
@@ -127,7 +131,16 @@ export function binScript(root, noSandbox) {
 
 /** @param {string} app */
 export function macShim(app) {
-  return `#!/bin/sh\ncase "\${1:-.}" in /*) dir="$1" ;; *) dir="$PWD/\${1:-.}" ;; esac\nexec open -na ${quote(app)} --args "$dir"\n`;
+  return [
+    "#!/bin/sh",
+    'case "$1 $2" in',
+    '  "pr "[0-9]*) dir="$PWD" ;;',
+    '  /*) dir="$1"; shift ;;',
+    '  *) if [ -e "$1" ]; then dir="$PWD/$1"; shift; else dir="$PWD"; fi ;;',
+    "esac",
+    `exec open -na ${quote(app)} --args "$dir" "$@"`,
+    "",
+  ].join("\n");
 }
 
 /** @param {string} bin @param {string} owner @param {string} script */
@@ -283,15 +296,15 @@ export function uninstall() {
   return { removed, data };
 }
 
-/** @param {string} platform @param {string} home @param {NodeJS.ProcessEnv} env @param {boolean} noSandbox @param {string} repo */
-export function launchCommand(platform, home, env, noSandbox, repo) {
-  if (platform === "darwin") return { cmd: "open", args: ["-na", join(home, "Applications", "moire.app"), "--args", repo] };
-  return { cmd: join(linuxPaths(env, home).root, "current", "moire"), args: [...(noSandbox ? ["--no-sandbox"] : []), repo] };
+/** @param {string} platform @param {string} home @param {NodeJS.ProcessEnv} env @param {boolean} noSandbox @param {string} repo @param {string[]} [compare] */
+export function launchCommand(platform, home, env, noSandbox, repo, compare = []) {
+  if (platform === "darwin") return { cmd: "open", args: ["-na", join(home, "Applications", "moire.app"), "--args", repo, ...compare] };
+  return { cmd: join(linuxPaths(env, home).root, "current", "moire"), args: [...(noSandbox ? ["--no-sandbox"] : []), repo, ...compare] };
 }
 
-/** @param {string} repo @returns {Promise<string | null>} */
-export async function launch(repo) {
-  const { cmd, args } = launchCommand(process.platform, homedir(), process.env, runsWithoutSandbox(), repo);
+/** @param {string} repo @param {string[]} [compare] @returns {Promise<string | null>} */
+export async function launch(repo, compare) {
+  const { cmd, args } = launchCommand(process.platform, homedir(), process.env, runsWithoutSandbox(), repo, compare);
   // A file rather than a pipe, since the app keeps writing to stderr after the launcher exits.
   const dir = mkdtempSync(join(tmpdir(), "moire-launch-"));
   const log = join(dir, "stderr");

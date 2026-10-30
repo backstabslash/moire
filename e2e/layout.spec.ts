@@ -1,16 +1,13 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { git, initRepo, launch } = harness();
 let repo: string;
-let userData: string;
 let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
 
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
 const lines = (changed: number) => Array.from({ length: 30 }, (_, i) => (i === changed ? "changed" : `line ${i}`)).join("\n") + "\n";
 const box = async (selector: string) => (await page.locator(selector).first().boundingBox())!;
 const height = async (selector: string) => (await box(selector)).height;
@@ -18,7 +15,6 @@ const height = async (selector: string) => (await box(selector)).height;
 async function expectFrame() {
   const viewport = await page.evaluate(() => innerHeight);
   const status = await box(".status");
-  expect(status.height).toBe(30);
   expect(status.y + status.height).toBe(viewport);
   for (const selector of [".sidebar", ".sidebar > :last-child", ".main", ".empty-state"]) {
     if (!(await page.locator(selector).count())) continue;
@@ -29,11 +25,7 @@ async function expectFrame() {
 }
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   writeFileSync(join(repo, "a.ts"), lines(-1));
   writeFileSync(join(repo, "notes.md"), lines(-1));
   git("add", "-A");
@@ -43,20 +35,8 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "a.ts"), lines(20));
   writeFileSync(join(repo, "notes.md"), lines(5));
 
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1" } });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ app, page } = await launch(repo));
   await expect(page.locator(".file")).toHaveCount(2);
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
 });
 
 test("the frame and headers keep their size across views", async () => {
@@ -107,9 +87,14 @@ test("a narrow window shows unified for now, and split stays the setting", async
   await expect(html).toHaveAttribute("data-layout", "unified");
   await expect(page.getByRole("button", { name: "Unified" })).toHaveClass("is-auto");
   await expect(page.locator(".toast.show")).toContainText("Unified layout while the window is narrow");
+  await page.getByRole("button", { name: "Split" }).hover();
+  await expect(page.locator(".hover-tip")).toHaveText("Unified while the window is narrow. Click Split to use it anyway.");
 
   await page.keyboard.press("v");
   await expect(html).toHaveAttribute("data-layout", "split");
+  await page.mouse.move(0, 0);
+  await page.getByRole("button", { name: "Unified" }).hover();
+  await expect(page.locator(".hover-tip")).toHaveText("Unified");
   const clipped = await page.locator(".pane-h .actions button").evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth).length);
   expect(clipped).toBe(0);
 

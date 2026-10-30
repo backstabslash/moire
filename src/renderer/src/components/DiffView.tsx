@@ -1,12 +1,13 @@
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
-import { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, Fragment, memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CommandId } from "../../../shared/keymap";
 import type { CompareMode, FileDiff, SideInfo, StageAction } from "../../../shared/types";
 import type { TokLines } from "../highlight/types";
 import { type RowPos, textBetween } from "../model/copy";
+import { familyOf } from "../model/family";
 import { modeNote } from "../model/modes";
 import { type NameParts, renameParts } from "../model/rename";
-import type { Layout, Row, Side } from "../model/rows";
+import { FOLD_STEP, hunkSpans, type HunkSpan, type Layout, type LineRow, type Row, type Side } from "../model/rows";
 import type { PreviewKind } from "../model/preview";
 import { type Mark, newLineOf, noteClass } from "../model/notes";
 import type { Find, Hit } from "../model/search";
@@ -14,6 +15,9 @@ import { type Col, changedRefs, hunkRefs } from "../model/selection";
 import type { Range } from "../model/words";
 import type { SelectHow } from "../useSelection";
 import { Code, hangingIndent, withoutJoins } from "./Code";
+import { DiffStat } from "./DiffStat";
+import { FileGlyph } from "./FileGlyph";
+import { Icon } from "./Icon";
 import { Key, keyText, MAC, useKeymap } from "./Key";
 import { Registered } from "./Mark";
 import { Minimap } from "./Minimap";
@@ -24,6 +28,7 @@ const HUNK_HEAD = 36;
 const FOLD = 28;
 const RESTORE_MS = 300;
 const AUTOSCROLL_EDGE_PX = 40;
+const CLEAR_OF_STICKY_HEAD_PX = 40;
 const AUTOSCROLL_MAX_PX_PER_FRAME = 30;
 const OLD_SIDE = 1;
 const NEW_SIDE = 2;
@@ -32,14 +37,18 @@ type SelectedSides = 0 | typeof OLD_SIDE | typeof NEW_SIDE | typeof BOTH_SIDES;
 
 export interface DiffViewHandle {
   scrollToRow(index: number, align?: "start" | "center" | "auto"): void;
+  showHunk?(hunk: number): void;
   scroller(): HTMLDivElement | null;
   side?(): "a" | "b";
+  selectedText?(): string | null;
 }
 
 interface Props {
   file: FileDiff;
   rows: Row[];
   initialRow?: { index: number; align: "start" | "center" };
+  spot?: Spot | null;
+  onSpot?(spot: Spot | null): void;
   layout: Layout;
   a: SideInfo;
   b: SideInfo;
@@ -69,9 +78,11 @@ interface Props {
   blink: Blink | null;
   onBlink(hunk: number): void;
   onMenu(path: string, event: React.MouseEvent): void;
+  onLineMenu(row: LineRow, side: "a" | "b" | null, event: React.MouseEvent): void;
   onStub(action: "undo" | "view", line: number): void;
   notice?: React.ReactNode;
   notes?: { marks: Mark[]; chapter: number | null; stop: number | null } | null;
+  onRevealFolder?(dir: string): void;
 }
 
 export interface Blink {
@@ -92,6 +103,8 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     file,
     rows,
     initialRow,
+    spot,
+    onSpot,
     a,
     b,
     tokens,
@@ -120,9 +133,11 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     blink,
     onBlink,
     onMenu,
+    onLineMenu,
     onStub,
     notice,
     notes,
+    onRevealFolder,
   } = props;
   const layout = file.status === "unchanged" || preview?.kind === "markdown" ? "unified" : preview ? "split" : props.layout;
   const onlyB = file.status === "added" || file.status === "untracked" || file.status === "unchanged";
@@ -130,15 +145,18 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
   const diffRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<DiffViewHandle>(null);
   const selectionEndRows = useRef<number[]>([]);
+  const spans = useMemo(() => hunkSpans(rows), [rows]);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => (rows[i].t === "hunk" ? HUNK_HEAD : rows[i].t === "fold" || rows[i].t === "stub" ? FOLD : rows[i].t === "note" ? 120 : ROW),
     getItemKey: (i) => rows[i].key,
     overscan: 24,
+    scrollPaddingStart: CLEAR_OF_STICKY_HEAD_PX,
     rangeExtractor: (range) => {
       const shown = defaultRangeExtractor(range);
-      const extra = selectionEndRows.current.filter((i) => i < range.count && !shown.includes(i));
+      const pinned = spanAt(spans, range.startIndex)?.head;
+      const extra = [...selectionEndRows.current, ...(pinned === undefined ? [] : [pinned])].filter((i) => i < range.count && !shown.includes(i));
       return extra.length ? [...shown, ...extra].sort((x, y) => x - y) : shown;
     },
   });
@@ -181,8 +199,11 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
         y < box.top + AUTOSCROLL_EDGE_PX ? y - box.top - AUTOSCROLL_EDGE_PX : y > box.bottom - AUTOSCROLL_EDGE_PX ? y - box.bottom + AUTOSCROLL_EDGE_PX : 0;
       if (into) {
         el.scrollTop += Math.sign(into) * Math.ceil(Math.min(1, Math.abs(into) / AUTOSCROLL_EDGE_PX) * AUTOSCROLL_MAX_PX_PER_FRAME);
-        const at = document.elementFromPoint(Math.min(box.right - 1, Math.max(box.left + 1, x)), Math.min(box.bottom - 1, Math.max(box.top + 1, y)));
-        const line = at?.closest(".vrow")?.querySelector<HTMLElement>(`[data-line][data-col="${col}"]`);
+        const points = document.elementsFromPoint(Math.min(box.right - 1, Math.max(box.left + 1, x)), Math.min(box.bottom - 1, Math.max(box.top + 1, y)));
+        const line = points
+          .find((at) => at.closest(".row"))
+          ?.closest(".vrow")
+          ?.querySelector<HTMLElement>(`[data-line][data-col="${col}"]`);
         if (line) onSelect(line.dataset.line!, col, "drag");
       }
       frame = requestAnimationFrame(step);
@@ -205,46 +226,45 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     const el = scrollRef.current;
     if (!initialRow || !settling.current || !el) return;
     settling.current--;
-    const [offset] = virtualizer.getOffsetForIndex(initialRow.index, initialRow.align) ?? [0];
-    const top = Math.max(0, initialRow.align === "start" ? offset - 40 : offset);
+    const [top] = virtualizer.getOffsetForIndex(initialRow.index, initialRow.align) ?? [0];
     if (Math.abs(el.scrollTop - top) < 1) return void (settling.current = 0);
     el.scrollTop = top;
     el.dispatchEvent(new Event("scroll"));
   });
 
-  const anchor = useRef<(Anchor & { offset: number }) | null>(null);
+  const anchor = useRef<Spot | null>(initialRow ? null : (spot ?? null));
   const shownRows = useRef(rows);
   // Rows above the anchor get measured after the first jump to it, which moves it again; so it's re-applied briefly.
-  const restore = useRef<{ key: string; offset: number; until: number } | null>(null);
+  const restore = useRef<{ key: string; offset: number; until: number; top?: number } | null>(null);
   const record = () => {
-    if (restore.current && performance.now() < restore.current.until) return;
-    restore.current = null;
     const top = scrollRef.current?.scrollTop ?? 0;
+    const held = restore.current;
+    if (held && performance.now() < held.until && (held.top === undefined || Math.abs(held.top - top) < 1)) return;
+    restore.current = null;
     const first = virtualizer.getVirtualItemForOffset(top)?.index ?? 0;
     anchor.current = null;
     for (let i = first; i < Math.min(rows.length, first + 8); i++) {
       const line = anchorOf(rows[i]);
       if (!line) continue;
       anchor.current = { ...line, offset: virtualizer.measurementsCache[i].start - top };
-      return;
+      break;
     }
+    onSpot?.(anchor.current);
   };
   useLayoutEffect(() => {
     if (shownRows.current === rows) return;
     shownRows.current = rows;
     const at = anchor.current;
     if (!at) return;
-    let best = -1;
-    let distance = Infinity;
-    rows.forEach((row, i) => {
-      const line = anchorOf(row);
-      if (!line || line.side !== at.side) return;
-      const d = Math.abs(line.no - at.no) + (line.text === at.text ? 0 : 1e6);
-      if (d < distance) [best, distance] = [i, d];
-    });
+    const best = nearestRow(rows, at);
     if (best < 0) return;
     restore.current = { key: rows[best].key, offset: at.offset, until: performance.now() + RESTORE_MS };
   }, [rows]);
+  useLayoutEffect(() => {
+    if (initialRow || !spot) return;
+    const best = nearestRow(rows, spot);
+    if (best >= 0) restore.current = { key: rows[best].key, offset: spot.offset, until: performance.now() + RESTORE_MS };
+  }, []);
   useLayoutEffect(() => {
     const at = restore.current;
     const el = scrollRef.current;
@@ -254,19 +274,45 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     if (!line) return;
     anchor.current = { ...line, offset: at.offset };
     const top = Math.max(0, virtualizer.measurementsCache[index].start - at.offset);
-    if (Math.abs(el.scrollTop - top) >= 1) el.scrollTop = top;
+    at.top = top;
+    if (Math.abs(el.scrollTop - top) < 1) return;
+    el.scrollTop = top;
+    // The browser caps scrollTop at the estimated height, and that isn't the user scrolling away.
+    at.top = el.scrollTop;
+    el.dispatchEvent(new Event("scroll"));
   });
 
+  const selectedText = () => {
+    const sel = window.getSelection();
+    const diff = diffRef.current;
+    if (!diff || !sel?.rangeCount || sel.isCollapsed || !diff.contains(sel.anchorNode)) return null;
+    const range = sel.getRangeAt(0);
+    const col: Col = layout === "split" ? pick : "u";
+    const from = rowPos(diff, range.startContainer, range.startOffset, col, true);
+    const to = rowPos(diff, range.endContainer, range.endOffset, col, false);
+    return from && to ? textBetween(rows, col, from, to) : withoutJoins(sel.toString());
+  };
+
+  const scrollToRow: DiffViewHandle["scrollToRow"] = (index, align = "start") => {
+    restore.current = null;
+    if (previewRef.current) return previewRef.current.scrollToRow(index, align);
+    const [offset] = virtualizer.getOffsetForIndex(index, align) ?? [0];
+    if (align === "auto" && offset === scrollRef.current?.scrollTop) return;
+    scrollRef.current?.scrollTo({ top: offset });
+  };
   useImperativeHandle(ref, () => ({
-    scrollToRow(index, align = "start") {
-      restore.current = null;
-      if (previewRef.current) return previewRef.current.scrollToRow(index, align);
-      const [offset] = virtualizer.getOffsetForIndex(index, align) ?? [0];
-      if (align === "auto" && offset === scrollRef.current?.scrollTop) return;
-      scrollRef.current?.scrollTo({ top: Math.max(0, align === "start" ? offset - 40 : offset) });
+    scrollToRow,
+    showHunk(hunk) {
+      const index = rows.findIndex((r) => r.t === "hunk" && r.hunk === hunk);
+      const el = scrollRef.current;
+      const head = virtualizer.measurementsCache[index];
+      if (!head || !el || previewRef.current) return;
+      if (head.start >= el.scrollTop && head.end <= el.scrollTop + el.clientHeight) return;
+      scrollToRow(index);
     },
     scroller: () => previewRef.current?.scroller() ?? scrollRef.current,
     side: () => pick,
+    selectedText,
   }));
 
   const digits = useMemo(() => {
@@ -304,46 +350,51 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     gutter(e, e.shiftKey ? "shift" : (MAC ? e.metaKey : e.ctrlKey) ? "toggle" : "click");
   };
   const copyText = (e: React.ClipboardEvent<HTMLDivElement>) => {
-    const sel = window.getSelection();
-    if (!sel?.rangeCount || sel.isCollapsed) return;
-    const range = sel.getRangeAt(0);
-    const col: Col = layout === "split" ? pick : "u";
-    const from = rowPos(e.currentTarget, range.startContainer, range.startOffset, col, true);
-    const to = rowPos(e.currentTarget, range.endContainer, range.endOffset, col, false);
-    const native = sel.toString();
-    const text = from && to ? textBetween(rows, col, from, to) : withoutJoins(native);
-    if (text === native) return;
+    const text = selectedText();
+    if (text === null || text === window.getSelection()?.toString()) return;
     e.preventDefault();
     e.clipboardData.setData("text/plain", text);
   };
 
+  const oldCopy = layout === "split" || sideLines.b === null;
   const fileAction = (actions || onTogglePreview) && (
     <span className="actions">
       {onTogglePreview && (
         <button aria-pressed={!!preview} onClick={onTogglePreview}>
-          Preview
+          <Icon name="preview" />
+          <span className="lbl">Preview</span>
           <Key id="preview" />
         </button>
       )}
       {actions && (
-        <button onClick={() => onAct(actions === "staged" ? "unstage" : "stage", "file")}>{actions === "staged" ? "Unstage file" : "Stage file"}</button>
+        <button onClick={() => onAct(actions === "staged" ? "unstage" : "stage", "file")}>
+          <Icon name={actions === "staged" ? "unstage" : "stage"} />
+          <span className="lbl">{actions === "staged" ? "Unstage file" : "Stage file"}</span>
+        </button>
       )}
-      {actions === "unstaged" && <button onClick={onDiscardFile}>Discard file</button>}
+      {actions === "unstaged" && (
+        <button onClick={onDiscardFile}>
+          <Icon name="discard" />
+          <span className="lbl">Discard file</span>
+        </button>
+      )}
     </span>
   );
   const shown = file.status === "deleted" ? a : b;
   const oldName = file.oldPath ?? file.path;
   const names = oldName !== file.path ? renameParts(oldName, file.path) : null;
   const modeWords = modeNote(file)?.words;
+  const absentA = file.status === "added" || file.status === "untracked";
+  const styles = useMemo(() => familyOf(file.path, file) === "styles", [file]);
   return (
     <main
       className={`main${preview ? ` is-preview preview-${preview.kind}` : file.status === "unchanged" ? " is-whole" : ""}`}
       data-plate={blink && !preview ? blink.plate : undefined}
     >
       <div className="panes-head" onContextMenu={(e) => onMenu(file.path, e)}>
-        {layout === "split" ? (
+        {names && layout === "split" ? (
           <>
-            <PaneHead tag="a" path={oldName} parts={names?.[0]} side={a} absent={file.status === "added" || file.status === "untracked"}>
+            <PaneHead tag="a" path={oldName} parts={names[0]} side={a} diff={file}>
               <PaneCopy
                 lines={selCol === "a" ? selLines : 0}
                 label={sideLines.a === null ? null : "Copy old version"}
@@ -351,7 +402,8 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
                 onFile={() => onCopySide("a")}
               />
             </PaneHead>
-            <PaneHead tag="b" path={file.path} parts={names?.[1]} side={b} absent={file.status === "deleted"}>
+            <PaneHead tag="b" path={file.path} parts={names[1]} side={b} diff={file}>
+              <DiffStat additions={file.additions} deletions={file.deletions} />
               {modeWords && <span className="pane-mode">{modeWords}</span>}
               <PaneCopy
                 lines={selCol !== "a" ? selLines : 0}
@@ -364,8 +416,9 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
           </>
         ) : (
           <div className="pane-h">
-            {file.status !== "unchanged" && <span className="plate-tag tag-a">A</span>}
-            <span className="plate-tag tag-b">B</span>
+            {file.status !== "unchanged" && <SideTag tag="a" side={a} absent={absentA} />}
+            <SideTag tag="b" side={b} absent={file.status === "deleted"} />
+            <FileGlyph path={file.path} diff={file} />
             {names ? (
               <>
                 <FileName tag="a" path={oldName} parts={names[0]} tip={`${a.label}, old name\n${oldName}`} />
@@ -377,14 +430,24 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
                 tag="b"
                 path={file.path}
                 tip={file.status === "unchanged" ? `${b.label}, ${file.path}, unchanged` : `${a.label} → ${b.label}\n${file.path}`}
+                onReveal={onRevealFolder}
               />
             )}
+            <DiffStat additions={file.additions} deletions={file.deletions} />
             {modeWords && <span className="pane-mode">{modeWords}</span>}
+            {oldCopy && (
+              <PaneCopy
+                lines={selCol === "a" ? selLines : 0}
+                label={sideLines.a === null ? null : "Copy old version"}
+                onLines={onCopyLines}
+                onFile={() => onCopySide("a")}
+              />
+            )}
             <PaneCopy
-              lines={selLines}
-              label={sideLines.b !== null ? "Copy file" : sideLines.a !== null ? "Copy old version" : null}
+              lines={oldCopy && selCol === "a" ? 0 : selLines}
+              label={sideLines.b === null ? null : "Copy file"}
               onLines={onCopyLines}
-              onFile={() => onCopySide(sideLines.b !== null ? "b" : "a")}
+              onFile={() => onCopySide("b")}
             />
             {fileAction}
           </div>
@@ -416,9 +479,46 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
             onCopy={copyText}
             onMouseDown={mouseDown}
             onMouseOver={(e) => e.buttons === 1 && gutter(e, "drag")}
+            onContextMenu={(e) => {
+              const row = rows[rowOf(e.target as Node)];
+              if (row?.t === "split" || row?.t === "uni") onLineMenu(row, sideOf(e.target as HTMLElement), e);
+            }}
           >
             {virtualizer.getVirtualItems().map((item) => {
               const row = rows[item.index];
+              const span = row.t === "hunk" ? spans.find((s) => s.head === item.index) : undefined;
+              const view = (
+                <RowView
+                  row={row}
+                  tokens={tokens}
+                  focused={isFocused(row, focusHunk)}
+                  selLineCount={row.t === "hunk" ? (selCount.get(row.hunk) ?? 0) : 0}
+                  selSides={selectedSides(row, selection, selCol)}
+                  found={findIn(row, hits, currentHit?.path === file.path ? currentHit : null)}
+                  actions={actions}
+                  copyable={row.t === "hunk" && picked.has(row.hunk)}
+                  blinking={!!blink && "hunk" in row && row.hunk === blink.hunk}
+                  styles={styles}
+                  note={notes ? noteClass(newLineOf(row), notes.marks, notes.chapter, notes.stop) : ""}
+                  onExpand={onExpand}
+                  onFocusHunk={onFocusHunk}
+                  onAct={onAct}
+                  onCopy={onCopy}
+                  onBlink={onBlink}
+                  onPickHunk={onPickHunk}
+                  onStub={onStub}
+                />
+              );
+              if (span) {
+                const bottom = virtualizer.measurementsCache[span.end - 1]?.end ?? item.end;
+                return (
+                  <div key={item.key} className="vrow hunk-track" data-index={item.index} style={{ top: item.start, height: bottom - item.start }}>
+                    <div className="hunk-stick" data-index={item.index} ref={virtualizer.measureElement}>
+                      {view}
+                    </div>
+                  </div>
+                );
+              }
               return (
                 <div
                   key={item.key}
@@ -427,25 +527,7 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
                   ref={virtualizer.measureElement}
                   style={{ transform: `translateY(${item.start}px)` }}
                 >
-                  <RowView
-                    row={row}
-                    tokens={tokens}
-                    focused={isFocused(row, focusHunk)}
-                    selLineCount={row.t === "hunk" ? (selCount.get(row.hunk) ?? 0) : 0}
-                    selSides={selectedSides(row, selection, selCol)}
-                    found={findIn(row, hits, currentHit?.path === file.path ? currentHit : null)}
-                    actions={actions}
-                    copyable={row.t === "hunk" && picked.has(row.hunk)}
-                    blinking={!!blink && "hunk" in row && row.hunk === blink.hunk}
-                    note={notes ? noteClass(newLineOf(row), notes.marks, notes.chapter, notes.stop) : ""}
-                    onExpand={onExpand}
-                    onFocusHunk={onFocusHunk}
-                    onAct={onAct}
-                    onCopy={onCopy}
-                    onBlink={onBlink}
-                    onPickHunk={onPickHunk}
-                    onStub={onStub}
-                  />
+                  {view}
                 </div>
               );
             })}
@@ -480,6 +562,20 @@ interface Anchor {
   text: string;
 }
 
+export type Spot = Anchor & { offset: number };
+
+function nearestRow(rows: Row[], at: Anchor) {
+  let best = -1;
+  let distance = Infinity;
+  rows.forEach((row, i) => {
+    const line = anchorOf(row);
+    if (!line || line.side !== at.side) return;
+    const d = Math.abs(line.no - at.no) + (line.text === at.text ? 0 : 1e6);
+    if (d < distance) [best, distance] = [i, d];
+  });
+  return best;
+}
+
 function anchorOf(row: Row): Anchor | null {
   if (row.t === "split") {
     const side = row.b ? "b" : "a";
@@ -505,13 +601,18 @@ function selectedSides(row: Row, selection: ReadonlySet<string>, col: Col | null
   return ((has(row.a) && col !== "b" ? OLD_SIDE : 0) | (has(row.b) && col !== "a" ? NEW_SIDE : 0)) as SelectedSides;
 }
 
+function spanAt(spans: HunkSpan[], index: number): HunkSpan | undefined {
+  const span = spans.findLast((s) => s.head <= index);
+  return span && index < span.end ? span : undefined;
+}
+
 function rowOf(node: Node | null): number {
   const el = node instanceof Element ? node : node?.parentElement;
   return Number(el?.closest<HTMLElement>(".vrow")?.dataset.index ?? -1);
 }
 
 function sideOf(el: HTMLElement): "a" | "b" | null {
-  const cell = el.closest(".cell");
+  const cell = el.closest(".cell, .ln, .absent");
   if (!cell) return null;
   if (cell.classList.contains("a") || cell.classList.contains("del") || cell.closest(".pa")) return "a";
   if (cell.classList.contains("b") || cell.classList.contains("add") || cell.closest(".pb")) return "b";
@@ -541,41 +642,84 @@ function PaneCopy({ lines, label, onLines, onFile }: { lines: number; label: str
         <>
           <span className="sel-count">{`${lines} ${lines === 1 ? "line" : "lines"}`}</span>
           <button onClick={onLines}>
-            Copy lines
+            <Icon name="copy" />
+            <span className="lbl">Copy lines</span>
             <Key id="copyCode" />
           </button>
         </>
       ) : (
-        <button onClick={onFile}>{label}</button>
+        <button onClick={onFile}>
+          <Icon name="copy" />
+          <span className="lbl">{label}</span>
+        </button>
       )}
     </div>
+  );
+}
+
+function SideTag({ tag, side, absent }: { tag: "a" | "b"; side: SideInfo; absent?: boolean }) {
+  return (
+    <span className={`plate-tag tag-${tag}${absent ? " is-absent" : ""}`} data-tip={absent ? `Not in ${side.label}` : side.label}>
+      {tag.toUpperCase()}
+    </span>
   );
 }
 
 interface PaneHeadProps {
   tag: "a" | "b";
   path: string;
-  parts?: NameParts;
+  parts: NameParts;
   side: SideInfo;
-  absent: boolean;
+  diff: FileDiff;
   children?: React.ReactNode;
 }
 
-function PaneHead({ tag, path, parts, side, absent, children }: PaneHeadProps) {
-  const tip = `${side.label}${parts ? (tag === "a" ? ", old name" : ", new name") : ""}\n${path}`;
+function PaneHead({ tag, path, parts, side, diff, children }: PaneHeadProps) {
   return (
     <div className="pane-h">
-      <span className={`plate-tag tag-${tag}`} data-tip={side.label}>
-        {tag.toUpperCase()}
-      </span>
-      {absent ? <span className="pane-absent">Not in {side.label}</span> : <FileName tag={tag} path={path} parts={parts} tip={tip} />}
+      <SideTag tag={tag} side={side} />
+      <FileGlyph path={path} diff={diff} />
+      <FileName tag={tag} path={path} parts={parts} tip={`${side.label}, ${tag === "a" ? "old" : "new"} name\n${path}`} />
       {children}
     </div>
   );
 }
 
-function FileName({ tag, path, parts, tip }: { tag: "a" | "b"; path: string; parts?: NameParts; tip: string }) {
-  if (!parts) return <b data-tip={tip}>{path.split("/").pop()}</b>;
+interface FileNameProps {
+  tag: "a" | "b";
+  path: string;
+  parts?: NameParts;
+  tip: string;
+  onReveal?(dir: string): void;
+}
+
+function FileName({ tag, path, parts, tip, onReveal }: FileNameProps) {
+  if (!parts) {
+    const dirs = path.split("/");
+    const name = dirs.pop()!;
+    return (
+      <>
+        {dirs.length > 0 && (
+          <span className="pane-dir">
+            <bdi>
+              {dirs.map((dir, i) => {
+                const upTo = `${dirs.slice(0, i + 1).join("/")}/`;
+                return (
+                  <Fragment key={upTo}>
+                    <button disabled={!onReveal} data-tip={`Show in All files\n${upTo}`} onClick={() => onReveal?.(upTo)}>
+                      {dir}
+                    </button>
+                    /
+                  </Fragment>
+                );
+              })}
+            </bdi>
+          </span>
+        )}
+        <b data-tip={tip}>{name}</b>
+      </>
+    );
+  }
   return (
     <b className={`pane-name renamed-${tag}`} data-tip={tip}>
       {parts[0]}
@@ -595,6 +739,7 @@ interface RowProps {
   actions: "unstaged" | "staged" | null;
   copyable: boolean;
   blinking: boolean;
+  styles: boolean;
   note: string;
   onExpand(key: string): void;
   onFocusHunk(hunk: number): void;
@@ -617,6 +762,11 @@ function Grating({ shifted }: { shifted: boolean }) {
   );
 }
 
+function FoldStep({ way, onClick }: { way: "down" | "up"; onClick(): void }) {
+  const tip = way === "down" ? `Show ${FOLD_STEP} more lines below the hunk above` : `Show ${FOLD_STEP} more lines above the hunk below`;
+  return <button className="fold-step" aria-label={tip} data-tip={tip} data-label={`${way === "down" ? "↓" : "↑"} ${FOLD_STEP}`} onClick={onClick} />;
+}
+
 const doneText = (done: number | undefined, count: number) => (done ? `, ${done === count ? "all" : done} staged` : "");
 const doneClass = (r: { stagedEarlier?: boolean; deletionAbove?: boolean }) => `${r.stagedEarlier ? " is-done" : ""}${r.deletionAbove ? " has-cut" : ""}`;
 
@@ -635,6 +785,7 @@ const RowView = memo(function RowView(props: RowProps) {
     actions,
     copyable,
     blinking,
+    styles,
     note,
     onExpand,
     onFocusHunk,
@@ -653,14 +804,17 @@ const RowView = memo(function RowView(props: RowProps) {
       const button = (action: StageAction, label: string, key: CommandId) => (
         <NonFocusingButton
           className={`hh-btn hh-${action}`}
-          title={`${label} ${selLineCount ? "the selected lines" : "this hunk"}${hint(key)}. Click or drag line numbers to pick single lines.`}
+          data-tip={`${label} ${selLineCount ? "the selected lines" : "this hunk"}${hint(key)}. Click or drag line numbers to pick single lines.`}
           onClick={(e) => {
             e.stopPropagation();
             onAct(action, row.hunk);
           }}
         >
-          {label}
-          {lines || (action === "discard" ? "" : " hunk")}
+          <Icon name={action} />
+          <span className="lbl">
+            {label}
+            {lines || (action === "discard" ? "" : " hunk")}
+          </span>
           <Key id={key} />
         </NonFocusingButton>
       );
@@ -669,13 +823,14 @@ const RowView = memo(function RowView(props: RowProps) {
       const copy = (format: "code" | "markdown", label: string, title: string, key: CommandId) => (
         <button
           className="hh-btn hh-copy"
-          title={`${title}${hint(key)}`}
+          data-tip={`${title}${hint(key)}`}
           onClick={(e) => {
             e.stopPropagation();
             onCopy(format, row.hunk);
           }}
         >
-          {label}
+          <Icon name={format === "code" ? "copy" : "markdown"} />
+          <span className="lbl">{label}</span>
           <Key id={key} />
         </button>
       );
@@ -698,18 +853,18 @@ const RowView = memo(function RowView(props: RowProps) {
                 keys.forEach(onExpand);
               }}
             >
-              {`${changed} ${changed === 1 ? "line" : "lines"} · whitespace only${count ? ` · ${count} unchanged${doneText(row.folded.stagedEarlier, count)}` : ""}`}
+              {`${changed} ${changed === 1 ? "line" : "lines"}, whitespace only${count ? `, ${count} unchanged${doneText(row.folded.stagedEarlier, count)}` : ""}`}
             </button>
             {allWhitespaceFolds && (
               <button
                 className="fold-label fold-all"
-                title="Expand every whitespace-only fold in this file"
+                data-tip="Expand every whitespace-only fold in this file"
                 onClick={(e) => {
                   e.stopPropagation();
                   allWhitespaceFolds.forEach(onExpand);
                 }}
               >
-                · expand all
+                Expand all
               </button>
             )}
             <span className="hh-actions">
@@ -722,9 +877,17 @@ const RowView = memo(function RowView(props: RowProps) {
       }
       return (
         <div className={`hunk-head${focused ? " is-focus" : ""}${selLineCount ? " has-sel" : ""}`} onClick={() => onFocusHunk(row.hunk)}>
+          {row.ctx && (
+            <span className="hh-ctx">
+              {row.ctxLine ? <Code text={row.ctxLine.text} tokens={tokens?.[row.ctxLine.plate]?.[row.ctxLine.no - 1]} mark="w-add" /> : row.ctx}
+            </span>
+          )}
+          <span className="hh-stat">
+            <span className="s-add">+{row.adds}</span> <span className="s-del">−{row.dels}</span>
+          </span>
           <span
             className="hh-range"
-            title="Select this hunk's changed lines"
+            data-tip="Select this hunk's changed lines"
             onClick={(e) => {
               e.stopPropagation();
               onFocusHunk(row.hunk);
@@ -732,10 +895,6 @@ const RowView = memo(function RowView(props: RowProps) {
             }}
           >
             {row.label}
-          </span>
-          <span className="hh-ctx">{row.ctx}</span>
-          <span className="hh-stat">
-            <span className="s-add">+{row.adds}</span> <span className="s-del">−{row.dels}</span>
           </span>
           {row.staged && (
             <span className="hh-badge">
@@ -757,13 +916,16 @@ const RowView = memo(function RowView(props: RowProps) {
             <button
               className="hh-btn hh-blink"
               aria-pressed={blinking}
-              title={blinking ? `Stop blinking${hint("cancel")}` : `Flip between plate A and B${hint("blink")}.${hold ? ` Hold ${hold} to flip by hand.` : ""}`}
+              data-tip={
+                blinking ? `Stop blinking${hint("cancel")}` : `Flip between plate A and B${hint("blink")}.${hold ? ` Hold ${hold} to flip by hand.` : ""}`
+              }
               onClick={(e) => {
                 e.stopPropagation();
                 onBlink(row.hunk);
               }}
             >
-              {blinking ? "Stop blink" : "Blink"}
+              <Icon name="blink" />
+              <span className="lbl">{blinking ? "Stop blink" : "Blink"}</span>
               <Key id={blinking ? "cancel" : "blink"} />
             </button>
             {copies}
@@ -775,10 +937,14 @@ const RowView = memo(function RowView(props: RowProps) {
     }
     case "fold":
       return (
-        <button className={`fold${row.stagedEarlier ? " has-done" : ""}`} disabled={!row.expandable} onClick={() => onExpand(row.key)}>
+        <div className={`fold${row.stagedEarlier ? " has-done" : ""}`}>
           <Grating shifted={false} />
-          <span>{`${row.count} ${row.count === 1 ? "line" : "lines"} unchanged${doneText(row.stagedEarlier, row.count)}`}</span>
-        </button>
+          {row.steps?.down && <FoldStep way="down" onClick={() => onExpand(row.steps!.down!)} />}
+          <button className="fold-open" disabled={!row.expandable} onClick={() => onExpand(row.key)}>
+            {`${row.count} ${row.count === 1 ? "line" : "lines"} unchanged${doneText(row.stagedEarlier, row.count)}`}
+          </button>
+          {row.steps?.up && <FoldStep way="up" onClick={() => onExpand(row.steps!.up!)} />}
+        </div>
       );
     case "stub":
       return (
@@ -812,19 +978,37 @@ const RowView = memo(function RowView(props: RowProps) {
       if (blinking) {
         return (
           <div className="row plate">
-            <PlateSide side="a" line={row.a} kind={row.kind} tokens={tokens?.[0]} hits={found.a} current={found.curA} />
-            <PlateSide side="b" line={row.b} kind={row.kind} tokens={tokens?.[1]} hits={found.b} current={found.curB} />
+            <PlateSide side="a" line={row.a} kind={row.kind} tokens={tokens?.[0]} hits={found.a} current={found.curA} styles={styles} />
+            <PlateSide side="b" line={row.b} kind={row.kind} tokens={tokens?.[1]} hits={found.b} current={found.curB} styles={styles} />
           </div>
         );
       }
       return (
         <div className={`row split${row.faded ? " is-staged" : ""}${doneClass(row)}${note ? ` ${note}` : ""}`}>
-          <SplitCell side="a" line={row.a} kind={row.kind} tokens={tokens?.[0]} sel={!!(selSides & OLD_SIDE)} hits={found.a} current={found.curA} />
-          <SplitCell side="b" line={row.b} kind={row.kind} tokens={tokens?.[1]} sel={!!(selSides & NEW_SIDE)} hits={found.b} current={found.curB} />
+          <SplitCell
+            side="a"
+            line={row.a}
+            kind={row.kind}
+            tokens={tokens?.[0]}
+            sel={!!(selSides & OLD_SIDE)}
+            hits={found.a}
+            current={found.curA}
+            styles={styles}
+          />
+          <SplitCell
+            side="b"
+            line={row.b}
+            kind={row.kind}
+            tokens={tokens?.[1]}
+            sel={!!(selSides & NEW_SIDE)}
+            hits={found.b}
+            current={found.curB}
+            styles={styles}
+          />
         </div>
       );
     case "uni": {
-      const cls = `${row.kind === "ctx" ? "" : row.kind}${selSides ? " sel" : ""}${row.line.staged ? " is-staged" : ""}`;
+      const cls = `${row.kind === "ctx" ? "" : row.kind}${selSides ? " sel" : ""}${row.line.staged ? " is-staged" : ""}${row.line.words ? " is-pair" : ""}`;
       const toks = row.kind === "del" ? tokens?.[0] : tokens?.[1];
       const line = row.line.sel ? { "data-line": row.line.sel, "data-col": "u" } : {};
       return (
@@ -844,6 +1028,7 @@ const RowView = memo(function RowView(props: RowProps) {
                 mark={row.kind === "del" ? "w-del" : "w-add"}
                 hits={found.a}
                 current={found.curA}
+                styles={styles}
               />
             </div>
           </div>
@@ -861,9 +1046,10 @@ interface CellProps {
   sel: boolean;
   hits?: Range[];
   current?: number;
+  styles: boolean;
 }
 
-function SplitCell({ side, line, kind, tokens, sel, hits, current }: CellProps) {
+function SplitCell({ side, line, kind, tokens, sel, hits, current, styles }: CellProps) {
   if (!line) {
     return (
       <>
@@ -871,7 +1057,7 @@ function SplitCell({ side, line, kind, tokens, sel, hits, current }: CellProps) 
       </>
     );
   }
-  const cls = `${kind === "ctx" ? "" : side === "a" ? "del" : "add"}${sel ? " sel" : ""}${line.staged ? " is-staged" : ""}`;
+  const cls = `${kind === "ctx" ? "" : side === "a" ? "del" : "add"}${sel ? " sel" : ""}${line.staged ? " is-staged" : ""}${line.words ? " is-pair" : ""}`;
   const attrs = line.sel ? { "data-line": line.sel, "data-col": side } : {};
   return (
     <>
@@ -880,22 +1066,38 @@ function SplitCell({ side, line, kind, tokens, sel, hits, current }: CellProps) 
       </div>
       <div className={`cell ${side} ${cls}`} style={hangingIndent(line.text)}>
         <div className="text">
-          <Code text={line.text} tokens={tokens?.[line.no - 1]} words={line.words} mark={side === "a" ? "w-del" : "w-add"} hits={hits} current={current} />
+          <Code
+            text={line.text}
+            tokens={tokens?.[line.no - 1]}
+            words={line.words}
+            mark={side === "a" ? "w-del" : "w-add"}
+            hits={hits}
+            current={current}
+            styles={styles}
+          />
         </div>
       </div>
     </>
   );
 }
 
-function PlateSide({ side, line, kind, tokens, hits, current }: Omit<CellProps, "sel">) {
+function PlateSide({ side, line, kind, tokens, hits, current, styles }: Omit<CellProps, "sel">) {
   if (!line) return <div className={`p${side}`} />;
-  const cls = kind === "ctx" ? "" : side === "a" ? "del" : "add";
+  const cls = `${kind === "ctx" ? "" : side === "a" ? "del" : "add"}${line.words ? " is-pair" : ""}`;
   return (
     <div className={`p${side}`}>
       <div className={`ln ${cls}`}>{line.no}</div>
       <div className={`cell ${cls}`} style={hangingIndent(line.text)}>
         <div className="text">
-          <Code text={line.text} tokens={tokens?.[line.no - 1]} words={line.words} mark={side === "a" ? "w-del" : "w-add"} hits={hits} current={current} />
+          <Code
+            text={line.text}
+            tokens={tokens?.[line.no - 1]}
+            words={line.words}
+            mark={side === "a" ? "w-del" : "w-add"}
+            hits={hits}
+            current={current}
+            styles={styles}
+          />
         </div>
       </div>
     </div>

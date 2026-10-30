@@ -59,7 +59,7 @@ export function NoRepo({ error, onPick }: { error: string | null; onPick(): void
           <h2>Open a repository.</h2>
           {!error?.startsWith("git isn't installed") && (
             <p>
-              Pick a folder with a git repository, or start moire from a terminal with <code>moire path/to/repo</code>.
+              Pick a git repository to review its changes, or any folder to read its files. From a terminal, run <code>moire path/to/repo</code>.
             </p>
           )}
           {error && <p className="s-del">{error}</p>}

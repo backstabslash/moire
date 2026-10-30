@@ -1,11 +1,17 @@
 import type { FileDiff, LineRef } from "../../../shared/types";
-import type { Row } from "./rows";
+import type { LineRow, Row } from "./rows";
 
 export type Col = "a" | "b" | "u";
 
 export const lineKey = (hunk: number, idx: number) => `${hunk}:${idx}`;
 export const gapKey = (newNo: number) => `g${newNo}`;
 export const hunkOfKey = (key: string): number | null => (key.startsWith("g") ? null : Number(key.split(":")[0]));
+
+// A split row's sides are separate lines, so a selection on one says nothing about the other.
+export function isPicked(row: LineRow, side: "a" | "b" | null, selection: ReadonlySet<string>, col: Col | null): boolean {
+  const line = row.t === "uni" ? row.line : side && col !== (side === "a" ? "b" : "a") ? row[side] : undefined;
+  return !!line?.sel && selection.has(line.sel);
+}
 
 export function columnKeys(rows: Row[], col: Col): string[] {
   const out: string[] = [];

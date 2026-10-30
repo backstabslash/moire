@@ -9,6 +9,13 @@ interface Tip {
   above: boolean;
 }
 
+// A button collapsed to its icon still has its label, so the label becomes the tip.
+function tipOf(el: HTMLElement) {
+  if (el.dataset.tip) return el.dataset.tip;
+  const label = el.querySelector(":scope > .lbl");
+  return label && label.getBoundingClientRect().width <= 1 ? label.textContent : null;
+}
+
 export function HoverTip() {
   const [tip, setTip] = useState<Tip | null>(null);
   useEffect(() => {
@@ -20,16 +27,19 @@ export function HoverTip() {
       setTip(null);
     };
     const over = (e: MouseEvent) => {
-      const el = (e.target as Element).closest?.<HTMLElement>("[data-tip]") ?? null;
+      const on = e.target as Element;
+      const el = on.closest?.<HTMLElement>("[data-tip]") ?? on.closest?.<HTMLElement>(":has(> .lbl)") ?? null;
       if (el === target) return;
       hide();
       if (!el || e.buttons) return;
       target = el;
       timer = window.setTimeout(() => {
+        const text = tipOf(el);
+        if (!text) return;
         const box = el.getBoundingClientRect();
         const left = Math.max(8, Math.min(box.left + 8, innerWidth - 420));
         const above = box.bottom + 64 > innerHeight;
-        setTip({ text: el.dataset.tip!, left, top: above ? box.top - 4 : box.bottom + 4, above });
+        setTip({ text, left, top: above ? box.top - 4 : box.bottom + 4, above });
       }, DELAY_MS);
     };
     const out = (e: MouseEvent) => !e.relatedTarget && hide();

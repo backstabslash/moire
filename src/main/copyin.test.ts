@@ -1,24 +1,10 @@
 import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clashDiff, copyIn, fileUris, planCopy } from "./copyin";
 import { undo } from "./stage";
-import { dirs, makeRepo } from "./test-repo";
+import { makeRepo, tempDir } from "./test-repo";
 
 const hook = vi.hoisted(() => ({ beforeCopy: null as ((dest: string) => void) | null }));
 vi.mock("node:fs/promises", async (original) => {
@@ -36,8 +22,7 @@ afterEach(() => {
 });
 
 function outside(files: Record<string, string>) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "moire-src-")));
-  dirs.push(root);
+  const root = tempDir("moire-src-");
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(join(root, path), content);

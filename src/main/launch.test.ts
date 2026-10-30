@@ -1,9 +1,8 @@
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isLaunchRequest, launchRequest, loginPath, markedPath, mergePath, tildify, usableCwd } from "./launch";
-import { dirs } from "./test-repo";
+import { tempDir } from "./test-repo";
 
 describe("launchRequest", () => {
   it("takes the first path argument, relative to the caller's folder", () => {
@@ -20,10 +19,23 @@ describe("launchRequest", () => {
     expect(launchRequest(["electron", "."], "/src/moire", false)).toEqual({ cwd: "/src/moire" });
   });
 
+  it("tells a comparison from a path by what's on disk, and paths win", () => {
+    const none = () => false;
+    expect(launchRequest(["moire", "main..feature"], "/r", true, none)).toEqual({ compare: ["main..feature"], cwd: "/r" });
+    expect(launchRequest(["moire", "/srv/repo", "HEAD~3"], "/r", true, none)).toEqual({ path: "/srv/repo", compare: ["HEAD~3"], cwd: "/r" });
+    expect(launchRequest(["moire", "main"], "/r", true, (p) => p === "/r/main")).toEqual({ path: "/r/main", cwd: "/r" });
+    expect(launchRequest(["moire", "main"], "/r", true, none)).toEqual({ compare: ["main"], cwd: "/r" });
+    expect(launchRequest(["moire", "..feature"], "/r", true, none)).toEqual({ compare: ["..feature"], cwd: "/r" });
+    expect(launchRequest(["moire", "pr", "123"], "/r", true, () => true)).toEqual({ compare: ["pr", "123"], cwd: "/r" });
+    expect(launchRequest(["moire", "./pr", "HEAD~1"], "/r", true, () => true)).toEqual({ path: "/r/pr", compare: ["HEAD~1"], cwd: "/r" });
+  });
+
   it("recognises a request passed from another instance", () => {
     expect(isLaunchRequest({ cwd: "/a" })).toBe(true);
     expect(isLaunchRequest({ path: "/a/b", cwd: "/a" })).toBe(true);
+    expect(isLaunchRequest({ compare: ["pr", "1"], cwd: "/a" })).toBe(true);
     expect(isLaunchRequest({ path: 1, cwd: "/a" })).toBe(false);
+    expect(isLaunchRequest({ compare: "main", cwd: "/a" })).toBe(false);
     expect(isLaunchRequest(null)).toBe(false);
   });
 });
@@ -42,8 +54,7 @@ describe("paths", () => {
   });
 
   it("knows the home folder by its real path too, where /home is a link", () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), "moire-home-")));
-    dirs.push(dir);
+    const dir = tempDir("moire-home-");
     mkdirSync(join(dir, "var-home"));
     symlinkSync(join(dir, "var-home"), join(dir, "home"));
     expect(usableCwd(join(dir, "var-home"), join(dir, "home"))).toBeUndefined();
@@ -57,8 +68,7 @@ describe("paths", () => {
 
 describe("loginPath", () => {
   const fakeShell = (body: string) => {
-    const dir = mkdtempSync(join(tmpdir(), "moire-shell-"));
-    dirs.push(dir);
+    const dir = tempDir("moire-shell-");
     writeFileSync(join(dir, "sh"), `#!/bin/sh\n${body}\n`);
     chmodSync(join(dir, "sh"), 0o755);
     return join(dir, "sh");
@@ -69,8 +79,11 @@ describe("loginPath", () => {
     expect(await loginPath(shell, 5000)).toBe("/opt/x:/usr/bin");
   });
 
-  it("gives up on a shell that doesn't finish", async () => {
-    expect(await loginPath(fakeShell("sleep 10"), 100)).toBeNull();
+  it("gives up on a shell that doesn't finish, and kills it", async () => {
+    const dir = tempDir("moire-pid-");
+    expect(await loginPath(fakeShell(`echo $$ > ${dir}/pid; exec sleep 10`), 500)).toBeNull();
+    const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow("ESRCH"));
     expect(await loginPath("/nonexistent/shell", 1000)).toBeNull();
   });
 

@@ -21,6 +21,7 @@ export const COMMANDS = {
   nextHit: { keys: ["n"], label: "Next result", group: "Navigate" },
   prevHit: { keys: ["N"], label: "Previous result", group: "Navigate" },
   filterFiles: { keys: ["p", "Mod+p"], label: "Filter files", group: "Navigate", inTextFields: true },
+  palette: { keys: ["Mod+Shift+p"], label: "Command palette", group: "Navigate", noRepo: true, inTextFields: true },
   allFiles: { keys: ["a"], label: "Changed or all files", group: "Navigate" },
   nextNote: { keys: ["."], label: "Next agent note", group: "Navigate" },
   prevNote: { keys: [","], label: "Previous agent note", group: "Navigate" },
@@ -37,6 +38,7 @@ export const COMMANDS = {
   blinkHold: { keys: ["b"], label: "Hold to see plate A", group: "Review", noRepeat: true },
   blink: { keys: ["B"], label: "Blink between A and B", group: "Review", noRepeat: true },
   openEditor: { keys: ["e"], label: "Open in editor", group: "Review" },
+  chooseEditor: { keys: ["E"], label: "Choose editor…", group: "Review" },
   refresh: { keys: ["r"], label: "Refresh", group: "Review" },
   cancel: { keys: ["Escape"], label: "Stop blink, clear selection", group: "Review" },
 
@@ -52,7 +54,6 @@ export const COMMANDS = {
   commit: { keys: ["4"], label: "Commit…", group: "View" },
   branches: { keys: ["5"], label: "Branch vs branch…", group: "View" },
   layout: { keys: ["v"], label: "Split or unified", group: "View" },
-  grouping: { keys: ["l"], label: "Paired or by folder", group: "View" },
   fullFile: { keys: ["f"], label: "Full file", group: "View" },
   notes: { keys: ["I"], label: "Agent notes", group: "View" },
   preview: { keys: ["m"], label: "Preview or diff", group: "View" },
@@ -176,6 +177,9 @@ export interface ResolvedKeys {
   problems: string[];
 }
 
+// Removed commands, still listed in any keys.json written while they existed.
+const RETIRED = new Set(["grouping"]);
+
 export function resolveKeys(text: string | null): ResolvedKeys {
   const keys = { ...DEFAULT_KEYS };
   if (text === null) return { keys, problems: [] };
@@ -192,7 +196,7 @@ export function resolveKeys(text: string | null): ResolvedKeys {
   const unknown: string[] = [];
   const changed = new Set<CommandId>();
   for (const [id, value] of Object.entries(raw)) {
-    if (id.startsWith("//") || id.startsWith("$")) continue;
+    if (id.startsWith("//") || id.startsWith("$") || RETIRED.has(id)) continue;
     if (!isCommand(id)) {
       unknown.push(`"${id}"`);
       continue;

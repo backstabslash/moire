@@ -1,8 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { chmodSync, existsSync, mkdirSync, rmSync, readFileSync, renameSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import type { CompareMode, FileDiff } from "../shared/types";
 import {
   blobSizes,
@@ -11,6 +12,8 @@ import {
   commits,
   diff,
   fileContents,
+  folderTree,
+  git,
   gitInput,
   keepUntrackedCache,
   listDir,
@@ -25,19 +28,27 @@ import {
   upstream,
   worktrees,
 } from "./git";
-import { dirs, makeRepo } from "./test-repo";
+import { makeRepo, seed, tempDir } from "./test-repo";
 
 const paths = (files: FileDiff[]) => files.map((f) => `${f.status}:${f.path}`);
 const byPath = (files: FileDiff[], path: string) => files.find((f) => f.path === path)!;
 const lines = (n: number, tag = "line") => Array.from({ length: n }, (_, i) => `${tag} ${i + 1}\n`).join("");
 
+// A fresh copy of the module whose git runs this shell first, then the real one.
+async function withGit(shell: string) {
+  const bin = tempDir("moire-bin-");
+  const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  writeFileSync(join(bin, "git"), `#!/bin/sh\n${shell}\nexec ${real} "$@"\n`, { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  vi.resetModules();
+  const fresh = await import("./git");
+  vi.unstubAllEnvs();
+  return fresh;
+}
+
 describe("working tree modes", () => {
-  const r = makeRepo();
-  r.write("a.txt", "one\ntwo\nthree\n");
-  r.write("keep.txt", "keep\n");
-  const head = r.commit("init").slice(0, 7);
-  r.write("a.txt", "one\nTWO\nthree\n");
-  r.write("staged.txt", "staged\n");
+  const r = seed({ "a.txt": "one\ntwo\nthree\n", "keep.txt": "keep\n" }, { "a.txt": "one\nTWO\nthree\n", "staged.txt": "staged\n" });
+  const head = r.head.slice(0, 7);
   r.git("add", "staged.txt");
   r.write("a.txt", "one\nTWO\nthree\nfour\n");
   r.write("dir/new.txt", "fresh\nno newline");
@@ -95,11 +106,7 @@ describe("working tree modes", () => {
 
 describe("staged, then changed", () => {
   it("flags a file edited after it was staged whole, but not one staged in part", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "one\n");
-    r.write("b.txt", "one\n");
-    r.commit("init");
-    r.write("a.txt", "two\n");
+    const r = seed({ "a.txt": "one\n", "b.txt": "one\n" }, { "a.txt": "two\n" });
     r.git("add", "a.txt");
     r.write("c.txt", "new\n");
     expect((await diff(r.root, { kind: "unstaged" })).progress).toEqual({ stagedFiles: 1, totalFiles: 2, lines: { staged: 2, total: 3 } });
@@ -115,9 +122,7 @@ describe("staged, then changed", () => {
   });
 
   it("counts a staged rename once", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "one\ntwo\nthree\n");
-    r.commit("init");
+    const r = seed({ "a.txt": "one\ntwo\nthree\n" });
     r.git("mv", "a.txt", "b.txt");
     const res = await diff(r.root, { kind: "all" });
     expect(res.files.map((f) => f.path)).toEqual(["b.txt"]);
@@ -125,10 +130,7 @@ describe("staged, then changed", () => {
   });
 
   it("still loads when it can't write to .git", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "one\n");
-    r.commit("init");
-    r.write("a.txt", "two\n");
+    const r = seed({ "a.txt": "one\n" }, { "a.txt": "two\n" });
     r.git("add", "a.txt");
     chmodSync(join(r.root, ".git"), 0o555);
     try {
@@ -139,10 +141,7 @@ describe("staged, then changed", () => {
   });
 
   it("starts over when its record is empty or garbled", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "one\n");
-    r.commit("init");
-    r.write("a.txt", "two\n");
+    const r = seed({ "a.txt": "one\n" }, { "a.txt": "two\n" });
     r.git("add", "a.txt");
     for (const junk of ["", '{"a.txt": "12']) {
       writeFileSync(join(r.root, ".git", "moire-staged"), junk);
@@ -152,10 +151,7 @@ describe("staged, then changed", () => {
   });
 
   it("forgets a file once its staged version changes", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "one\n");
-    r.commit("init");
-    r.write("a.txt", "two\n");
+    const r = seed({ "a.txt": "one\n" }, { "a.txt": "two\n" });
     r.git("add", "a.txt");
     await diff(r.root, { kind: "unstaged" });
     r.git("reset", "-q");
@@ -166,11 +162,10 @@ describe("staged, then changed", () => {
   });
 
   it("gives the unstaged view the index lines staged earlier, and where staged deletions were", async () => {
-    const r = makeRepo();
-    r.write("a.txt", lines(10));
-    r.write("b.txt", lines(3));
-    r.commit("init");
-    r.write("a.txt", lines(10).replace("line 2\n", "two\n").replace("line 5\n", "line 5\nnew\n").replace("line 8\n", ""));
+    const r = seed(
+      { "a.txt": lines(10), "b.txt": lines(3) },
+      { "a.txt": lines(10).replace("line 2\n", "two\n").replace("line 5\n", "line 5\nnew\n").replace("line 8\n", "") },
+    );
     r.git("add", "a.txt");
     r.write("a.txt", lines(10).replace("line 2\n", "two\n").replace("line 5\n", "line 5\nnew\n").replace("line 8\n", "").replace("line 10", "ten"));
     r.write("b.txt", lines(3).replace("line 1", "one"));
@@ -187,13 +182,9 @@ describe("staged, then changed", () => {
 });
 
 describe("commit mode", () => {
-  const r = makeRepo();
   const body = lines(20);
-  r.write("old.txt", body);
-  r.write("gone.txt", "bye\n");
-  r.write("eof.txt", "a\nb");
-  r.write("bin.dat", Buffer.from([0, 1, 2, 3, 0, 255]));
-  const root = r.commit("root");
+  const r = seed({ "old.txt": body, "gone.txt": "bye\n", "eof.txt": "a\nb", "bin.dat": Buffer.from([0, 1, 2, 3, 0, 255]) });
+  const root = r.head;
   r.git("mv", "old.txt", "new.txt");
   r.write("new.txt", body.replace("line 10\n", "line ten\n"));
   r.git("rm", "-q", "gone.txt");
@@ -237,13 +228,6 @@ describe("commit mode", () => {
     });
   });
 
-  it("reads many files at once the same way as one at a time", async () => {
-    const files = (await diff(r.root, mode)).files;
-    const one = await Promise.all(files.map((f) => fileContents(r.root, mode, f)));
-    expect(await manyContents(r.root, mode, files)).toEqual(one);
-    expect(one.map((c) => c.hidden)).toEqual([true, false, false, false]);
-  });
-
   it("flags binary and oversized files as too large", async () => {
     expect(await fileContents(r.root, mode, { path: "bin.dat", status: "modified" })).toEqual({ a: null, b: null, hidden: true, binary: true });
     r.write("huge.txt", "x".repeat(2 * 1024 * 1024 + 10));
@@ -256,10 +240,29 @@ describe("commit mode", () => {
 
   it("lists commits newest first", async () => {
     const list = await commits(r.root, 10);
-    expect(list.map((c) => c.subject)).toEqual(["second", "root"]);
+    expect(list.map((c) => c.subject)).toEqual(["second", "init"]);
     expect(list[0]).toMatchObject({ sha: second, short: second.slice(0, 7), author: "Test" });
     expect(new Date(list[0].date).toString()).not.toBe("Invalid Date");
     expect(await commits(r.root, 1)).toHaveLength(1);
+  });
+
+  it("names the refs on each commit", async () => {
+    r.git("tag", "v1", second);
+    r.git("update-ref", "refs/remotes/origin/main", second);
+    r.git("update-ref", "refs/remotes/origin/HEAD", second);
+    const [head, root] = await commits(r.root, 10);
+    expect(head.refs).toEqual(
+      expect.arrayContaining([
+        { name: "main", kind: "current" },
+        { name: "v1", kind: "tag" },
+        { name: "origin/main", kind: "remote" },
+      ]),
+    );
+    expect(head.refs).toHaveLength(3);
+    expect(root.refs).toEqual([]);
+    r.git("tag", "-d", "v1");
+    r.git("update-ref", "-d", "refs/remotes/origin/main");
+    r.git("update-ref", "-d", "refs/remotes/origin/HEAD");
   });
 
   it("throws on an unknown revision", async () => {
@@ -305,9 +308,8 @@ describe("unborn HEAD", () => {
 });
 
 describe("branches mode", () => {
-  const r = makeRepo();
-  r.write("shared.txt", "base\n");
-  const fork = r.commit("base");
+  const r = seed({ "shared.txt": "base\n" });
+  const fork = r.head;
   r.git("checkout", "-q", "-b", "feature");
   r.write("feature.txt", "feature\n");
   r.write("shared.txt", "base\nfeature\n");
@@ -339,7 +341,25 @@ describe("branches mode", () => {
     r.git("reset", "-q", "--hard", "HEAD^");
   });
 
-  it("reports repo info and rejects non-repositories", async () => {
+  it("reads the author's email and every co-author from the commit trailers", async () => {
+    r.git(
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "subject",
+      "-m",
+      "Body.\n\nCo-authored-by: Claude <noreply@anthropic.com>\nCo-authored-by: Ada <ada@example.com>",
+    );
+    const [listed] = await commits(r.root, 1);
+    const detail = await commitDetail(r.root, "HEAD");
+    expect(listed).toMatchObject({ email: "test@example.com", coauthors: ["Claude <noreply@anthropic.com>", "Ada <ada@example.com>"] });
+    expect(detail).toMatchObject({ email: "test@example.com", coauthors: listed.coauthors });
+    expect(detail.body).toContain("Body.");
+    r.git("reset", "-q", "--hard", "HEAD^");
+  });
+
+  it("reports repo info and rejects missing paths", async () => {
     const info = await repoInfo(join(r.root, "."));
     expect(info).toMatchObject({ root: r.root, branch: "main" });
     expect(info.head).toMatch(/^[0-9a-f]{7,}$/);
@@ -350,18 +370,14 @@ describe("branches mode", () => {
     writeFileSync(join(r.root, ".git", "MERGE_HEAD"), r.git("rev-parse", "feature") + "\n");
     expect((await repoInfo(r.root)).state).toBe("merging");
     unlinkSync(join(r.root, ".git", "MERGE_HEAD"));
-    const outside = realpathSync(mkdtempSync(join(tmpdir(), "moire-norepo-")));
-    dirs.push(outside);
-    await expect(repoInfo(outside)).rejects.toThrow(`${outside} isn't a git repository`);
+    const outside = tempDir("moire-norepo-");
     await expect(repoInfo(join(outside, "gone"))).rejects.toThrow(`${outside}/gone doesn't exist`);
   });
 });
 
 describe("input", () => {
   it("survives git exiting before it reads its input", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "a\n");
-    r.commit("init");
+    const r = seed({ "a.txt": "a\n" });
     await expect(gitInput(r.root, ["rev-parse", "HEAD"], Buffer.alloc(8 * 1024 * 1024))).resolves.toMatch(/^[0-9a-f]{40}\n$/);
   });
 });
@@ -401,22 +417,28 @@ describe("repo problems", () => {
   });
 });
 
-describe("many contents in working tree modes", () => {
-  const r = makeRepo();
-  r.write("a.txt", "one\n");
-  r.write("b.txt", "two\n");
-  r.commit("init");
+describe("many contents", () => {
+  const r = seed({ "a.txt": "one\n", "b.txt": "two\n", "old.txt": lines(20), "gone.txt": "bye\n", "bin.dat": Buffer.from([0, 1, 2]) });
+  r.git("mv", "old.txt", "new.txt");
+  r.git("rm", "-q", "gone.txt");
+  r.write("new.txt", lines(20).replace("line 10\n", "line ten\n"));
+  r.write("bin.dat", Buffer.from([0, 9, 9]));
+  const sha = r.commit("second");
   r.write("a.txt", "ONE\n");
   r.git("add", "a.txt");
   r.write("a.txt", "ONE!\n");
   r.write("new.txt", "fresh\n");
 
-  it("matches single reads for unstaged, staged and all", async () => {
-    for (const kind of ["unstaged", "staged", "all"] as const) {
-      const files = (await diff(r.root, { kind })).files;
-      const one = await Promise.all(files.map((f) => fileContents(r.root, { kind }, f)));
-      expect(await manyContents(r.root, { kind }, files)).toEqual(one);
-    }
+  it.each<[string, CompareMode, boolean[]]>([
+    ["unstaged", { kind: "unstaged" }, [false, false]],
+    ["staged", { kind: "staged" }, [false]],
+    ["all", { kind: "all" }, [false, false]],
+    ["commit", { kind: "commit", sha }, [true, false, false]],
+  ])("match single reads in the %s view", async (_, mode, hidden) => {
+    const files = (await diff(r.root, mode)).files;
+    const one = await Promise.all(files.map((f) => fileContents(r.root, mode, f)));
+    expect(await manyContents(r.root, mode, files)).toEqual(one);
+    expect(one.map((c) => c.hidden)).toEqual(hidden);
   });
 });
 
@@ -424,10 +446,7 @@ describe("repeated refreshes", () => {
   const texts = (file: FileDiff) => file.hunks.flatMap((h) => h.lines.map((l) => l.text));
 
   it("rereads an untracked file once its size or mtime changes", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "a\n");
-    r.commit("init");
-    r.write("new.txt", "one\n");
+    const r = seed({ "a.txt": "a\n" }, { "new.txt": "one\n" });
     expect(texts(byPath((await diff(r.root, { kind: "unstaged" })).files, "new.txt"))).toEqual(["one"]);
     r.write("new.txt", "one\ntwo\n");
     expect(texts(byPath((await diff(r.root, { kind: "unstaged" })).files, "new.txt"))).toEqual(["one", "two"]);
@@ -440,10 +459,7 @@ describe("repeated refreshes", () => {
   });
 
   it("drops the untracked cache of repos no window shows", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "a\n");
-    r.commit("init");
-    r.write("new.txt", "one\n");
+    const r = seed({ "a.txt": "a\n" }, { "new.txt": "one\n" });
     const mtime = new Date(2020, 0, 1);
     utimesSync(join(r.root, "new.txt"), mtime, mtime);
     const reread = async () => {
@@ -460,13 +476,7 @@ describe("repeated refreshes", () => {
   });
 
   it("keeps versions stable until a file changes", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "a\n");
-    r.write("b.txt", "b\n");
-    r.commit("init");
-    r.write("a.txt", "A\n");
-    r.write("b.txt", "B\n");
-    r.write("new.txt", "new\n");
+    const r = seed({ "a.txt": "a\n", "b.txt": "b\n" }, { "a.txt": "A\n", "b.txt": "B\n", "new.txt": "new\n" });
     const first = await diff(r.root, { kind: "all" });
     const second = await diff(r.root, { kind: "all" });
     expect(second.version).toBe(first.version);
@@ -487,10 +497,7 @@ describe("repeated refreshes", () => {
 
 describe("conflicts and limits", () => {
   it("lists a conflicted file in the unstaged and staged views", async () => {
-    const r = makeRepo();
-    r.write("z.txt", "a\nb\n");
-    r.write("other.txt", "x\n");
-    r.commit("init");
+    const r = seed({ "z.txt": "a\nb\n", "other.txt": "x\n" });
     r.git("checkout", "-q", "-b", "f");
     r.write("z.txt", "a\nF\n");
     r.commit("f");
@@ -506,10 +513,7 @@ describe("conflicts and limits", () => {
   });
 
   it("reads the files after a missing one whose path has spaces", async () => {
-    const r = makeRepo();
-    r.write("a b c.txt", "spaced\n");
-    r.write("b.txt", "two\n");
-    r.commit("init");
+    const r = seed({ "a b c.txt": "spaced\n", "b.txt": "two\n" });
     const gone = { path: "no such file.txt", status: "modified" as const };
     const [missing, b] = await manyContents(r.root, { kind: "commit", sha: "HEAD" }, [gone, { path: "b.txt", status: "modified" }]);
     expect(missing.b).toBeNull();
@@ -517,9 +521,7 @@ describe("conflicts and limits", () => {
   });
 
   it("lists untracked files past the read limit without reading them", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "a\n");
-    r.commit("init");
+    const r = seed({ "a.txt": "a\n" });
     for (let i = 0; i <= UNTRACKED_READ_LIMIT; i++) r.write(`node_modules/m${String(i).padStart(5, "0")}.js`, "x\n");
     const files = (await diff(r.root, { kind: "unstaged" })).files;
     expect(files).toHaveLength(UNTRACKED_READ_LIMIT + 1);
@@ -529,13 +531,13 @@ describe("conflicts and limits", () => {
 });
 
 describe("noise", () => {
-  const r = makeRepo();
-  r.write(".gitattributes", "gen/** linguist-generated\nkeep.lock linguist-generated=false\n");
-  r.write("pnpm-lock.yaml", "a\n");
-  r.write("gen/api.ts", "a\n");
-  r.write("src/__snapshots__/x.test.ts.snap", "a\n");
-  r.write("src/a.ts", "a\n");
-  r.commit("init");
+  const r = seed({
+    ".gitattributes": "gen/** linguist-generated\nkeep.lock linguist-generated=false\n",
+    "pnpm-lock.yaml": "a\n",
+    "gen/api.ts": "a\n",
+    "src/__snapshots__/x.test.ts.snap": "a\n",
+    "src/a.ts": "a\n",
+  });
   for (const p of ["pnpm-lock.yaml", "gen/api.ts", "src/__snapshots__/x.test.ts.snap", "src/a.ts"]) r.write(p, "b\n");
 
   it("marks lockfiles and linguist-generated files, but not snapshots", async () => {
@@ -566,13 +568,8 @@ describe("noise", () => {
 
 describe("size limit", () => {
   it("marks a tracked file too large once its changes pass 2 MB, but shows a small edit to a big file", async () => {
-    const r = makeRepo();
     const big = lines(200_000);
-    r.write("big.txt", big);
-    r.write("grows.txt", "a\n");
-    r.commit("init");
-    r.write("big.txt", big.replace("line 5\n", "line five\n"));
-    r.write("grows.txt", big);
+    const r = seed({ "big.txt": big, "grows.txt": "a\n" }, { "big.txt": big.replace("line 5\n", "line five\n"), "grows.txt": big });
     const files = (await diff(r.root, { kind: "unstaged" })).files;
     expect(byPath(files, "grows.txt")).toMatchObject({ tooLarge: true, hunks: [], additions: 200_000 });
     expect(byPath(files, "big.txt").tooLarge).toBeUndefined();
@@ -608,10 +605,7 @@ describe("file modes", () => {
 
 describe("renames git doesn't know about yet", () => {
   const setup = () => {
-    const r = makeRepo();
-    r.write("old.ts", lines(20));
-    r.write("gone.ts", lines(20, "gone"));
-    r.commit("init");
+    const r = seed({ "old.ts": lines(20), "gone.ts": lines(20, "gone") });
     renameSync(join(r.root, "old.ts"), join(r.root, "new.ts"));
     r.write("new.ts", lines(20).replace("line 3\n", "line three\n"));
     unlinkSync(join(r.root, "gone.ts"));
@@ -644,9 +638,7 @@ describe("renames git doesn't know about yet", () => {
   });
 
   it("pairs a plain move with no edits as a rename with no hunks", async () => {
-    const r = makeRepo();
-    r.write("src/old.ts", lines(20));
-    r.commit("init");
+    const r = seed({ "src/old.ts": lines(20) });
     renameSync(join(r.root, "src/old.ts"), join(r.root, "src/new.ts"));
     for (const kind of ["unstaged", "all"] as const) {
       const files = (await diff(r.root, { kind })).files;
@@ -658,9 +650,7 @@ describe("renames git doesn't know about yet", () => {
 
 describe("renames made with git mv", () => {
   const setup = (edit: boolean) => {
-    const r = makeRepo();
-    r.write("old.ts", lines(20));
-    r.commit("init");
+    const r = seed({ "old.ts": lines(20) });
     r.git("mv", "old.ts", "new.ts");
     if (edit) r.write("new.ts", lines(20).replace("line 3\n", "line three\n"));
     return r;
@@ -689,10 +679,7 @@ describe("renames made with git mv", () => {
 
 describe("binary rewrites", () => {
   it("change the file's blob ids, so a second rewrite isn't mistaken for the first", async () => {
-    const r = makeRepo();
-    r.write("logo.png", Buffer.from([1, 0, 1]));
-    r.commit("init");
-    r.write("logo.png", Buffer.from([2, 0, 2]));
+    const r = seed({ "logo.png": Buffer.from([1, 0, 1]) }, { "logo.png": Buffer.from([2, 0, 2]) });
     const first = byPath((await diff(r.root, { kind: "unstaged" })).files, "logo.png");
     r.write("logo.png", Buffer.from([3, 0, 3]));
     const second = byPath((await diff(r.root, { kind: "unstaged" })).files, "logo.png");
@@ -702,15 +689,42 @@ describe("binary rewrites", () => {
   });
 });
 
+describe("a repo's own config", () => {
+  const script = (marker: string) => {
+    const path = join(tempDir("moire-hook-"), "hook");
+    writeFileSync(path, `#!/bin/sh\ntouch ${marker}\necho converted\n`, { mode: 0o755 });
+    return path;
+  };
+  const commitWith = (key: string) => {
+    const r = seed({ ".gitattributes": "*.txt diff=conv\n", "a.txt": "one\n" }, { "a.txt": "two\n" });
+    const sha = r.commit("edit");
+    const ran = join(tempDir("moire-ran-"), "ran");
+    r.git("config", key, script(ran));
+    return { r, sha, ran };
+  };
+
+  it.each(["diff.external", "diff.conv.textconv"])("can't run a command through %s", async (key) => {
+    const { r, sha, ran } = commitWith(key);
+    const { files } = await diff(r.root, { kind: "commit", sha });
+    expect(files[0].hunks[0].lines.map((l) => `${l.kind} ${l.text}`)).toEqual(["del one", "add two"]);
+    expect(existsSync(ran)).toBe(false);
+  });
+
+  it("can't run an fsmonitor hook on refresh", async () => {
+    const r = seed({ "a.txt": "one\n" }, { "a.txt": "two\n" });
+    const ran = join(tempDir("moire-ran-"), "ran");
+    r.git("config", "core.fsmonitor", script(ran));
+    await diff(r.root, { kind: "all" });
+    expect(existsSync(ran)).toBe(false);
+  });
+});
+
 describe("Git LFS", () => {
   it("reads an image from the LFS store, and says when only its pointer is here", async () => {
-    const r = makeRepo();
     const pointer = (data: Buffer) =>
       `version https://git-lfs.github.com/spec/v1\noid sha256:${createHash("sha256").update(data).digest("hex")}\nsize ${data.length}\n`;
     const [missing, stored] = [Buffer.from([1, 0, 1]), Buffer.from([2, 0, 2, 0])];
-    r.write("logo.png", pointer(missing));
-    r.commit("init");
-    r.write("logo.png", pointer(stored));
+    const r = seed({ "logo.png": pointer(missing) }, { "logo.png": pointer(stored) });
     const sha = r.commit("stored");
     const oid = createHash("sha256").update(stored).digest("hex");
     r.write(`.git/lfs/objects/${oid.slice(0, 2)}/${oid.slice(2, 4)}/${oid}`, stored);
@@ -723,12 +737,8 @@ describe("Git LFS", () => {
 });
 
 describe("file tree", () => {
-  const r = makeRepo();
-  r.write(".gitignore", "IDEAS.md\nout/\n");
-  r.write("src/a.ts", "a\n");
-  r.write("gone.txt", "bye\n");
-  const first = r.commit("init");
-  r.write("src/b.ts", "b\n");
+  const r = seed({ ".gitignore": "IDEAS.md\nout/\n", "src/a.ts": "a\n", "gone.txt": "bye\n" }, { "src/b.ts": "b\n" });
+  const first = r.head;
   r.git("add", "src/b.ts");
   r.write("new.txt", "new\n");
   r.write("IDEAS.md", "# ideas\n");
@@ -755,6 +765,18 @@ describe("file tree", () => {
     });
   });
 
+  it("reads a blob only from inside the repo", async () => {
+    const side = { kind: "worktree" as const, label: "" };
+    const outside = tempDir("moire-outside-");
+    writeFileSync(join(outside, "secret"), "secret\n");
+    r.write("etc/hosts", "inside\n");
+    expect(await readBlob(r.root, side, "etc/hosts", 1024)).toEqual(Buffer.from("inside\n"));
+    expect(await readBlob(r.root, side, `../${basename(outside)}/secret`, 1024)).toBeNull();
+    expect(await readBlob(r.root, side, `src/../../${basename(outside)}/secret`, 1024)).toBeNull();
+    expect(await readBlob(r.root, side, "/etc/hosts", 1024)).toBeNull();
+    expect(await readBlob(r.root, side, "", 1024)).toBeNull();
+  });
+
   it("lists an ignored folder's entries, and nothing outside the repo", async () => {
     expect(await listDir(r.root, "out/")).toEqual(["out/deep/"]);
     expect(await listDir(r.root, "out/deep/")).toEqual(["out/deep/x.js"]);
@@ -763,15 +785,81 @@ describe("file tree", () => {
   });
 });
 
+describe("folder that isn't a repository", () => {
+  const root = tempDir("moire-folder-test-");
+  const write = (path: string, text: string) => {
+    mkdirSync(join(root, path, ".."), { recursive: true });
+    writeFileSync(join(root, path), text);
+  };
+  write(".gitignore", "node_modules/\n*.log\n");
+  write("notes.md", "# notes\n");
+  write("src/a.ts", "a\n");
+  write("debug.log", "log\n");
+  write("node_modules/x/index.js", "x\n");
+  const nested = makeRepo();
+  nested.write("n.txt", "n\n");
+  renameSync(nested.root, join(root, "nested"));
+
+  it("opens as a folder when git's messages are translated", async () => {
+    const translated = await withGit(`case " $* " in
+  *" rev-parse "*) [ "$LC_ALL" = C ] || { echo 'fatal: Kein Git-Repository' >&2; exit 128; } ;;
+esac`);
+    expect((await translated.repoInfo(root)).folder).toBe(true);
+  });
+
+  it("opens as a folder with no branch", async () => {
+    expect(await repoInfo(root)).toEqual({ root, name: basename(root), branch: null, head: null, folder: true });
+  });
+
+  it("lists files by the folder's .gitignore, and a nested repository as a folder to open", async () => {
+    await repoInfo(root);
+    const t = await tree(root, { kind: "unstaged" });
+    expect(t.files.sort()).toEqual([".gitignore", "notes.md", "src/a.ts"]);
+    expect(t.ignored.sort()).toEqual(["debug.log", "node_modules/"]);
+    expect(t.unlisted).toEqual(["nested/"]);
+    expect(await listDir(root, "nested/")).toEqual(["nested/n.txt"]);
+  });
+
+  it("lists only the top level past the file limit", async () => {
+    await repoInfo(root);
+    expect(await folderTree(root, 1)).toEqual({ files: [".gitignore", "notes.md"], ignored: ["debug.log", "node_modules/"], unlisted: ["nested/", "src/"] });
+  });
+
+  it("has no changes and reads files from disk", async () => {
+    await repoInfo(root);
+    const res = await diff(root, { kind: "staged" });
+    expect([res.a.kind, res.b.kind, res.files]).toEqual(["empty", "worktree", []]);
+    expect(await fileContents(root, { kind: "staged" }, { path: "notes.md", status: "unchanged" })).toEqual({ a: null, b: "# notes\n", hidden: false });
+  });
+
+  it("becomes a repository once git init runs in it, without reopening", async () => {
+    const other = tempDir("moire-folder-test-");
+    writeFileSync(join(other, "a.txt"), "a\n");
+    expect((await repoInfo(other)).folder).toBe(true);
+    execFileSync("git", ["init", "-q", other]);
+    const res = await diff(other, { kind: "unstaged" });
+    expect(res.repo.folder).toBeUndefined();
+    expect(paths(res.files)).toEqual(["untracked:a.txt"]);
+    expect((await repoInfo(other)).folder).toBeUndefined();
+  });
+
+  it("goes back to a folder once .git is removed, though the repository's root was cached", async () => {
+    const other = tempDir("moire-folder-test-");
+    writeFileSync(join(other, "a.txt"), "a\n");
+    execFileSync("git", ["init", "-q", other]);
+    expect((await repoInfo(other)).folder).toBeUndefined();
+    await diff(other, { kind: "unstaged" });
+    rmSync(join(other, ".git"), { recursive: true });
+    const res = await diff(other, { kind: "unstaged" });
+    expect(res.repo.folder).toBe(true);
+    expect((await repoInfo(other)).folder).toBe(true);
+    expect((await tree(other, { kind: "all" })).files).toEqual(["a.txt"]);
+  });
+});
+
 describe("index lock", () => {
   it("never rewrites the index, and leaves out files whose stat info alone is stale", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "a\n");
-    r.write("touched.txt", "same\n");
-    r.write("staged.txt", "s\n");
-    r.commit("init");
-    r.write("a.txt", "b\n");
-    r.write("staged.txt", "S\n");
+    const r = seed({ "a.txt": "a\n", "touched.txt": "same\n", "staged.txt": "s\n" }, { "a.txt": "b\n", "staged.txt": "S\n" });
     r.git("add", "staged.txt");
     const later = new Date(Date.now() + 5000);
     utimesSync(join(r.root, "touched.txt"), later, later);
@@ -787,11 +875,32 @@ describe("index lock", () => {
     expect(readFileSync(index).equals(before)).toBe(true);
   });
 
+  describe("status", () => {
+    const stale = () => {
+      const r = seed({ "a.txt": "a\n" });
+      const wt = join(tempDir("moire-wt-"), "wt");
+      r.git("worktree", "add", "-q", wt);
+      const later = new Date(Date.now() + 5000);
+      utimesSync(join(r.root, "a.txt"), later, later);
+      return { r, index: join(r.root, ".git", "index"), before: readFileSync(join(r.root, ".git", "index")) };
+    };
+
+    it("leaves the index alone with no help from the command line", async () => {
+      const { r, index, before } = stale();
+      await git(r.root, ["status", "--porcelain"]);
+      expect(readFileSync(index).equals(before)).toBe(true);
+    });
+
+    it("leaves the index alone with no help from the environment", async () => {
+      const { r, index, before } = stale();
+      const bare = await withGit("unset GIT_OPTIONAL_LOCKS");
+      expect(await bare.worktrees(r.root)).toHaveLength(2);
+      expect(readFileSync(index).equals(before)).toBe(true);
+    });
+  });
+
   it("follows the repo's diff.algorithm, as git diff does", async () => {
-    const r = makeRepo();
-    r.write("f", "c\n{\n{\nc\n{\nb\n{\na\n");
-    r.commit("init");
-    r.write("f", "c\n{\n{\nc\nb\n{\nb\nx\n{\na\nb\n");
+    const r = seed({ f: "c\n{\n{\nc\n{\nb\n{\na\n" }, { f: "c\n{\n{\nc\nb\n{\nb\nx\n{\na\nb\n" });
     r.git("config", "diff.algorithm", "histogram");
     const changed = async () => (await diff(r.root, { kind: "unstaged" })).files[0].hunks[0].lines.filter((l) => l.kind !== "ctx").map((l) => l.kind + l.text);
     expect(await changed()).toEqual(["del{", "addb", "addx", "add{", "addb"]);
@@ -799,9 +908,7 @@ describe("index lock", () => {
 });
 
 describe("upstream tracking", () => {
-  const remote = makeRepo();
-  remote.write("a.txt", "a\n");
-  remote.commit("init");
+  const remote = seed({ "a.txt": "a\n" });
   const r = makeRepo();
   r.git("remote", "add", "origin", remote.root);
   r.git("fetch", "-q", "origin");
@@ -834,18 +941,13 @@ describe("upstream tracking", () => {
 
 describe("worktrees", () => {
   it("is empty for a repo with one worktree", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "a\n");
-    r.commit("init");
+    const r = seed({ "a.txt": "a\n" });
     expect(await worktrees(r.root)).toEqual([]);
   });
 
   it("lists every worktree with its branch and change count", async () => {
-    const r = makeRepo();
-    r.write("a.txt", "a\n");
-    r.commit("init");
-    const other = realpathSync(mkdtempSync(join(tmpdir(), "moire-wt-")));
-    dirs.push(other);
+    const r = seed({ "a.txt": "a\n" });
+    const other = tempDir("moire-wt-");
     r.git("worktree", "add", "-q", "-b", "agent", join(other, "agent"));
     writeFileSync(join(other, "agent", "a.txt"), "changed\n");
     writeFileSync(join(other, "agent", "new.txt"), "new\n");
@@ -857,9 +959,7 @@ describe("worktrees", () => {
 });
 
 it("shows a moved submodule in a commit even when git config asks for submodule logs", async () => {
-  const sub = makeRepo();
-  sub.write("x.txt", "x\n");
-  sub.commit("one");
+  const sub = seed({ "x.txt": "x\n" });
   const r = makeRepo();
   r.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", sub.root, "sub");
   r.commit("add sub");

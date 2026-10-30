@@ -1,23 +1,14 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { git, initRepo, launch, shot } = harness();
 let repo: string;
-let userData: string;
-let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
-
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   const body = Array.from({ length: 40 }, (_, i) => `export const v${i} = ${i};`);
   writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
   writeFileSync(join(repo, "b.ts"), body.join("\n") + "\n");
@@ -27,20 +18,8 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "b.ts"), body.slice(5).join("\n") + "\n");
   writeFileSync(join(repo, "new.ts"), "export const fresh = true;\n");
 
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1" } });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ page } = await launch(repo));
   await expect(page.locator(".file")).toHaveCount(3);
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
 });
 
 test("switching to an empty view and back keeps the UI alive", async () => {
@@ -53,6 +32,7 @@ test("switching to an empty view and back keeps the UI alive", async () => {
   await page.keyboard.press("1");
   await expect(page.locator(".file")).toHaveCount(3);
   await page.locator(".picker-btn").click();
+  await shot("mode-menu");
   await page.getByRole("option", { name: /^Staged/ }).click();
   await expect(page.getByRole("heading", { name: "Nothing staged." })).toBeVisible();
   await page.locator(".picker-btn").click();
@@ -78,11 +58,38 @@ test("keyboard walks hunks across files and toggles views", async () => {
   await expect(page.locator(".row.split").first()).toBeVisible();
 });
 
+test("the compare picker works from the keyboard", async () => {
+  const open = await page.locator(".file.is-active .name").textContent();
+  await page.locator(".file.is-active").click();
+  await page.locator(".picker-btn").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("option", { name: /^All since last commit/ })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByRole("option", { name: /^Staged/ })).toBeFocused();
+  await expect(page.locator(".file.is-active .name")).toHaveText(open!);
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".picker-btn")).toContainText("Unstaged");
+  await page.keyboard.press("4");
+  await expect(page.getByLabel("Filter commits")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator(".commit-list button").first()).toBeFocused();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("1");
+});
+
 test("refreshing an unchanged diff keeps the syntax colours on screen", async () => {
-  const coloured = page.locator(".cell span[style]");
-  await expect(coloured.first()).toBeVisible();
-  const before = await coloured.count();
+  await expect(page.locator(".cell span[style]").first()).toBeVisible();
+  const before = await page.evaluate(() => {
+    const w = window as unknown as { fewest: number };
+    const count = () => document.querySelectorAll(".cell span[style]").length;
+    w.fewest = count();
+    new MutationObserver(() => {
+      w.fewest = Math.min(w.fewest, count());
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+    return w.fewest;
+  });
   await page.keyboard.press("r");
-  await page.waitForTimeout(30);
-  expect(await coloured.count()).toBe(before);
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => (window as unknown as { fewest: number }).fewest)).toBe(before);
 });

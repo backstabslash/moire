@@ -1,18 +1,13 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { clipboard, git, initRepo, launch, shots } = harness();
 let repo: string;
-let userData: string;
 let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
 
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
-const shot = (name: string) => process.env.MOIRE_SHOTS && page.screenshot({ path: join(process.env.MOIRE_SHOTS, `${name}.png`) });
-const clipboard = () => app.evaluate(({ clipboard }) => clipboard.readText());
 const clearClipboard = () => app.evaluate(({ clipboard }) => clipboard.writeText(""));
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 const body = Array.from({ length: 30 }, (_, i) => `export const v${i + 1} = ${i + 1};`);
@@ -23,35 +18,16 @@ const cell = (side: "a" | "b", n: number) => page.locator(".row.split", { has: l
 const picked = () => page.locator(".ln.b.sel");
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
   git("add", "-A");
   git("commit", "-qm", "init");
   writeFileSync(join(repo, "a.ts"), edited.join("\n") + "\n");
   writeFileSync(join(repo, "long.ts"), long);
 
-  app = await electron.launch({
-    args: [resolve("."), `--user-data-dir=${userData}`, repo],
-    env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_PREFS: '{"theme":"light"}' },
-  });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ app, page } = await launch(repo, { prefs: { theme: "light" } }));
   await expect(page.locator(".file")).toHaveCount(2);
   await expect(page.locator(".hunk-head")).toHaveCount(2);
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
 });
 
 test("a text drag across two hunks copies one side, without header text or duplicates", async () => {
@@ -95,18 +71,41 @@ test("a click replaces the selection, Mod+click toggles a line and shift-click a
   await page.keyboard.press("Escape");
 });
 
+test("c copies the selection for an agent, as a diff that says where it's from", async () => {
+  await ln("b", 4).click();
+  await ln("b", 5).click({ modifiers: ["Shift"] });
+  await page.keyboard.press("c");
+  await expect(page.locator(".toast.show")).toContainText("Copied 2 lines for an agent");
+  expect(await clipboard()).toBe("a.ts lines 4–5 (working tree)\n```diff\n export const v4 = 4;\n+export const v5 = 10 * 5;\n```\n");
+  await page.keyboard.press("Escape");
+});
+
+test("clicking the only selected line clears it, and dragging from it still selects", async () => {
+  await ln("b", 3).click();
+  await expect(picked()).toHaveText(["3"]);
+  await ln("b", 3).click();
+  await expect(picked()).toHaveCount(0);
+  await ln("b", 3).click();
+  await ln("b", 3).hover();
+  await page.mouse.down();
+  await ln("b", 5).hover();
+  await page.mouse.up();
+  await expect(picked()).toHaveText(["3", "4", "5"]);
+  await ln("b", 5).click();
+  await expect(picked()).toHaveText(["5"]);
+  await page.keyboard.press("Escape");
+});
+
 test("a hunk's range selects its changed lines, and the pane head offers to copy them", async () => {
   await page.locator(".hunk-head .hh-range").first().click();
   await expect(picked()).toHaveText(["5"]);
-  await expect(page.locator(".pane-h").nth(1).locator(".pane-copy")).toHaveText("1 lineCopy linesctrl c");
-  await expect(page.locator(".pane-h").first().locator(".pane-copy")).toHaveText("Copy old version");
+  await expect(page.locator(".sel-count")).toHaveText("1 line");
+  await expect(page.locator(".pane-copy").last()).toContainText("Copy lines");
+  await expect(page.locator(".pane-copy").first()).toHaveText("Copy old version");
   await ln("b", 4).click();
   await ln("b", 7).click({ modifiers: ["Shift"] });
-  await expect(page.locator(".pane-h").nth(1).locator(".sel-count")).toHaveText("4 lines");
-  await shot("pane-head-selection-light");
-  await page.keyboard.press("t");
-  await shot("pane-head-selection-dark");
-  await page.keyboard.press("t");
+  await expect(page.locator(".sel-count")).toHaveText("4 lines");
+  await shots("pane-head-selection");
   await page
     .locator(".pane-copy")
     .getByRole("button", { name: /^Copy lines/ })
@@ -117,7 +116,7 @@ test("a hunk's range selects its changed lines, and the pane head offers to copy
 
 test("Mod+a then Mod+c copies the side last clicked, folded lines included", async () => {
   await page.keyboard.press(`${mod}+a`);
-  await expect(page.locator(".pane-h").nth(1).locator(".sel-count")).toHaveText("30 lines");
+  await expect(page.locator(".sel-count")).toHaveText("30 lines");
   expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("");
   await page.keyboard.press(`${mod}+c`);
   await expect(page.locator(".toast.show")).toHaveText("Copied a.ts, 30 lines");
@@ -125,10 +124,14 @@ test("Mod+a then Mod+c copies the side last clicked, folded lines included", asy
 
   await cell("a", 3).click();
   await page.keyboard.press(`${mod}+a`);
-  await expect(page.locator(".pane-h").first().locator(".sel-count")).toHaveText("30 lines");
+  await expect(page.locator(".pane-copy").first().locator(".sel-count")).toHaveText("30 lines");
   await expect(page.locator(".ln.b.sel")).toHaveCount(0);
   await page.keyboard.press(`${mod}+c`);
   expect(await clipboard()).toBe(git("show", ":a.ts"));
+  await page.keyboard.press("v");
+  await expect(page.locator("html")).toHaveAttribute("data-layout", "unified");
+  await expect(page.locator(".sel-count")).toHaveText("30 lines");
+  await page.keyboard.press("v");
   await page.keyboard.press("Escape");
   await expect(page.locator(".pane-copy .sel-count")).toHaveCount(0);
 });

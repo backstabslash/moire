@@ -4,8 +4,38 @@ const dirOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastInd
 const collator = new Intl.Collator();
 const byFolder = (x: string, y: string) => collator.compare(dirOf(x), dirOf(y)) || collator.compare(x, y);
 
+const TEST_NAME = /^(?:test_(.+)\.py|(.+)(?:\.test|\.spec|_test)\.[^.]+)$/;
+const SOURCE = /\.(c|cc|cjs|cpp|cs|cts|dart|ex|exs|go|h|hpp|java|jsx?|kt|mjs|mts|php|py|rb|rs|scala|svelte|swift|tsx?|vue)$/;
+
+export interface ListedFile {
+  file: FileDiff;
+  suffix?: string;
+}
+
+export function listFiles(files: FileDiff[]): ListedFile[] {
+  const sorted = [...files].sort((x, y) => byFolder(x.path, y.path));
+  const nameOf = (f: FileDiff) => f.path.slice(f.path.lastIndexOf("/") + 1);
+  const code = new Map<string, FileDiff>();
+  for (const f of sorted) {
+    const name = nameOf(f);
+    if (SOURCE.test(name) && !TEST_NAME.test(name)) code.set(`${dirOf(f.path)}/${name.replace(/\.[^.]+$/, "")}`, f);
+  }
+  const tucked = new Map<FileDiff, ListedFile[]>();
+  const placed = new Set<FileDiff>();
+  for (const f of sorted) {
+    const name = nameOf(f);
+    const test = TEST_NAME.exec(name);
+    const base = test?.[1] ?? test?.[2];
+    const lead = base && code.get(`${dirOf(f.path)}/${base}`);
+    if (!base || !lead) continue;
+    placed.add(f);
+    tucked.set(lead, [...(tucked.get(lead) ?? []), { file: f, suffix: name.startsWith(base) ? name.slice(base.length) : name }]);
+  }
+  return sorted.filter((f) => !placed.has(f)).flatMap((file) => [{ file }, ...(tucked.get(file) ?? [])]);
+}
+
 export function orderFiles(files: FileDiff[]): FileDiff[] {
-  return [...files].sort((x, y) => byFolder(x.path, y.path));
+  return listFiles(files).map((row) => row.file);
 }
 
 export function orderPaths(paths: string[]): string[] {

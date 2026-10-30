@@ -51,26 +51,38 @@ export const SearchBar = forwardRef<HTMLInputElement, Props>(function SearchBar(
       <span className={`search-status${invalid ? " is-error" : ""}`} aria-live="polite">
         {status}
       </span>
-      <button className="search-opt" aria-pressed={options.matchCase} title="Match case" onClick={() => set({ matchCase: !options.matchCase })}>
+      <button
+        className="search-opt"
+        aria-pressed={options.matchCase}
+        aria-label="Match case"
+        data-tip="Match case"
+        onClick={() => set({ matchCase: !options.matchCase })}
+      >
         Aa
       </button>
-      <button className="search-opt" aria-pressed={options.regex} title="Regular expression" onClick={() => set({ regex: !options.regex })}>
+      <button
+        className="search-opt"
+        aria-pressed={options.regex}
+        aria-label="Regular expression"
+        data-tip="Regular expression"
+        onClick={() => set({ regex: !options.regex })}
+      >
         .*
       </button>
       <span className="search-sides">
         {SIDES.map(([side, label, title]) => (
-          <button key={side} className="search-opt" aria-pressed={options.side === side} title={title} onClick={() => set({ side })}>
+          <button key={side} className="search-opt" aria-pressed={options.side === side} aria-label={title} data-tip={title} onClick={() => set({ side })}>
             {label}
           </button>
         ))}
       </span>
-      <button className="search-nav" title="Previous (Shift+Enter)" disabled={!total} onClick={() => onStep(-1)}>
+      <button className="search-nav" aria-label="Previous" data-tip="Previous (Shift+Enter)" disabled={!total} onClick={() => onStep(-1)}>
         ↑
       </button>
-      <button className="search-nav" title="Next (Enter)" disabled={!total} onClick={() => onStep(1)}>
+      <button className="search-nav" aria-label="Next" data-tip="Next (Enter)" disabled={!total} onClick={() => onStep(1)}>
         ↓
       </button>
-      <button className="search-nav" title="Close (Esc)" onClick={onClose}>
+      <button className="search-nav" aria-label="Close" data-tip="Close (Esc)" onClick={onClose}>
         ×
       </button>
     </div>

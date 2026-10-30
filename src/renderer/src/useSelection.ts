@@ -57,14 +57,16 @@ export function useSelection(rows: Row[]) {
         return apply(new Set([...base, ...keysBetween(rows, col, from.key, key)]), col);
       }
       const { keys, col: had, wholeSide } = current.current;
-      const before = how === "toggle" && had === col && !wholeSide ? keys : EMPTY;
-      const adding = !before.has(key);
+      const sameCol = had === col && !wholeSide;
+      const before = how === "toggle" && sameCol ? keys : EMPTY;
+      const alone = how === "click" && sameCol && keys.size === 1 && keys.has(key);
+      const adding = !before.has(key) && !alone;
       const next = new Set(before);
       if (adding) next.add(key);
       else next.delete(key);
       const base = adding ? before : next;
       anchor.current = { key, col };
-      drag.current = { base, adding };
+      drag.current = { base, adding: adding || alone };
       cursor.current = { key, base };
       apply(next, col);
     },

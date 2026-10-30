@@ -3,6 +3,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const before: Record<string, string> = {
+  "CHANGELOG.md": `# Changelog
+
+## 1.0.0
+
+- Fixed window limiter
+`,
   "README.md": `# ratelimit
 
 Tiny rate limiter for HTTP handlers.
@@ -14,6 +20,11 @@ app.use(limit({ max: 100, windowMs: 60_000 }));
 \`\`\`
 
 Requests over the limit get a 429.
+`,
+  "src/client.ts": `export function clientIp(forwarded: string, fallback: string) {
+  const first = forwarded.split(",")[1]?.trim();
+  return first || fallback;
+}
 `,
   "src/http.ts": `export interface Req {
   ip: string;
@@ -80,6 +91,41 @@ export function limit(opts: Options) {
   };
 }
 `,
+  "src/routes/auth.ts": `import { limit } from "../limiter";
+import type { Router } from "../serve";
+
+export function auth(router: Router) {
+  router.use("/login", limit({ max: 5, windowMs: 60_000 }));
+}
+`,
+  "src/routes/billing.ts": `import { limit } from "../limiter";
+import type { Router } from "../serve";
+
+export function billing(router: Router) {
+  router.use("/invoices", limit({ max: 30, windowMs: 60_000 }));
+}
+`,
+  "src/routes/search.ts": `import { limit } from "../limiter";
+import type { Router } from "../serve";
+
+export function search(router: Router) {
+  router.use("/search", limit({ max: 60, windowMs: 60_000 }));
+}
+`,
+  "src/routes/uploads.ts": `import { limit } from "../limiter";
+import type { Router } from "../serve";
+
+export function uploads(router: Router) {
+  router.use("/uploads", limit({ max: 10, windowMs: 60_000 }));
+}
+`,
+  "src/routes/webhooks.ts": `import { limit } from "../limiter";
+import type { Router } from "../serve";
+
+export function webhooks(router: Router) {
+  router.use("/hooks", limit({ max: 500, windowMs: 60_000 }));
+}
+`,
   "src/server.ts": `import { createServer } from "./serve";
 import { limit } from "./limiter";
 
@@ -106,6 +152,13 @@ describe("fixedWindow", () => {
 };
 
 const after: Record<string, string> = {
+  "CHANGELOG.md": `# Changelog
+
+## 2.0.0
+
+- Token bucket replaces the fixed window
+- \`limit\` takes \`capacity\` and \`refillPerSec\`
+`,
   "README.md": `# ratelimit
 
 Tiny token-bucket rate limiter for HTTP handlers.
@@ -124,6 +177,11 @@ at \`refillPerSec\`, so short bursts go through.
 Requests get a **429** with a \`Retry-After\` header saying
 how many seconds until a token is free.
 `,
+  "src/client.ts": `export function clientIp(forwarded: string, fallback: string) {
+  const first = forwarded.split(",")[0]?.trim();
+  return first || fallback;
+}
+`,
   "src/limiter.ts": `import type { Next, Req, Res } from "./http";
 
 export interface Options {
@@ -141,28 +199,17 @@ export function byHeader(name: string) {
   };
 }
 
-interface Bucket {
-  tokens: number;
-  at: number;
-}
-
-function full(cap: number): Bucket {
-  return { tokens: cap, at: 0 };
-}
-
 export function tokenBucket(opts: Options) {
-  const buckets = new Map<string, Bucket>();
-  const cap = opts.capacity;
-  const rate = opts.refillPerSec;
+  const buckets = new Map<string, { tokens: number; at: number }>();
 
   return (key: string): number => {
     const now = Date.now();
-    const b = buckets.get(key) ?? full(cap);
-    const refill = ((now - b.at) / 1000) * rate;
-    b.tokens = Math.min(cap, b.tokens + refill);
+    const b = buckets.get(key) ?? { tokens: opts.capacity, at: now };
+    const refill = ((now - b.at) / 1000) * opts.refillPerSec;
+    b.tokens = Math.min(opts.capacity, b.tokens + refill);
     b.at = now;
     buckets.set(key, b);
-    if (b.tokens < 1) return (1 - b.tokens) / rate;
+    if (b.tokens < 1) return (1 - b.tokens) / opts.refillPerSec;
     b.tokens -= 1;
     return 0;
   };
@@ -186,6 +233,41 @@ export function limit(opts: Options) {
     res.set("Retry-After", String(seconds));
     res.status(429).send("Too many requests");
   };
+}
+`,
+  "src/routes/auth.ts": `import { limit } from "../limiter";
+import type { Router } from "../serve";
+
+export function auth(router: Router) {
+  router.use("/login", limit({ capacity: 5, refillPerSec: 0.1 }));
+}
+`,
+  "src/routes/billing.ts": `import { limit } from "../limiter";
+import type { Router } from "../serve";
+
+export function billing(router: Router) {
+  router.use("/invoices", limit({ capacity: 30, refillPerSec: 0.5 }));
+}
+`,
+  "src/routes/search.ts": `import { limit } from "../limiter";
+import type { Router } from "../serve";
+
+export function search(router: Router) {
+  router.use("/search", limit({ capacity: 20, refillPerSec: 1 }));
+}
+`,
+  "src/routes/uploads.ts": `import { limit } from "../limiter";
+import type { Router } from "../serve";
+
+export function uploads(router: Router) {
+  router.use("/uploads", limit({ capacity: 4, refillPerSec: 0.2 }));
+}
+`,
+  "src/routes/webhooks.ts": `import { limit } from "../limiter";
+import type { Router } from "../serve";
+
+export function webhooks(router: Router) {
+  router.use("/hooks", limit({ capacity: 100, refillPerSec: 10 }));
 }
 `,
   "src/server.ts": `import { createServer } from "./serve";
@@ -230,7 +312,7 @@ function write(root: string, files: Record<string, string>) {
 }
 
 const linesOf = (path: string) => after[path].split("\n");
-const lineOf = (path: string, code: string) => linesOf(path).findIndex((l) => l.includes(code)) + 1;
+export const lineOf = (path: string, code: string) => linesOf(path).findIndex((l) => l.includes(code)) + 1;
 const range = (path: string, firstLineHas: string, lastLineHas: string, linesAfterLast = 0, extra: object = {}) => {
   const start = lineOf(path, firstLineHas);
   return { path, lines: [start, lineOf(path, lastLineHas) + linesAfterLast], code: linesOf(path)[start - 1], ...extra };
@@ -241,15 +323,13 @@ const notes = {
   chapters: [
     {
       title: "A token bucket per client",
-      text: "Each key holds up to capacity tokens that refill at refillPerSec, and every request spends one. tokenBucket returns 0 to let a request through, or the seconds until the next token.",
-      ranges: [
-        range("src/limiter.ts", "export interface Options", "keyOf?", 1),
-        range("src/limiter.ts", "interface Bucket", "const buckets", 0, {
-          note: "Buckets are never evicted, so memory grows with every new client key.",
-          warn: true,
-        }),
-        range("src/limiter.ts", "const cap", "return 0;", 2),
-      ],
+      text: "Each client gets a bucket of tokens that refills over time, and every request spends one. An empty bucket says how long to wait.",
+      ranges: [range("src/limiter.ts", "export interface Options", "keyOf?", 1), range("src/limiter.ts", "export function tokenBucket", "return 0;", 2)],
+    },
+    {
+      title: "The real client address",
+      text: "X-Forwarded-For lists the client first, so reading entry 1 limited the proxy instead of the client.",
+      ranges: ["src/client.ts"],
     },
     {
       title: "Telling clients when to retry",
@@ -258,8 +338,17 @@ const notes = {
     },
     {
       title: "New options for callers",
-      text: "The server and README move from max and windowMs to capacity and refillPerSec. The old names aren't read anymore, so other callers fail to compile until they switch.",
-      ranges: [range("src/server.ts", "app.use(limit", "app.use(limit"), range("README.md", "Tiny token-bucket", "so short bursts go through")],
+      text: "The server, every route and the README move from max and windowMs to capacity and refillPerSec.",
+      ranges: [
+        range("src/server.ts", "app.use(limit", "app.use(limit"),
+        "src/routes/auth.ts",
+        "src/routes/billing.ts",
+        "src/routes/search.ts",
+        "src/routes/uploads.ts",
+        "src/routes/webhooks.ts",
+        range("README.md", "Tiny token-bucket", "so short bursts go through"),
+        "CHANGELOG.md",
+      ],
     },
     { title: "Tests", text: "Covers a burst followed by a wait, and refilling with fake timers.", ranges: ["tests/limiter.test.ts"] },
   ],

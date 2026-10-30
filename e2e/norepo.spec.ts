@@ -1,21 +1,11 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
-let userData: string;
-let app: ElectronApplication;
+const { launch } = harness();
 let page: Page;
 
 test.beforeAll(async () => {
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`], env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_REPO: "" } });
-  page = await app.firstWindow();
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(userData, { recursive: true, force: true });
+  ({ page } = await launch());
 });
 
 test("without a repository, only what works is shown, and o opens the picker", async () => {

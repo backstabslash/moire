@@ -1,40 +1,31 @@
-import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, test } from "@playwright/test";
+import { writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { initRepo, launch, launchAgain, tmp } = harness();
 let one: string;
 let two: string;
 let plain: string;
-let userData: string;
 let app: ElectronApplication;
+let page: Page;
 
-function makeRepo(dir: string) {
-  const git = (...args: string[]) => execFileSync("git", ["-C", dir, ...args]);
-  git("init", "-q", "-b", "main");
+function makeRepo() {
+  const dir = initRepo();
   writeFileSync(join(dir, "a.txt"), "a\n");
-}
-
-function launchAgain(...args: string[]): Promise<number | null> {
-  const child = spawn(app.process().spawnfile, [resolve("."), `--user-data-dir=${userData}`, ...args], {
-    env: { ...process.env, MOIRE_HIDDEN: "1" },
-    stdio: "ignore",
-  });
-  return new Promise((done) => child.on("exit", done));
+  return dir;
 }
 
 test.beforeAll(async () => {
-  [one, two, plain, userData] = ["one", "two", "plain", "data"].map((n) => mkdtempSync(join(tmpdir(), `moire-e2e-${n}-`)));
-  makeRepo(one);
-  makeRepo(two);
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, one], env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_REPO: "" } });
-  await expect((await app.firstWindow()).locator(".repo")).toContainText(basename(one));
+  one = makeRepo();
+  two = makeRepo();
+  plain = tmp("plain");
+  ({ app, page } = await launch(one));
+  await expect(page.locator(".repo")).toContainText(basename(one));
 });
 
-test.afterAll(async () => {
-  await app?.close();
-  for (const dir of [one, two, plain, userData]) rmSync(dir, { recursive: true, force: true });
+test("the window is titled after the repo", async () => {
+  await expect(page).toHaveTitle(`${basename(one)} - Moire`);
 });
 
 test("a second launch opens its repo in a new window of the running app", async () => {
@@ -45,19 +36,54 @@ test("a second launch opens its repo in a new window of the running app", async 
 });
 
 test("launching an open repo again reuses its window", async () => {
+  await app.evaluate(({ BrowserWindow }) => {
+    const seen = globalThis as { focused?: number };
+    seen.focused = 0;
+    for (const win of BrowserWindow.getAllWindows()) {
+      const focus = win.focus.bind(win);
+      win.focus = () => {
+        seen.focused!++;
+        focus();
+      };
+    }
+  });
   expect(await launchAgain(one)).toBe(0);
-  await new Promise((r) => setTimeout(r, 500));
+  await expect.poll(() => app.evaluate(() => (globalThis as { focused?: number }).focused)).toBe(1);
   expect(app.windows()).toHaveLength(2);
 });
 
-test("a path that isn't a repo says so instead of opening another one", async () => {
+test("a path that isn't a repo opens as a folder instead of opening another repo", async () => {
   const opened = app.waitForEvent("window");
   expect(await launchAgain(plain)).toBe(0);
-  await expect((await opened).locator(".empty-state")).toContainText(`${plain} isn't a git repository`);
+  const win = await opened;
+  await expect(win.locator(".repo")).toContainText(basename(plain));
+  await expect(win.locator(".empty-state")).toContainText(`${basename(plain)} isn't a git repository.`);
 });
 
 test("a launch without a repo, like a panel's Open New Window, opens a window with the picker", async () => {
   const opened = app.waitForEvent("window");
   expect(await launchAgain()).toBe(0);
   await expect((await opened).getByRole("heading", { name: "Open a repository." })).toBeVisible();
+});
+
+test("the open file and the sidebar width come back after a restart", async () => {
+  const repo = makeRepo();
+  const data = tmp("data");
+  writeFileSync(join(repo, "b.txt"), "b\n");
+  ({ app, page } = await launch(repo, { data }));
+  await page.locator(".file", { hasText: "b.txt" }).click();
+  await expect(page.locator(".file.is-active .name")).toHaveText("b.txt");
+  const before = (await page.locator(".sidebar").boundingBox())!.width;
+  const edge = (await page.locator(".side-resize").boundingBox())!;
+  await page.mouse.move(edge.x + edge.width / 2, edge.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(edge.x + edge.width / 2 + 100, edge.y + 200, { steps: 4 });
+  await page.mouse.up();
+  const width = (await page.locator(".sidebar").boundingBox())!.width;
+  expect(width).toBeGreaterThan(before);
+
+  await app.close();
+  ({ app, page } = await launch(repo, { data }));
+  await expect(page.locator(".file.is-active .name")).toHaveText("b.txt");
+  expect((await page.locator(".sidebar").boundingBox())!.width).toBe(width);
 });

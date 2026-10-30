@@ -1,45 +1,25 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { expect, type Page, test } from "@playwright/test";
+import { harness } from "./harness";
 
+const { git, initRepo, launch } = harness();
 let repo: string;
-let userData: string;
-let app: ElectronApplication;
 let page: Page;
-const errors: string[] = [];
 
-const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args]);
 const body = Array.from({ length: 300 }, (_, i) => `export const v${i} = ${i};`);
 const write = (lines: string[]) => writeFileSync(join(repo, "a.ts"), lines.join("\n") + "\n");
 
 test.beforeAll(async () => {
-  repo = mkdtempSync(join(tmpdir(), "moire-e2e-repo-"));
-  userData = mkdtempSync(join(tmpdir(), "moire-e2e-data-"));
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "e2e@example.com");
-  git("config", "user.name", "e2e");
+  repo = initRepo();
   write(body);
   writeFileSync(join(repo, "b.ts"), "export const b = 1;\n");
   git("add", "-A");
   git("commit", "-qm", "init");
   write(body.map((l, i) => (i === 150 ? l.replace("= 150", "= 1500") : l)));
 
-  app = await electron.launch({ args: [resolve("."), `--user-data-dir=${userData}`, repo], env: { ...process.env, MOIRE_HIDDEN: "1" } });
-  page = await app.firstWindow();
-  page.on("pageerror", (e) => errors.push(e.message));
+  ({ page } = await launch(repo));
   await expect(page.locator(".file")).toHaveCount(1);
-});
-
-test.afterAll(async () => {
-  await app?.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(userData, { recursive: true, force: true });
-});
-
-test.afterEach(() => {
-  expect(errors).toEqual([]);
 });
 
 const topLine = () =>
@@ -108,4 +88,24 @@ test("a view visited earlier never shows its file list from before an outside ch
   await page.waitForTimeout(300);
   expect(await page.evaluate(() => (window as unknown as { stale: number }).stale)).toBe(0);
   await page.keyboard.press("1");
+});
+
+test("a selection stays put while lines change elsewhere, and clears when its own lines change", async () => {
+  write(body.map((l, i) => (i === 30 ? l.replace("= 30", "= 3000") : l)));
+  await page.locator(".file", { hasText: "a.ts" }).click();
+  await expect(page.locator(".cell.b", { hasText: "3000" })).toBeVisible();
+  const bLine = (n: number) => page.locator(".ln.b[data-line]", { hasText: new RegExp(`^${n}$`) });
+  await bLine(30).click();
+  await bLine(31).click({ modifiers: ["Shift"] });
+  const picked = page.locator(".cell.b.sel");
+  await expect(picked).toHaveText(["export const v29 = 29;", "export const v30 = 3000;"]);
+
+  write(["// one", "// two", ...body.map((l, i) => (i === 30 ? l.replace("= 30", "= 3000") : l))]);
+  await expect(page.locator(".hunk-head")).toHaveCount(2);
+  await expect(picked).toHaveText(["export const v29 = 29;", "export const v30 = 3000;"]);
+  await expect(page.locator(".ln.b.sel")).toHaveText(["32", "33"]);
+
+  write(["// one", "// two", ...body.map((l, i) => (i === 30 ? l.replace("= 30", "= 30000") : l))]);
+  await expect(page.locator(".cell.b", { hasText: "30000" })).toBeVisible();
+  await expect(picked).toHaveCount(0);
 });

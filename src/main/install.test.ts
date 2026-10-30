@@ -1,10 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -20,8 +19,10 @@ import {
   whyManual,
   withAsarHeader,
   withVersion,
+  macShim,
+  refreshMacShim,
 } from "./install";
-import { dirs } from "./test-repo";
+import { tempDir } from "./test-repo";
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 
@@ -159,8 +160,7 @@ describe("pickAssets", () => {
 
 describe("updateNpx on Linux", () => {
   function install(runtime: string | null = "rt-1") {
-    const dir = mkdtempSync(join(tmpdir(), "moire-install-"));
-    dirs.push(dir);
+    const dir = tempDir("moire-install-");
     const root = join(dir, "moire");
     for (const v of ["0.0.9", "0.1.0"]) {
       mkdirSync(join(root, v, "resources"), { recursive: true });
@@ -174,8 +174,7 @@ describe("updateNpx on Linux", () => {
   }
 
   function fullBuild(asar: string) {
-    const dir = mkdtempSync(join(tmpdir(), "moire-build-"));
-    dirs.push(dir);
+    const dir = tempDir("moire-build-");
     mkdirSync(join(dir, "moire-0.2.0", "resources"), { recursive: true });
     writeFileSync(join(dir, "moire-0.2.0", "moire"), "binary 0.2.0");
     writeFileSync(join(dir, "moire-0.2.0", "resources", "app.asar"), asar);
@@ -256,12 +255,13 @@ describe("updateNpx on Linux", () => {
 
 describe("updateNpx on macOS", () => {
   const path = process.env.PATH;
+  let signed: string;
 
   beforeAll(() => {
-    const bin = mkdtempSync(join(tmpdir(), "moire-bin-"));
-    dirs.push(bin);
+    const bin = tempDir("moire-bin-");
+    signed = join(bin, "signed");
     writeFileSync(join(bin, "ditto"), '#!/bin/sh\nif [ "$1" = -x ]; then exec unzip -q "$3" -d "$4"; fi\nexec cp -R "$1" "$2"\n');
-    writeFileSync(join(bin, "codesign"), "#!/bin/sh\n");
+    writeFileSync(join(bin, "codesign"), `#!/bin/sh\necho "$@" >> "${signed}"\n`);
     chmodSync(join(bin, "ditto"), 0o755);
     chmodSync(join(bin, "codesign"), 0o755);
     process.env.PATH = `${bin}:${path}`;
@@ -278,16 +278,14 @@ describe("updateNpx on macOS", () => {
   }
 
   function install(header?: string) {
-    const dir = mkdtempSync(join(tmpdir(), "moire-install-"));
-    dirs.push(dir);
+    const dir = tempDir("moire-install-");
     const root = join(dir, "Applications", "moire.app");
     bundle(root, "0.1.0", header);
     return root;
   }
 
   function release(manifest: object): Release {
-    const dir = mkdtempSync(join(tmpdir(), "moire-build-"));
-    dirs.push(dir);
+    const dir = tempDir("moire-build-");
     bundle(join(dir, "moire.app"), "0.2.0", sha("full header"));
     writeFileSync(join(dir, "moire.app", "Contents", "Resources", "app.asar"), "full asar 0.2.0");
     execFileSync("zip", ["-qr", "full.zip", "moire.app"], { cwd: dir });
@@ -303,6 +301,7 @@ describe("updateNpx on macOS", () => {
 
   async function update(root: string, r: Release) {
     const failures: string[] = [];
+    rmSync(signed, { force: true });
     const moveIn = await updateNpx({
       release: r,
       platform: "darwin",
@@ -312,15 +311,21 @@ describe("updateNpx on macOS", () => {
       fetch,
       onSmallFailed: (e) => failures.push(e.message),
     });
-    moveIn!();
-    return failures;
+    expect(readFileSync(signed, "utf8")).toMatch(/^--force --deep --sign - \S+\/moire\.app\n$/);
+    return { failures, moveIn: moveIn! };
   }
+
+  const updated = async (root: string, r: Release) => {
+    const { failures, moveIn } = await update(root, r);
+    moveIn();
+    return failures;
+  };
 
   const read = (root: string, ...path: string[]) => readFileSync(join(root, "Contents", ...path), "utf8");
 
   it("gives the copied bundle's Info.plist the new version and asar header hash", async () => {
     const root = install(sha("old header"));
-    expect(await update(root, release({ headerSha256: sha("new header") }))).toEqual([]);
+    expect(await updated(root, release({ headerSha256: sha("new header") }))).toEqual([]);
     expect(read(root, "Resources", "app.asar")).toBe("asar 0.2.0");
     expect(read(root, "Info.plist")).toBe(infoPlist("0.2.0", sha("new header")));
     expect(installedVersion("darwin", root)).toBe("0.2.0");
@@ -328,15 +333,66 @@ describe("updateNpx on macOS", () => {
 
   it("leaves Info.plist without an asar header hash when the install had none", async () => {
     const root = install();
-    expect(await update(root, release({ headerSha256: sha("new header") }))).toEqual([]);
+    expect(await updated(root, release({ headerSha256: sha("new header") }))).toEqual([]);
     expect(read(root, "Resources", "app.asar")).toBe("asar 0.2.0");
     expect(read(root, "Info.plist")).toBe(infoPlist("0.2.0"));
   });
 
   it("downloads the full build when the manifest has no asar header hash", async () => {
     const root = install(sha("old header"));
-    expect(await update(root, release({}))).toEqual([]);
+    expect(await updated(root, release({}))).toEqual([]);
     expect(read(root, "Resources", "app.asar")).toBe("full asar 0.2.0");
     expect(read(root, "Info.plist")).toBe(infoPlist("0.2.0", sha("full header")));
+  });
+
+  it("puts the old app back when the new one can't move in", async () => {
+    const root = install();
+    const { moveIn } = await update(root, release({ headerSha256: sha("new header") }));
+    const parent = dirname(root);
+    rmSync(
+      join(
+        parent,
+        readdirSync(parent).find((n) => n.startsWith(".moire-tmp-"))!,
+      ),
+      { recursive: true },
+    );
+    expect(moveIn).toThrow("ENOENT");
+    expect(installedVersion("darwin", root)).toBe("0.1.0");
+    expect(existsSync(join(parent, ".moire-previous.app"))).toBe(false);
+  });
+});
+
+describe("refreshMacShim", () => {
+  it("writes the same script as the launcher", async () => {
+    const launcher = new URL("../../launcher/install.mjs", import.meta.url).href;
+    const { macShim: launcherShim } = (await import(/* @vite-ignore */ launcher)) as { macShim: typeof macShim };
+    expect(macShim("/A/moire.app")).toBe(launcherShim("/A/moire.app"));
+    const odd = '/a "$b`c\\d/moire.app';
+    expect(macShim(odd)).toContain(`exec open -na "/a \\"\\$b\\\`c\\\\d/moire.app" --args`);
+    expect(macShim(odd)).toBe(launcherShim(odd));
+  });
+
+  const home = () => {
+    const dir = tempDir("moire-home-");
+    mkdirSync(join(dir, ".local", "bin"), { recursive: true });
+    return dir;
+  };
+  const app = "/Users/u/Applications/moire.app";
+
+  it("rewrites an older copy of our script", () => {
+    const dir = home();
+    const bin = join(dir, ".local", "bin", "moire");
+    writeFileSync(bin, `#!/bin/sh\nexec open -na "${app}" --args "$PWD"\n`);
+    refreshMacShim(app, dir);
+    expect(readFileSync(bin, "utf8")).toBe(macShim(app));
+  });
+
+  it("leaves someone else's moire command alone, and creates nothing", () => {
+    const dir = home();
+    refreshMacShim(app, dir);
+    expect(existsSync(join(dir, ".local", "bin", "moire"))).toBe(false);
+    writeFileSync(join(dir, ".local", "bin", "moire"), "#!/bin/sh\necho mine\n");
+    refreshMacShim(app, dir);
+    expect(readFileSync(join(dir, ".local", "bin", "moire"), "utf8")).toBe("#!/bin/sh\necho mine\n");
   });
 });

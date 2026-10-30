@@ -1,26 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { FileDiff, Hunk } from "../../../shared/types";
+import type { FileDiff } from "../../../shared/types";
+import { chapterFile, chapterHunks, chapterText } from "../../../main/test-repo";
 import { lineKeys, noteClass, noteSpans, rowOfLine, stopsOf } from "./notes";
 import { buildRows } from "./rows";
-
-const text = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
-
-const hunks: Hunk[] = [
-  {
-    oldStart: 10,
-    oldLines: 1,
-    newStart: 10,
-    newLines: 1,
-    header: "",
-    lines: [
-      { kind: "del", text: "line 10", oldNo: 10 },
-      { kind: "add", text: "line ten", newNo: 10 },
-    ],
-  },
-  { oldStart: 20, oldLines: 1, newStart: 19, newLines: 0, header: "", lines: [{ kind: "del", text: "line 20", oldNo: 20 }] },
-  { oldStart: 25, oldLines: 0, newStart: 25, newLines: 1, header: "", lines: [{ kind: "add", text: "extra", newNo: 25 }] },
-];
-const file: FileDiff = { path: "a.ts", status: "modified", binary: false, additions: 2, deletions: 2, hunks };
 
 describe("stopsOf", () => {
   it("lists every range of every chapter in order", () => {
@@ -39,8 +21,8 @@ describe("stopsOf", () => {
   });
 });
 describe("rows for a range", () => {
-  const one: FileDiff = { ...file, hunks: [hunks[0]] };
-  const contents = { a: text.join("\n"), b: text.map((l, i) => (i === 9 ? "line ten" : l)).join("\n"), hidden: false };
+  const one: FileDiff = { ...chapterFile, hunks: [chapterHunks[0]] };
+  const contents = { a: chapterText.join("\n"), b: chapterText.with(9, "line ten").join("\n"), hidden: false };
 
   it("finds changed lines and the fold hiding context lines", () => {
     for (const layout of ["split", "unified"] as const) {

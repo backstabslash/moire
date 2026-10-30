@@ -1,12 +1,14 @@
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { app } from "electron";
+import type { SavedWindow } from "./bounds";
 
 interface State {
   lastRepo?: string;
   recent?: string[];
   editor?: string;
   zoom?: number;
+  window?: SavedWindow;
 }
 
 const file = () => join(app.getPath("userData"), "state.json");

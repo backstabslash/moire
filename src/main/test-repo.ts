@@ -3,13 +3,19 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll } from "vitest";
+import type { DiffLine, FileDiff, Hunk } from "../shared/types";
 
 export const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
+export function tempDir(prefix: string) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  dirs.push(dir);
+  return dir;
+}
+
 export function makeRepo() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "moire-test-")));
-  dirs.push(root);
+  const root = tempDir("moire-test-");
   const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
   git("init", "-q", "-b", "main");
   git("config", "user.name", "Test");
@@ -26,3 +32,30 @@ export function makeRepo() {
   };
   return { root, git, write, commit };
 }
+
+export type Repo = ReturnType<typeof makeRepo>;
+export type Files = Record<string, string | Buffer>;
+
+export function seed(committed: Files, edits: Files = {}) {
+  const r = makeRepo();
+  for (const [path, content] of Object.entries(committed)) r.write(path, content);
+  const head = r.commit("init");
+  for (const [path, content] of Object.entries(edits)) r.write(path, content);
+  return { ...r, head };
+}
+
+// Body lines read as in a diff: a leading "-" is removed, "+" is added, anything else is context.
+export function diffHunk(oldStart: number, body: string[], newStart = oldStart): Hunk {
+  let [oldNo, newNo] = [oldStart, newStart];
+  const lines = body.map((line): DiffLine => {
+    const text = line.slice(1);
+    if (line[0] === "-") return { kind: "del", text, oldNo: oldNo++ };
+    if (line[0] === "+") return { kind: "add", text, newNo: newNo++ };
+    return { kind: "ctx", text, oldNo: oldNo++, newNo: newNo++ };
+  });
+  return { oldStart, oldLines: oldNo - oldStart, newStart, newLines: newNo - newStart, header: "", lines };
+}
+
+export const chapterText = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+export const chapterHunks = [diffHunk(10, ["-line 10", "+line ten"]), diffHunk(20, ["-line 20"], 19), diffHunk(25, ["+extra"])];
+export const chapterFile: FileDiff = { path: "a.ts", status: "modified", binary: false, additions: 2, deletions: 2, hunks: chapterHunks };

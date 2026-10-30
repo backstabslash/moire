@@ -28,6 +28,7 @@ export interface RepoInfo {
   branch: string | null;
   head: string | null;
   state?: RepoState;
+  folder?: boolean;
 }
 
 export type FileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted" | "unchanged";
@@ -82,6 +83,7 @@ export interface DiffResult {
 export interface FileTree {
   files: string[];
   ignored: string[];
+  unlisted?: string[];
 }
 
 export interface FileContents {
@@ -96,12 +98,31 @@ export interface BlobSize {
   lfsMissing?: boolean;
 }
 
+export interface EditorChoice {
+  name: string;
+  template: string;
+  terminal: boolean;
+}
+
+export interface EditorChoices {
+  installed: EditorChoice[];
+  fromEnv: boolean;
+}
+
+export interface CommitRef {
+  name: string;
+  kind: "current" | "branch" | "remote" | "tag";
+}
+
 export interface CommitInfo {
   sha: string;
   short: string;
   subject: string;
   author: string;
+  email: string;
+  coauthors: string[];
   date: string;
+  refs?: CommitRef[];
 }
 
 export interface CommitDetail extends CommitInfo {

@@ -1,27 +1,36 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { makeRepo } from "./test-repo";
+import { repoInfo } from "./git";
+import { seed, tempDir } from "./test-repo";
 import { RepoWatcher } from "./watch";
 
 let watcher: RepoWatcher | null = null;
 afterEach(() => watcher?.close());
 
-async function watching() {
-  const r = makeRepo();
-  r.write(".gitignore", "build/\n*.log\n");
-  r.write("src/a.ts", "a\n");
-  r.write("build/out.js", "x\n");
-  r.commit("init");
+async function watch(root: string) {
   let changes = 0;
-  watcher = new RepoWatcher(r.root, () => changes++);
+  watcher = new RepoWatcher(root, () => changes++);
   await watcher.start();
   const settle = async () => {
     await sleep(400);
     return changes;
   };
-  return { ...r, settle };
+  return { settle, changes: () => changes };
+}
+
+async function watching() {
+  const r = seed({ ".gitignore": "build/\n*.log\n", "src/a.ts": "a\n", "build/out.js": "x\n" });
+  return { ...r, ...(await watch(r.root)) };
+}
+
+async function watchingFolder(prepare: (root: string) => void) {
+  const root = tempDir("moire-watch-folder-");
+  prepare(root);
+  await repoInfo(root);
+  return { root, ...(await watch(root)) };
 }
 
 describe("RepoWatcher", () => {
@@ -30,6 +39,15 @@ describe("RepoWatcher", () => {
     for (let i = 0; i < 5; i++) r.write("src/a.ts", `a${i}\n`);
     r.write("new.ts", "fresh\n");
     expect(await r.settle()).toBe(1);
+  });
+
+  it("reports during a burst that never pauses, without waiting for it to end", async () => {
+    const r = await watching();
+    for (let i = 0; i < 40 && !r.changes(); i++) {
+      r.write("src/a.ts", `a${i}\n`);
+      await sleep(80);
+    }
+    expect(r.changes()).toBe(1);
   });
 
   it("ignores gitignored files and sees index changes", async () => {
@@ -43,21 +61,12 @@ describe("RepoWatcher", () => {
     expect(await r.settle()).toBe(2);
   });
 
-  it("starts watching directories created after it started", async () => {
+  it.each(["src/deep", "a/b/c"])("sees files written deep inside a new directory tree, like %s", async (dir) => {
     const r = await watching();
-    mkdirSync(join(r.root, "src", "deep"));
-    writeFileSync(join(r.root, "src", "deep", "x.ts"), "x\n");
+    mkdirSync(join(r.root, dir), { recursive: true });
+    writeFileSync(join(r.root, dir, "x.ts"), "x\n");
     expect(await r.settle()).toBe(1);
-    writeFileSync(join(r.root, "src", "deep", "x.ts"), "changed\n");
-    expect(await r.settle()).toBe(2);
-  });
-
-  it("sees files written deep inside a new directory tree", async () => {
-    const r = await watching();
-    mkdirSync(join(r.root, "a", "b", "c"), { recursive: true });
-    writeFileSync(join(r.root, "a", "b", "c", "x.ts"), "x\n");
-    expect(await r.settle()).toBe(1);
-    writeFileSync(join(r.root, "a", "b", "c", "x.ts"), "changed\n");
+    writeFileSync(join(r.root, dir, "x.ts"), "changed\n");
     expect(await r.settle()).toBe(2);
   });
 
@@ -75,12 +84,17 @@ describe("RepoWatcher", () => {
 
   it("doesn't watch new directories inside ignored ones", async () => {
     const r = await watching();
-    mkdirSync(join(r.root, "build", "deep", "er"), { recursive: true });
-    writeFileSync(join(r.root, "build", "deep", "er", "x.js"), "x\n");
-    expect(await r.settle()).toBe(0);
-    writeFileSync(join(r.root, "build", "deep", "er", "x.js"), "y\n");
-    expect(await r.settle()).toBe(0);
+    const count = watcher!["watchers"].size;
+    for (const dir of ["build/deep/er", "new.log/deep"]) {
+      mkdirSync(join(r.root, dir), { recursive: true });
+      writeFileSync(join(r.root, dir, "x.js"), "x\n");
+      expect(await r.settle()).toBe(0);
+      writeFileSync(join(r.root, dir, "x.js"), "y\n");
+      expect(await r.settle()).toBe(0);
+    }
+    expect(watcher!["watchers"].size).toBe(count);
   });
+
   it("sees files come and go in ignored folders open in the tree, but not their edits", async () => {
     const r = await watching();
     watcher!.setOpen(["build/"]);
@@ -98,10 +112,23 @@ describe("RepoWatcher", () => {
   it("sees fetches and updates to remote branches", async () => {
     const r = await watching();
     mkdirSync(join(r.root, ".git", "refs", "remotes", "origin"), { recursive: true });
-    writeFileSync(join(r.root, ".git", "FETCH_HEAD"), "");
     expect(await r.settle()).toBe(1);
-    writeFileSync(join(r.root, ".git", "refs", "remotes", "origin", "main"), r.git("rev-parse", "HEAD") + "\n");
+    writeFileSync(join(r.root, ".git", "FETCH_HEAD"), "");
     expect(await r.settle()).toBe(2);
+    writeFileSync(join(r.root, ".git", "refs", "remotes", "origin", "main"), r.git("rev-parse", "HEAD") + "\n");
+    expect(await r.settle()).toBe(3);
+  });
+
+  it("sees git init in a folder that wasn't a repository", async () => {
+    const f = await watchingFolder((root) => writeFileSync(join(root, ".gitignore"), ".*\n!.gitignore\n"));
+    execFileSync("git", ["init", "-q", f.root]);
+    expect(await f.settle()).toBe(1);
+  });
+
+  it("sees a file written into a folder's empty directory", async () => {
+    const f = await watchingFolder((root) => mkdirSync(join(root, "logs")));
+    writeFileSync(join(f.root, "logs", "new.txt"), "x\n");
+    expect(await f.settle()).toBe(1);
   });
 
   it("sees agent notes written into the git folder", async () => {

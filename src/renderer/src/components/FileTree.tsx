@@ -2,7 +2,8 @@ import { type CSSProperties, type Dispatch, type MouseEvent, type ReactNode, typ
 import type { FileDiff, FileStatus, FileTree as Listing } from "../../../shared/types";
 import { modeNote } from "../model/modes";
 import { buildTree, type Dir } from "../model/tree";
-import { Registered } from "./Mark";
+import { LineGauge } from "./DiffStat";
+import { FileGlyph, FolderGlyph } from "./FileGlyph";
 
 const KIND: Record<FileStatus, [string, string]> = {
   added: ["A", "Added"],
@@ -26,12 +27,7 @@ export interface ListState {
   onMenu(path: string, event: MouseEvent): void;
 }
 
-export function fileRow(
-  list: ListState,
-  path: string,
-  f: FileDiff | undefined,
-  opts: { depth?: number; ignored?: boolean; hint?: string; suffix?: string } = {},
-) {
+export function fileRow(list: ListState, path: string, f: FileDiff | undefined, opts: { depth?: number; ignored?: boolean; suffix?: string } = {}) {
   const name = path.split("/").pop()!;
   const isFresh = !!f && !!list.fresh?.paths.has(path);
   const isActive = path === list.active;
@@ -74,7 +70,8 @@ export function fileRow(
       onClick={() => list.onSelect(path)}
       onContextMenu={(e) => list.onMenu(path, e)}
     >
-      <span className="name" data-hint={opts.hint}>
+      {!opts.suffix && <FileGlyph path={path} diff={f} />}
+      <span className="name">
         {opts.suffix ? (
           <>
             <span className="tie" />
@@ -85,24 +82,18 @@ export function fileRow(
           name
         )}
       </span>
-      <span className="kind">{f ? KIND[f.status][0] : ""}</span>
-      <span className="nums">
-        {list.hitCounts?.has(path) && (
-          <span className="hit-count" title="Search hits">
-            {list.hitCounts.get(path)}
-          </span>
-        )}
-        {mode && <span className="mode-tag">{mode.tag}</span>}
-        {f?.binary ? (
-          <span>bin</span>
-        ) : (
-          <>
-            {!!f?.additions && <span className="s-add">+{f.additions}</span>}
-            {!!f?.deletions && <span className="s-del">−{f.deletions}</span>}
-          </>
-        )}
-      </span>
-      {f?.staged === "partial" && <Registered state="partial" label={MARKS.partial} />}
+      {(list.hitCounts?.has(path) || mode) && (
+        <span className="tags">
+          {list.hitCounts?.has(path) && (
+            <span className="hit-count" data-tip="Search hits">
+              {list.hitCounts.get(path)}
+            </span>
+          )}
+          {mode && <span className="mode-tag">{mode.tag}</span>}
+        </span>
+      )}
+      <span className={f ? `kind kind-${f.status}` : "kind"}>{f ? KIND[f.status][0] : ""}</span>
+      <span className="nums">{f?.binary ? <span className="bin">bin</span> : f && <LineGauge additions={f.additions} deletions={f.deletions} />}</span>
     </button>
   );
 }
@@ -131,7 +122,7 @@ export function FileTree({ listing, changed, list, folders, onFolders }: Props) 
     for (const d of singleChildRun) next[isOpen ? "delete" : "add"](d.path);
     onFolders((cur) => ({ ...cur, open: next }));
     const dir = singleChildRun[singleChildRun.length - 1];
-    if (isOpen || !dir.ignored) return;
+    if (isOpen || !dir.lazy) return;
     const store = (entries: string[] | string) =>
       onFolders((cur) => (cur.root === root ? { ...cur, opened: new Map(cur.opened).set(dir.path, entries) } : cur));
     window.moire.listDir(root, dir.path).then(store, () => store("Can't read this folder."));
@@ -141,7 +132,7 @@ export function FileTree({ listing, changed, list, folders, onFolders }: Props) 
   const walk = (dir: Dir, depth: number) => {
     for (const top of dir.dirs) {
       const singleChildRun = [top];
-      for (let c = top; c.dirs.length === 1 && !c.files.length && !c.ignored && !c.dirs[0].ignored;) singleChildRun.push((c = c.dirs[0]));
+      for (let c = top; c.dirs.length === 1 && !c.files.length && !c.lazy && !c.dirs[0].lazy;) singleChildRun.push((c = c.dirs[0]));
       const d = singleChildRun[singleChildRun.length - 1];
       const isOpen = singleChildRun.every((c) => open.has(c.path));
       rows.push(
@@ -155,6 +146,10 @@ export function FileTree({ listing, changed, list, folders, onFolders }: Props) 
           onClick={() => toggle(singleChildRun, isOpen)}
           onContextMenu={(e) => list.onMenu(d.path, e)}
         >
+          <svg className="tree-chevron" viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M3.5 1.8 6.7 5 3.5 8.2" />
+          </svg>
+          <FolderGlyph open={isOpen} />
           <span className="name">
             <bdi>
               {singleChildRun.slice(0, -1).map((c) => (
@@ -164,11 +159,10 @@ export function FileTree({ listing, changed, list, folders, onFolders }: Props) 
                 </span>
               ))}
               {d.name}
-              <i>/</i>
             </bdi>
           </span>
           {d.changes > 0 && !isOpen && (
-            <span className="tree-count" title={`${d.changes} changed ${d.changes === 1 ? "file" : "files"}`}>
+            <span className="tree-count" data-tip={`${d.changes} changed ${d.changes === 1 ? "file" : "files"}`}>
               {d.changes}
             </span>
           )}

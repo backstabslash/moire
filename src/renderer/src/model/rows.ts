@@ -43,6 +43,15 @@ const WHITESPACE_SIGNIFICANT = new Set([
   "fortran-fixed-form",
 ]);
 
+export type LineRow = Extract<Row, { t: "split" | "uni" }>;
+
+export interface FoldSteps {
+  down?: string;
+  up?: string;
+}
+
+export const FOLD_STEP = 20;
+
 export interface Side {
   no: number;
   text: string;
@@ -52,12 +61,29 @@ export interface Side {
 }
 
 export type Row =
-  | { t: "hunk"; key: string; hunk: number; label: string; ctx: string; adds: number; dels: number; staged: "full" | "partial" | null; folded?: Folded }
-  | { t: "fold"; key: string; count: number; expandable: boolean; newFrom: number; stagedEarlier?: number }
+  | {
+      t: "hunk";
+      key: string;
+      hunk: number;
+      label: string;
+      ctx: string;
+      ctxLine?: ContextLine;
+      adds: number;
+      dels: number;
+      staged: "full" | "partial" | null;
+      folded?: Folded;
+    }
+  | { t: "fold"; key: string; count: number; expandable: boolean; newFrom: number; stagedEarlier?: number; steps?: FoldSteps }
   | ({ t: "split"; key: string; hunk: number; kind: "ctx" | "chg"; a?: Side; b?: Side; faded?: boolean } & Done)
   | ({ t: "uni"; key: string; hunk: number; kind: "ctx" | "add" | "del"; a?: number; b?: number; line: Side; faded?: boolean } & Done)
   | { t: "note"; key: string; text: string; expand?: string }
   | { t: "stub"; key: string; treeLine: number; count: number; latest: boolean };
+
+export interface ContextLine {
+  plate: 0 | 1;
+  no: number;
+  text: string;
+}
 
 interface Done {
   stagedEarlier?: boolean;
@@ -127,14 +153,25 @@ export function buildRows(file: FileDiff, contents: FileContents | null, opts: B
     if (count <= 0) return;
     const expandable = bLines !== null || aLines !== null;
     const single = count === 1 && !wsFolded[h - 1] && !wsFolded[h];
-    if (expandable && (opts.scope === "full" || opts.expanded.has(key) || single)) {
-      for (let i = 0; i < count; i++) {
+    const context = (from: number, to: number) => {
+      for (let i = from; i < to; i++) {
         emitContext(rows, opts.layout, `${key}:${i}`, -1, oldFrom + i, newFrom + i, gapText(oldFrom + i, newFrom + i), gapKey(newFrom + i));
       }
-    } else {
-      const stagedEarlier = stagedIn(file.alreadyStaged?.stagedRanges ?? [], oldFrom, count);
-      rows.push({ t: "fold", key, count, expandable, newFrom, ...(stagedEarlier ? { stagedEarlier } : {}) });
-    }
+    };
+    const down = revealedSteps(opts.expanded, key, "down");
+    const up = revealedSteps(opts.expanded, key, "up");
+    const head = expandable && h > 0 ? down * FOLD_STEP : 0;
+    const tail = expandable && h < file.hunks.length ? up * FOLD_STEP : 0;
+    if (expandable && (opts.scope === "full" || opts.expanded.has(key) || single || head + tail >= count)) return context(0, count);
+    context(0, head);
+    const left = count - head - tail;
+    const stagedEarlier = stagedIn(file.alreadyStaged?.stagedRanges ?? [], oldFrom + head, left);
+    const steps: FoldSteps | undefined =
+      expandable && left > FOLD_STEP
+        ? { ...(h > 0 && { down: `${key}:down${down + 1}` }), ...(h < file.hunks.length && { up: `${key}:up${up + 1}` }) }
+        : undefined;
+    rows.push({ t: "fold", key, count: left, expandable, newFrom: newFrom + head, ...(stagedEarlier ? { stagedEarlier } : {}), ...(steps && { steps }) });
+    context(count - tail, count);
   };
 
   file.hunks.forEach((hunk, h) => {
@@ -145,7 +182,7 @@ export function buildRows(file: FileDiff, contents: FileContents | null, opts: B
     if (wsFolded[h]) {
       rows.push({ ...hunkRow(hunk, h), folded: { keys: [key], count: 0, gaps: [] } });
     } else {
-      rows.push(hunkRow(hunk, h));
+      rows.push({ ...hunkRow(hunk, h), ctxLine: contextLine(hunk, aLines, bLines) });
       emitHunkLines(rows, h === opts.plates ? "split" : opts.layout, hunk, h);
     }
     oldNext = oldFirst + hunk.oldLines;
@@ -159,6 +196,37 @@ export function buildRows(file: FileDiff, contents: FileContents | null, opts: B
   const folds = out.flatMap((r) => (r.t === "hunk" && r.folded ? [r.folded] : []));
   if (folds.length > 1) folds[0].allWhitespaceFolds = folds.flatMap((f) => f.keys);
   return out;
+}
+
+// Git cuts the hunk header at 80 bytes, and only the line it came from has highlighting.
+function contextLine(hunk: Hunk, aLines: string[] | null, bLines: string[] | null): ContextLine | undefined {
+  const header = hunk.header.trim();
+  if (!header) return undefined;
+  const find = (plate: 0 | 1, lines: string[] | null, start: number) => {
+    for (let i = Math.min(start, lines?.length ?? 0) - 2; lines && i >= 0; i--) {
+      if (lines[i].trimStart().startsWith(header)) return { plate, no: i + 1, text: lines[i] };
+    }
+  };
+  return find(0, aLines, hunk.oldStart) ?? find(1, bLines, hunk.newStart);
+}
+
+export interface HunkSpan {
+  head: number;
+  end: number;
+}
+
+export function hunkSpans(rows: Row[]): HunkSpan[] {
+  const spans: HunkSpan[] = [];
+  let hunk: number | null = null;
+  rows.forEach((row, i) => {
+    if (row.t === "hunk") {
+      hunk = row.hunk;
+      spans.push({ head: i, end: i + 1 });
+    } else if ("hunk" in row && row.hunk === hunk) {
+      spans[spans.length - 1].end = i + 1;
+    }
+  });
+  return spans.filter((s) => s.end > s.head + 1);
 }
 
 function absorbGaps(rows: Row[]): Row[] {
@@ -182,6 +250,12 @@ function absorbGaps(rows: Row[]): Row[] {
     }
   }
   return out;
+}
+
+function revealedSteps(expanded: ReadonlySet<string>, key: string, way: "down" | "up"): number {
+  let steps = 0;
+  while (expanded.has(`${key}:${way}${steps + 1}`)) steps++;
+  return steps;
 }
 
 function stagedIn(ranges: [number, number][], from: number, count: number): number {
@@ -364,13 +438,14 @@ function emitHunkLines(rows: Row[], layout: Layout, hunk: Hunk, h: number) {
   }
 }
 
+export const hunkChanges = (h: Hunk) => JSON.stringify(h.lines.filter((l) => l.kind !== "ctx").map((l) => [l.kind, l.text]));
+
 export function followHunk(prev: Hunk, hunks: Hunk[]): number {
-  const changes = (h: Hunk) => JSON.stringify(h.lines.filter((l) => l.kind !== "ctx").map((l) => [l.kind, l.text]));
-  const want = changes(prev);
+  const want = hunkChanges(prev);
   let best = 0;
   let score = Infinity;
   hunks.forEach((h, i) => {
-    const s = (changes(h) === want ? 0 : 1e9) + Math.abs(h.oldStart - prev.oldStart);
+    const s = (hunkChanges(h) === want ? 0 : 1e9) + Math.abs(h.oldStart - prev.oldStart);
     if (s < score) [best, score] = [i, s];
   });
   return best;

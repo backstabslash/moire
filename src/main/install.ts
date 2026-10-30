@@ -55,6 +55,28 @@ export function newer(a: string, b: string): boolean {
   return false;
 }
 
+const quote = (path: string) => `"${path.replace(/["`$\\]/g, "\\$&")}"`;
+
+// Self-updates skip the launcher, so the app rewrites this copy of its script.
+export function macShim(app: string): string {
+  return [
+    "#!/bin/sh",
+    'case "$1 $2" in',
+    '  "pr "[0-9]*) dir="$PWD" ;;',
+    '  /*) dir="$1"; shift ;;',
+    '  *) if [ -e "$1" ]; then dir="$PWD/$1"; shift; else dir="$PWD"; fi ;;',
+    "esac",
+    `exec open -na ${quote(app)} --args "$dir" "$@"`,
+    "",
+  ].join("\n");
+}
+
+export function refreshMacShim(app: string, home: string): void {
+  const bin = join(home, ".local", "bin", "moire");
+  const current = existsSync(bin) ? readFileSync(bin, "utf8") : "";
+  if (current.includes(app) && current !== macShim(app)) writeFileSync(bin, macShim(app), { mode: 0o755 });
+}
+
 export function installKind(platform: string, npx: boolean, appImage: boolean, packageType: string | undefined): InstallKind {
   if (npx) return "npx";
   if (appImage) return "appimage";

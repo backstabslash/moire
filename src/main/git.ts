@@ -1,6 +1,6 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { createWriteStream, existsSync } from "node:fs";
+import { createWriteStream, existsSync, mkdtempSync } from "node:fs";
 import { lstat, open, readdir, readFile, readlink, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve as resolvePath } from "node:path";
@@ -10,6 +10,7 @@ import type {
   BlobSize,
   CommitDetail,
   CommitInfo,
+  CommitRef,
   CompareMode,
   DiffResult,
   FileContents,
@@ -24,7 +25,7 @@ import type {
   Worktree,
 } from "../shared/types";
 import { newToOld } from "../shared/chapters";
-import { tildify } from "./launch";
+import { real, tildify } from "./launch";
 import { parseDiff, sortFiles } from "./parse";
 
 const exec = promisify(execFile);
@@ -50,13 +51,48 @@ export function setShellPath(path: Promise<string | null>): void {
   });
 }
 
+const folders = new Set<string>();
+let scratchDir = "";
+let scratch: Promise<void> | null = null;
+
+export const isFolder = (root: string) => folders.has(root);
+
+export function setScratchDir(dir: string): void {
+  scratchDir = dir;
+}
+
 function gitArgs(root: string, args: string[]): string[] {
+  // Folders that aren't repositories borrow an empty one, so ls-files and check-ignore still read their .gitignore files.
+  const borrowed = folders.has(root) ? ["--git-dir", scratchDir, "--work-tree", root] : [];
   // A repo's own config could otherwise make every refresh run a command.
-  return ["-c", "core.quotePath=false", "-c", "core.fsmonitor=false", "--no-pager", "-C", root, ...args];
+  return ["-c", "core.quotePath=false", "-c", "core.fsmonitor=false", "--no-pager", "-C", root, ...borrowed, ...args];
 }
 
 export async function git(root: string, args: string[]): Promise<string> {
   const { stdout } = await exec("git", gitArgs(root, args), { maxBuffer: MAX_BUFFER, env });
+  return stdout;
+}
+
+// Only the refspecs in args move: a PR fetch mustn't shift remote-tracking branches or reach into submodules.
+export async function gitFetch(root: string, args: string[], config: string[] = []): Promise<void> {
+  await shellPath;
+  const fetch = (flags: string[]) =>
+    exec("git", gitArgs(root, [...config, "fetch", "--no-tags", "--no-recurse-submodules", "--refmap=", ...flags, ...args]), {
+      maxBuffer: MAX_BUFFER,
+      // An empty GIT_ASKPASS also stops git falling back to SSH_ASKPASS, a desktop dialog the fetch would wait on.
+      env: { ...env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "" },
+    });
+  // --no-write-fetch-head needs git 2.29; moire runs on 2.26.
+  await fetch(["--no-write-fetch-head"]).catch((e: { stderr?: string }) => {
+    if (!e.stderr?.includes("unknown option")) throw e;
+    return fetch([]);
+  });
+}
+
+export async function gh(root: string, args: string[]): Promise<string> {
+  // Apps started from Finder or `open` have only the system folders on PATH until the login shell answers.
+  await shellPath;
+  const { stdout } = await exec("gh", args, { cwd: root, maxBuffer: MAX_BUFFER, env: { ...env, GH_PROMPT_DISABLED: "1" } });
   return stdout;
 }
 
@@ -117,6 +153,10 @@ function fixedGit(root: string, args: string[]): Promise<string | null> {
   return value;
 }
 
+function forget(root: string): void {
+  for (const key of fixed.keys()) if (key.startsWith(`${root}\0`)) fixed.delete(key);
+}
+
 export function missingGit(e: unknown, platform: NodeJS.Platform): string | null {
   const err = e as { code?: unknown; stderr?: unknown };
   const mac = "git isn't installed. Run xcode-select --install in a terminal, then reopen moire.";
@@ -166,8 +206,22 @@ async function repoError(path: string): Promise<string> {
 }
 
 export async function repoInfo(path: string): Promise<RepoInfo> {
-  const root = await fixedGit(path, ["rev-parse", "--show-toplevel"]);
-  if (!root) throw new Error(await repoError(path));
+  const dir = real(resolvePath(path));
+  const wasFolder = folders.has(dir);
+  let root = wasFolder ? await realToplevel(dir) : await fixedGit(path, ["rev-parse", "--show-toplevel"]);
+  if (root && !wasFolder && !existsSync(join(root, ".git"))) {
+    forget(path);
+    forget(root);
+    root = await fixedGit(path, ["rev-parse", "--show-toplevel"]);
+  }
+  if (!root) {
+    if (wasFolder || (await notARepo(dir))) return openFolder(dir);
+    throw new Error(await repoError(path));
+  }
+  if (wasFolder) {
+    folders.delete(dir);
+    forget(dir);
+  }
   const [branch, head, state] = await Promise.all([
     tryGit(root, ["symbolic-ref", "--short", "-q", "HEAD"]),
     tryGit(root, ["rev-parse", "--short", "-q", "--verify", "HEAD"]),
@@ -176,6 +230,41 @@ export async function repoInfo(path: string): Promise<RepoInfo> {
   const info: RepoInfo = { root, name: basename(root), branch, head };
   if (state) info.state = state;
   return info;
+}
+
+// Plain git, since a known folder's own commands go to the borrowed repository.
+function realToplevel(dir: string): Promise<string | null> {
+  return exec("git", ["-C", dir, "rev-parse", "--show-toplevel"], { env }).then(
+    ({ stdout }) => stdout.trim(),
+    () => null,
+  );
+}
+
+async function notARepo(dir: string): Promise<boolean> {
+  if (
+    !(await stat(dir).then(
+      (st) => st.isDirectory(),
+      () => false,
+    ))
+  )
+    return false;
+  return exec("git", ["-C", dir, "rev-parse", "--show-toplevel"], { env: { ...env, LC_ALL: "C" } }).then(
+    () => false,
+    (e: unknown) => /not a git repository/i.test(gitError(e)),
+  );
+}
+
+const folderInfo = (root: string): RepoInfo => ({ root, name: basename(root), branch: null, head: null, folder: true });
+
+async function openFolder(dir: string): Promise<RepoInfo> {
+  scratchDir ||= join(mkdtempSync(join(tmpdir(), "moire-folder-")), "scratch.git");
+  scratch ??= exec("git", ["init", "-q", "--bare", "--template=", scratchDir], { env }).then(() => {});
+  await scratch.catch((e: unknown) => {
+    scratch = null;
+    throw e;
+  });
+  folders.add(dir);
+  return folderInfo(dir);
 }
 
 const STATES: [string, RepoState][] = [
@@ -244,7 +333,8 @@ export async function upstream(root: string): Promise<Upstream | null> {
 }
 
 async function resolve(root: string, rev: string): Promise<string> {
-  const sha = await tryGit(root, ["rev-parse", "-q", "--verify", "--end-of-options", `${rev}^{commit}`]);
+  // rev-parse only takes --end-of-options from git 2.30, and moire runs on 2.26.
+  const sha = rev.startsWith("-") ? null : await tryGit(root, ["rev-parse", "-q", "--verify", `${rev}^{commit}`]);
   if (!sha) throw new Error(`Unknown revision: ${rev}`);
   return sha;
 }
@@ -271,6 +361,7 @@ async function headSide(root: string): Promise<SideInfo> {
 }
 
 export async function sides(root: string, mode: CompareMode): Promise<{ a: SideInfo; b: SideInfo }> {
+  if (folders.has(root)) return { a: EMPTY, b: WORKTREE };
   switch (mode.kind) {
     case "unstaged":
       return { a: INDEX, b: WORKTREE };
@@ -343,7 +434,7 @@ async function untrackedFile(root: string, path: string, cache: Map<string, Cach
   if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs && hit.ino === st.ino) return { ...hit.file };
   const file = await readUntracked(root, path);
   if (file && st) {
-    if (file.binary) file.blobs = `${st.size}:${st.mtimeMs}`;
+    if (file.binary || file.tooLarge) file.blobs = `${st.size}:${st.mtimeMs}`;
     if (st.isSymbolicLink()) file.newMode = "120000";
     else if (st.mode & 0o111) file.newMode = "100755";
     cache.set(path, { size: st.size, mtimeMs: st.mtimeMs, ino: st.ino, file });
@@ -390,6 +481,11 @@ async function diffCommand(root: string, from: string | null, to: "index" | "wor
 }
 
 export async function diff(root: string, mode: CompareMode, paths: string[] = []): Promise<DiffResult> {
+  if (existsSync(join(root, ".git")) === folders.has(root)) await repoInfo(root);
+  if (folders.has(root)) {
+    const repo = folderInfo(root);
+    return { repo, a: EMPTY, b: WORKTREE, files: [], version: hash(JSON.stringify(repo)) };
+  }
   const [repo, { a, b }, empty] = await Promise.all([repoInfo(root), sides(root, mode), emptyTree(root)]);
   const pathspec = literal(paths);
   const from = mode.kind === "unstaged" ? null : treeish(a, empty);
@@ -562,6 +658,8 @@ async function markNoise(root: string, files: FileDiff[]) {
   for (const f of files) {
     if (f.tooLarge || changedChars(f) <= SIZE_LIMIT) continue;
     f.tooLarge = true;
+    // With no hunks left, this is all that tells a same-size edit apart when staging checks the diff the user saw.
+    f.blobs = hash(JSON.stringify(f.hunks));
     f.hunks = [];
   }
   const out = await gitInput(root, ["check-attr", "-z", "--stdin", "linguist-generated"], files.map((f) => `${f.path}\0`).join(""));
@@ -793,6 +891,7 @@ function readBlobs(root: string, specs: string[]): Promise<(Buffer | null)[]> {
 }
 
 export async function tree(root: string, mode: CompareMode): Promise<FileTree> {
+  if (folders.has(root)) return folderTree(root);
   const { b } = await sides(root, mode);
   const list = async (args: string[]) => (await git(root, args)).split("\0").filter(Boolean);
   if (b.kind === "commit") return { files: await list(["ls-tree", "-r", "-z", "--name-only", "--full-tree", b.rev!]), ignored: [] };
@@ -804,30 +903,106 @@ export async function tree(root: string, mode: CompareMode): Promise<FileTree> {
   return { files: [...new Set(files.filter((p) => !p.endsWith("/")))], ignored };
 }
 
+export const FOLDER_LIMIT = 50_000;
+const FOLDER_BATCH = 256;
+// Case-insensitive filesystems resolve .GIT to the real .git.
+const isGitDir = (name: string) => name.toLowerCase() === ".git";
+
+export async function folderTree(root: string, limit = FOLDER_LIMIT): Promise<FileTree> {
+  return (await walkFolder(root, limit)).tree;
+}
+
+export async function folderDirs(root: string): Promise<string[]> {
+  return (await walkFolder(root, FOLDER_LIMIT)).dirs;
+}
+
+// Past the limit only the top level is listed, and the rest opens folder by folder.
+async function walkFolder(root: string, limit: number): Promise<{ tree: FileTree; dirs: string[] }> {
+  const files: string[] = [];
+  const ignored: string[] = [];
+  const unlisted: string[] = [];
+  const dirs: string[] = [];
+  let top: FileTree | null = null;
+  for (let level = [""]; level.length;) {
+    const next: string[] = [];
+    for (let i = 0; i < level.length; i += FOLDER_BATCH) {
+      const read = await Promise.all(
+        level.slice(i, i + FOLDER_BATCH).map(async (dir) => {
+          const entries = await readdir(join(root, dir), { withFileTypes: true }).catch(() => []);
+          if (dir && entries.some((e) => isGitDir(e.name))) {
+            unlisted.push(dir);
+            return [];
+          }
+          dirs.push(dir);
+          return entries.filter((e) => !isGitDir(e.name)).map((e) => `${dir}${e.name}${e.isDirectory() ? "/" : ""}`);
+        }),
+      );
+      const paths = read.flat();
+      const skip = await ignoredPaths(root, paths);
+      for (const path of paths) (skip.has(path) ? ignored : path.endsWith("/") ? next : files).push(path);
+      if (top && files.length > limit) return { tree: top, dirs: [] };
+    }
+    top ??= { files: [...files], ignored: [...ignored], unlisted: [...next] };
+    level = next;
+  }
+  return { tree: { files, ignored, unlisted: unlisted.sort() }, dirs };
+}
+
+export async function ignoredPaths(root: string, paths: string[]): Promise<Set<string>> {
+  if (!paths.length) return new Set();
+  try {
+    const out = await gitInput(root, ["check-ignore", "-z", "--stdin"], paths.join("\0") + "\0");
+    return new Set(out.split("\0").filter(Boolean));
+  } catch {
+    // exit code 1 means none of them are ignored
+    return new Set();
+  }
+}
+
 export async function listDir(root: string, dir: string): Promise<string[]> {
   if (!dir.endsWith("/") || isAbsolute(dir) || dir.split("/").includes("..")) return [];
   const entries = await readdir(join(root, dir), { withFileTypes: true });
-  return entries.map((e) => `${dir}${e.name}${e.isDirectory() ? "/" : ""}`);
+  return entries.filter((e) => !isGitDir(e.name)).map((e) => `${dir}${e.name}${e.isDirectory() ? "/" : ""}`);
 }
 
 export async function commits(root: string, limit: number): Promise<CommitInfo[]> {
   if (!(await tryGit(root, ["rev-parse", "-q", "--verify", "HEAD"]))) return [];
   const n = Math.max(1, Math.floor(limit));
-  const out = await git(root, ["log", "-z", `-n${n}`, "--format=%H%x1f%h%x1f%s%x1f%an%x1f%aI", "HEAD", "--"]);
+  const out = await git(root, ["log", "-z", `-n${n}`, "--decorate=full", `--format=%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%D%x1f%ae%x1f${COAUTHORS}`, "HEAD", "--"]);
   return out
     .split("\0")
     .filter(Boolean)
     .map((rec) => {
-      const [sha, short, subject, author, date] = rec.split("\x1f");
-      return { sha, short, subject, author, date };
+      const [sha, short, subject, author, date, refs, email, coauthors] = rec.split("\x1f");
+      return { sha, short, subject, author, email, coauthors: coauthorList(coauthors), date, refs: commitRefs(refs) };
     });
+}
+
+const COAUTHORS = "%(trailers:key=Co-authored-by,valueonly,separator=%x1e)";
+const coauthorList = (trailers: string) =>
+  trailers
+    .split("\x1e")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+export function commitRefs(decoration: string): CommitRef[] {
+  const prefixes: [string, CommitRef["kind"]][] = [
+    ["tag: refs/tags/", "tag"],
+    ["HEAD -> refs/heads/", "current"],
+    ["refs/heads/", "branch"],
+    ["refs/remotes/", "remote"],
+  ];
+  return decoration.split(", ").flatMap((ref) => {
+    const [prefix, kind] = prefixes.find(([p]) => ref.startsWith(p)) ?? [];
+    return prefix && kind && !ref.endsWith("/HEAD") ? [{ name: ref.slice(prefix.length), kind }] : [];
+  });
 }
 
 export async function commitDetail(root: string, rev: string): Promise<CommitDetail> {
   const sha = await resolve(root, rev);
-  const out = await git(root, ["log", "-1", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%b", sha, "--"]);
-  const [full, short, subject, author, date, body] = out.split("\x1f");
-  return { sha: full, short, subject, author, date, body: body.trim() };
+  const out = await git(root, ["log", "-1", `--format=%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%ae%x1f${COAUTHORS}%x1f%b`, sha, "--"]);
+  const [full, short, subject, author, date, email, coauthors, body] = out.split("\x1f");
+  return { sha: full, short, subject, author, email, coauthors: coauthorList(coauthors), date, body: body.trim() };
 }
 
 export async function branches(root: string): Promise<Refs> {

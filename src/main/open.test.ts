@@ -1,15 +1,10 @@
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openRefusal } from "./open";
-import { dirs } from "./test-repo";
+import { tempDir } from "./test-repo";
 
-function folder() {
-  const dir = mkdtempSync(join(tmpdir(), "moire-open-"));
-  dirs.push(dir);
-  return dir;
-}
+const folder = () => tempDir("moire-open-");
 
 describe("openRefusal", () => {
   it("lets documents through", () => {

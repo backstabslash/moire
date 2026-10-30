@@ -29,6 +29,7 @@ if (opts.help) {
       usage,
       "",
       "Installs moire, or updates it when a new release is out, then opens the git repo at path (default: the current folder).",
+      "A comparison opens straight onto it: main..feature, HEAD~3 (up to the last commit) or pr 123 (needs gh).",
       "",
       "  --no-sandbox  run without Chromium's sandbox, on Linux systems that block it",
       "  --uninstall   remove moire from your home folder; your settings stay",
@@ -90,7 +91,7 @@ try {
   }
   console.error(`Couldn't update (${message}), opening moire ${current}.`);
 }
-const failure = await launch(repo);
+const failure = await launch(repo, opts.compare);
 if (failure) {
   console.error(`moire didn't start:\n${failure}`);
   process.exit(1);

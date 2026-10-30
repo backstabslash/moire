@@ -1,10 +1,16 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AgentNotes, NoteRange } from "../../../shared/types";
 import { noteSpans, type Stop } from "../model/notes";
+import { FileGlyph } from "./FileGlyph";
 import { Key } from "./Key";
 import { Lined } from "./Mark";
+import { Resizer } from "./Resizer";
+
+export const NOTES_WIDTH = { initial: 330, min: 260, max: 640 };
 
 interface Props {
+  width: number;
+  onWidth(width: number): void;
   notes: AgentNotes;
   stops: Stop[];
   stop: number | null;
@@ -21,6 +27,8 @@ interface Props {
 }
 
 export function NotesPanel({
+  width,
+  onWidth,
   notes,
   stops,
   stop,
@@ -41,21 +49,24 @@ export function NotesPanel({
     listRef.current?.querySelector(".chapter.is-current")?.scrollIntoView({ block: "nearest" });
   }, [current?.chapter]);
   const first = (chapter: number) => stops.findIndex((s) => s.chapter === chapter);
+  const firstLeft = (chapter: number) => {
+    const left = stops.findIndex(
+      (s, i) => s.chapter === chapter && stagedStops.get(i) !== "full" && shownPaths.has(notes.chapters[chapter].ranges[s.range].path),
+    );
+    return left >= 0 ? left : first(chapter);
+  };
 
   return (
     <aside className="notes-panel" aria-label="Agent notes">
+      <Resizer className="notes-resize" label="Resize agent notes" width={width} limits={NOTES_WIDTH} growsLeft onWidth={onWidth} />
       <div className="notes-head">
         <b>Agent notes</b>
-        <button className="notes-close" title="Hide agent notes" onClick={onClose}>
+        <button className="notes-close" data-tip="Hide agent notes" onClick={onClose}>
           Hide
           <Key id="notes" />
         </button>
       </div>
-      {notes.summary && (
-        <p className="notes-summary">
-          <NoteText text={notes.summary} />
-        </p>
-      )}
+      {notes.summary && <NotesSummary text={notes.summary} />}
       <div className="notes-scroll" ref={listRef}>
         <ol className="chapters">
           {notes.chapters.map((chapter, c) => {
@@ -64,13 +75,13 @@ export function NotesPanel({
             const partly = !finished && staged.get(c) === "partial";
             return (
               <li key={c} className={`chapter${open ? " is-current" : ""}${finished ? " is-done" : partly ? " is-partly" : ""}`}>
-                <button className="chapter-head" onClick={() => onStop(first(c))}>
+                <button className="chapter-head" data-tip={open ? undefined : chapterTip(chapter)} onClick={() => onStop(firstLeft(c))}>
                   <span className="note-no">{c + 1}</span>
                   <span className="chapter-title">
-                    {chapter.title}
+                    <span className="chapter-name">{chapter.title}</span>
                     {chapter.warn && <span className="note-warn">Check this</span>}
                   </span>
-                  {chapter.text && (
+                  {open && chapter.text && (
                     <span className="note-text">
                       <NoteText text={chapter.text} />
                     </span>
@@ -95,6 +106,7 @@ export function NotesPanel({
                               onClick={() => onStop(index)}
                             >
                               <span className="stop-where">
+                                <FileGlyph path={range.path} />
                                 {where(range)}
                                 {mark && (
                                   <span className="stop-staged" role="img" aria-label={tip} data-tip={tip}>
@@ -114,7 +126,7 @@ export function NotesPanel({
                       })}
                     </ul>
                     {onStage && !doneChapters.has(c) && (
-                      <button className="btn chapter-stage" onClick={() => onStage(c)}>
+                      <button className="chapter-stage" onClick={() => onStage(c)}>
                         Stage this chapter
                       </button>
                     )}
@@ -129,7 +141,8 @@ export function NotesPanel({
             <b>Not in any chapter</b>
             {uncovered.map(({ path, count }) => (
               <button key={path} data-tip={`${path}\n${count} changed ${count === 1 ? "line" : "lines"}`} onClick={() => onOpen(path)}>
-                {path.split("/").pop()}
+                <FileGlyph path={path} />
+                <span>{path.split("/").pop()}</span>
               </button>
             ))}
           </div>
@@ -142,6 +155,37 @@ export function NotesPanel({
       </div>
     </aside>
   );
+}
+
+function NotesSummary({ text }: { text: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [open, setOpen] = useState(false);
+  const [clipped, setClipped] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && !open) setClipped(el.scrollHeight > el.clientHeight + 1);
+  }, [text, open]);
+  return (
+    <div className="notes-summary">
+      <p ref={ref} className={open ? "is-open" : ""}>
+        <NoteText text={text} />
+      </p>
+      {(clipped || open) && <button onClick={() => setOpen(!open)}>{open ? "Show less" : "Show more"}</button>}
+    </div>
+  );
+}
+
+function chapterTip(chapter: AgentNotes["chapters"][number]): string {
+  return [
+    chapter.title,
+    ...(chapter.text
+      ? [
+          noteSpans(chapter.text)
+            .map((s) => s.text)
+            .join(""),
+        ]
+      : []),
+  ].join("\n");
 }
 
 function where(range: NoteRange): string {
