@@ -91,6 +91,7 @@ export function buildMenu(): void {
         sep,
         item("layout"),
         item("fullFile"),
+        item("ignoreWhitespace"),
         item("preview"),
         item("allFiles"),
         item("notes"),

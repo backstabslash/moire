@@ -9,12 +9,12 @@ import { modeNote } from "../model/modes";
 import { type NameParts, renameParts } from "../model/rename";
 import { FOLD_STEP, hunkSpans, type HunkSpan, type Layout, type LineRow, type Row, type Side } from "../model/rows";
 import type { PreviewKind } from "../model/preview";
-import { type Mark, newLineOf, noteClass } from "../model/notes";
+import { type Mark, type RowNote, rowNotes } from "../model/notes";
 import type { Find, Hit } from "../model/search";
 import { type Col, changedRefs, hunkRefs } from "../model/selection";
 import type { Range } from "../model/words";
 import type { SelectHow } from "../useSelection";
-import { Code, hangingIndent, withoutJoins } from "./Code";
+import { Code, withoutJoins } from "./Code";
 import { DiffStat } from "./DiffStat";
 import { FileGlyph } from "./FileGlyph";
 import { Icon } from "./Icon";
@@ -146,6 +146,10 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
   const previewRef = useRef<DiffViewHandle>(null);
   const selectionEndRows = useRef<number[]>([]);
   const spans = useMemo(() => hunkSpans(rows), [rows]);
+  const marks = notes?.marks;
+  const openChapter = notes?.chapter ?? null;
+  const openStop = notes?.stop ?? null;
+  const notesByRow = useMemo(() => (marks ? rowNotes(rows, marks, openChapter, openStop) : null), [rows, marks, openChapter, openStop]);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -473,7 +477,7 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
         <div className="scroller diff-scroller" ref={scrollRef} onScroll={record} onWheel={() => (restore.current = null)}>
           <div
             ref={diffRef}
-            className={`diff${onlyB ? " only-b" : file.status === "deleted" ? " only-a" : ""}`}
+            className={`diff${onlyB ? " only-b" : file.status === "deleted" ? " only-a" : ""}${marks ? " has-notes" : ""}`}
             data-pick={pick}
             style={{ height: virtualizer.getTotalSize(), "--digits": digits } as React.CSSProperties}
             onCopy={copyText}
@@ -499,7 +503,7 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
                   copyable={row.t === "hunk" && picked.has(row.hunk)}
                   blinking={!!blink && "hunk" in row && row.hunk === blink.hunk}
                   styles={styles}
-                  note={notes ? noteClass(newLineOf(row), notes.marks, notes.chapter, notes.stop) : ""}
+                  note={notesByRow?.[item.index] ?? null}
                   onExpand={onExpand}
                   onFocusHunk={onFocusHunk}
                   onAct={onAct}
@@ -740,7 +744,7 @@ interface RowProps {
   copyable: boolean;
   blinking: boolean;
   styles: boolean;
-  note: string;
+  note: RowNote | null;
   onExpand(key: string): void;
   onFocusHunk(hunk: number): void;
   onAct(action: StageAction, target: number | "file"): void;
@@ -984,7 +988,7 @@ const RowView = memo(function RowView(props: RowProps) {
         );
       }
       return (
-        <div className={`row split${row.faded ? " is-staged" : ""}${doneClass(row)}${note ? ` ${note}` : ""}`}>
+        <div className={`row split${row.faded ? " is-staged" : ""}${doneClass(row)}${note ? ` ${note.cls}` : ""}`}>
           <SplitCell
             side="a"
             line={row.a}
@@ -1005,6 +1009,7 @@ const RowView = memo(function RowView(props: RowProps) {
             current={found.curB}
             styles={styles}
           />
+          {note && <NoteRail note={note} />}
         </div>
       );
     case "uni": {
@@ -1012,14 +1017,14 @@ const RowView = memo(function RowView(props: RowProps) {
       const toks = row.kind === "del" ? tokens?.[0] : tokens?.[1];
       const line = row.line.sel ? { "data-line": row.line.sel, "data-col": "u" } : {};
       return (
-        <div className={`row uni${row.faded ? " is-staged" : ""}${doneClass(row)}${note ? ` ${note}` : ""}`}>
+        <div className={`row uni${row.faded ? " is-staged" : ""}${doneClass(row)}${note ? ` ${note.cls}` : ""}`}>
           <div className={`ln a ${cls}`} {...line}>
             {row.a ?? ""}
           </div>
           <div className={`ln b ${cls}`} {...line}>
             {row.b ?? ""}
           </div>
-          <div className={`cell ${cls}`} style={hangingIndent(row.line.text)}>
+          <div className={`cell ${cls}`}>
             <div className="text">
               <Code
                 text={row.line.text}
@@ -1029,14 +1034,25 @@ const RowView = memo(function RowView(props: RowProps) {
                 hits={found.a}
                 current={found.curA}
                 styles={styles}
+                changed={row.kind !== "ctx"}
               />
             </div>
           </div>
+          {note && <NoteRail note={note} />}
         </div>
       );
     }
   }
 });
+
+function NoteRail({ note: { mark, first } }: { note: RowNote }) {
+  const no = mark.chapter + 1;
+  return (
+    <i className="note-rail" data-tip={`Chapter ${no}: ${mark.title}`}>
+      {first && <b>{no}</b>}
+    </i>
+  );
+}
 
 interface CellProps {
   side: "a" | "b";
@@ -1064,7 +1080,7 @@ function SplitCell({ side, line, kind, tokens, sel, hits, current, styles }: Cel
       <div className={`ln ${side} ${cls}`} {...attrs}>
         {line.no}
       </div>
-      <div className={`cell ${side} ${cls}`} style={hangingIndent(line.text)}>
+      <div className={`cell ${side} ${cls}`}>
         <div className="text">
           <Code
             text={line.text}
@@ -1074,6 +1090,7 @@ function SplitCell({ side, line, kind, tokens, sel, hits, current, styles }: Cel
             hits={hits}
             current={current}
             styles={styles}
+            changed={kind !== "ctx"}
           />
         </div>
       </div>
@@ -1087,7 +1104,7 @@ function PlateSide({ side, line, kind, tokens, hits, current, styles }: Omit<Cel
   return (
     <div className={`p${side}`}>
       <div className={`ln ${cls}`}>{line.no}</div>
-      <div className={`cell ${cls}`} style={hangingIndent(line.text)}>
+      <div className={`cell ${cls}`}>
         <div className="text">
           <Code
             text={line.text}
@@ -1097,6 +1114,7 @@ function PlateSide({ side, line, kind, tokens, hits, current, styles }: Omit<Cel
             hits={hits}
             current={current}
             styles={styles}
+            changed={kind !== "ctx"}
           />
         </div>
       </div>

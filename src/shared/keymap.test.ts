@@ -29,9 +29,9 @@ describe("resolveKeys", () => {
   });
 
   it("applies overrides on top of the defaults", () => {
-    const { keys, problems } = resolveKeys(JSON.stringify({ stage: "w", nextFile: ["n", "Shift+Right"], copyCode: "" }));
+    const { keys, problems } = resolveKeys(JSON.stringify({ stage: "y", nextFile: ["n", "Shift+Right"], copyCode: "" }));
     expect(problems).toEqual(["nextFile and nextHit both use n, so nextFile keeps its default."]);
-    expect(keys.stage).toEqual(["w"]);
+    expect(keys.stage).toEqual(["y"]);
     expect(keys.nextFile).toEqual(["]"]);
     expect(keys.copyCode).toEqual([]);
   });

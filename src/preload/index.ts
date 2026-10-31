@@ -87,7 +87,7 @@ const api = {
       ipcRenderer.off("menu:command", handler);
     };
   },
-  diff: (root: string, mode: CompareMode): Promise<DiffResult> => ipcRenderer.invoke("git:diff", root, mode),
+  diff: (root: string, mode: CompareMode, ignoreWhitespace?: boolean): Promise<DiffResult> => ipcRenderer.invoke("git:diff", root, mode, ignoreWhitespace),
   fileContents: (root: string, mode: CompareMode, file: Pick<FileDiff, "path" | "oldPath" | "status">): Promise<FileContents> =>
     ipcRenderer.invoke("git:file", root, mode, file),
   manyContents: (root: string, mode: CompareMode, files: Pick<FileDiff, "path" | "oldPath" | "status">[]): Promise<FileContents[]> =>
@@ -108,6 +108,7 @@ const api = {
   dropDiscarded: (root: string, id: string): Promise<void> => ipcRenderer.invoke("git:drop-discarded", root, id),
   commit: (root: string, message: string): Promise<string> => ipcRenderer.invoke("git:commit", root, message),
   notes: (root: string, commit?: string): Promise<NotesFile> => ipcRenderer.invoke("notes:get", root, commit),
+  rangeNotes: (root: string, mode: Extract<CompareMode, { kind: "branches" }>): Promise<NotesFile> => ipcRenderer.invoke("notes:range", root, mode),
   openInEditor: (root: string, path: string, line: number): Promise<string | null> => ipcRenderer.invoke("editor:open", root, path, line),
   editors: (): Promise<EditorChoices> => ipcRenderer.invoke("editor:list"),
   chooseEditor: (template: string): Promise<string> => ipcRenderer.invoke("editor:choose", template),

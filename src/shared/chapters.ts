@@ -122,6 +122,31 @@ export function hasChanges(files: FileDiff[], chapter: Chapter, placed: Placemen
   });
 }
 
+// Hunks here have no context lines, so each one is exactly the lines that changed.
+function carryLine(hunks: Hunk[], n: number, edge: "start" | "end"): number {
+  let delta = 0;
+  for (const h of hunks) {
+    const first = h.oldLines === 0 ? h.oldStart + 1 : h.oldStart;
+    const newFirst = h.newLines === 0 ? h.newStart + 1 : h.newStart;
+    if (n < first) break;
+    if (n < first + h.oldLines) return edge === "start" ? newFirst : newFirst + h.newLines - 1;
+    delta = newFirst + h.newLines - first - h.oldLines;
+  }
+  return n + delta;
+}
+
+export function carryLines(hunks: Hunk[], [start, end]: [number, number]): [number, number] | null {
+  const [from, to] = [carryLine(hunks, start, "start"), carryLine(hunks, end, "end")];
+  return from > to ? null : [from, to];
+}
+
+export function changedRegions(hunks: Hunk[]): [number, number][] {
+  return hunks.map((h) => {
+    const start = Math.max(1, h.newStart);
+    return [start, h.newLines ? start + h.newLines - 1 : start];
+  });
+}
+
 export function newToOld(hunks: Hunk[]): (n: number) => number | null {
   return (n) => {
     let delta = 0;

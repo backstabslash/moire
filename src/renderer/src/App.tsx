@@ -7,6 +7,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { type Blink, DiffView, type DiffViewHandle, type Preview, type Spot } from "./components/DiffView";
 import { NoChanges, NoRepo } from "./components/EmptyState";
 import { EncodingNotice } from "./components/EncodingNotice";
+import { InvisibleNotice } from "./components/InvisibleNotice";
 import { FileMenu, type MenuAction, type MenuAt } from "./components/FileMenu";
 import { HoverTip } from "./components/HoverTip";
 import { ClashBar, ClashView, DropFoot, DropSlots, DropStyle, ghostTree } from "./components/FilesIn";
@@ -25,6 +26,7 @@ import { type LastPicked, type PickerState, Toolbar } from "./components/Toolbar
 import { highlight, warm } from "./highlight/client";
 import type { TokLines } from "./highlight/types";
 import { fileKey as fileKeyOf, fuzzyMatch, hashString, orderFiles, remember } from "./model/files";
+import { hiddenLines } from "./model/invisible";
 import { langFor } from "./model/lang";
 import { previewOf } from "./model/preview";
 import { buildRows, followHunk, hunkChanges, type Layout, type LineRow, notUtf8, type Row, type Scope, splitLines, type Stub, withStubs } from "./model/rows";
@@ -63,6 +65,7 @@ const GIT_ONLY: CommandId[] = [
   "discardFile",
   "undo",
   "allFiles",
+  "ignoreWhitespace",
   "notes",
   "nextNote",
   "prevNote",
@@ -151,6 +154,8 @@ export function App() {
     [setLayout],
   );
   const [scope, setScope] = useStored<Scope>("scope", "changed", ["changed", "full"]);
+  const [whitespacePref, setWhitespacePref] = useStored<"on" | "off">("ignore-whitespace", "off", ["on", "off"]);
+  const ignoreWhitespace = whitespacePref === "on";
   const [previewPref, setPreviewPref] = useStored<"on" | "off">("preview", "off", ["on", "off"]);
   const [theme, setTheme] = useStored<ThemeId>("theme", darkDesktop.matches ? "dark" : "light", THEME_IDS);
   const [lightTheme, setLightTheme] = useStored<ThemeId>("theme-light", "light", LIGHT_IDS);
@@ -220,7 +225,7 @@ export function App() {
   const [landed, setLanded] = useState(0);
   const hidden = useCallback((m: CompareMode, f: FileDiff) => m.kind === "all" && hideStaged === "on" && f.staged === "full", [hideStaged]);
   const visible = (m: CompareMode, files: FileDiff[]) => orderFiles(files).filter((f) => !hidden(m, f));
-  const { mode, diff, loadedAt, fresh, refreshTick, refresh, reset, busy, acting, startActing, settle } = useDiff(repo, wantMode, {
+  const { mode, diff, loadedAt, fresh, refreshTick, refresh, reset, busy, acting, startActing, settle } = useDiff(repo, wantMode, ignoreWhitespace, {
     async prefetch(root, m, result) {
       const open = result.files.find((f) => f.path === activeRef.current);
       const openKey = open && fileKeyOf(JSON.stringify(m), open);
@@ -248,7 +253,12 @@ export function App() {
         landing.current = { to: m.kind, path: land.path, line: land.line, onOldSide: land.onOldSide, undone: land.undone };
         setLanded((n) => n + 1);
       }
-      if (land?.note && !has(land.path)) setToast({ text: `${land.path} has no changes in Unstaged or Staged`, undo: false });
+      if (land?.note && !has(land.path)) {
+        setToast({
+          text: ignoreWhitespace ? `Whitespace is hidden, so ${land.path} has nothing to show` : `${land.path} has no changes in Unstaged or Staged`,
+          undo: false,
+        });
+      }
       setActive((cur) => {
         const kept = [land?.path ?? null, cur, wanted].find(has);
         if (kept) return kept;
@@ -306,15 +316,17 @@ export function App() {
   }, [repo, refreshTick]);
 
   const notesProblem = useRef("");
-  const notesFor = mode.kind === "commit" ? mode.sha : mode.kind === "branches" ? null : "working";
+  const notesFor = mode.kind === "commit" ? mode.sha : mode.kind === "branches" ? modeKey : "working";
   useEffect(() => {
     setStopAt(null);
+    if (mode.kind === "branches") setNotesFile(null);
   }, [notesFor]);
   useEffect(() => {
     if (!repo) return;
-    if (notesFor === null) return setNotesFile(null);
     let stale = false;
-    window.moire.notes(repo.root, notesFor === "working" ? undefined : notesFor).then(
+    const read =
+      mode.kind === "branches" ? window.moire.rangeNotes(repo.root, mode) : window.moire.notes(repo.root, notesFor === "working" ? undefined : notesFor);
+    read.then(
       (next) => {
         if (stale) return;
         setNotesFile((cur) => (JSON.stringify(cur) === JSON.stringify(next) ? cur : next));
@@ -502,7 +514,7 @@ export function App() {
   const fileContents = shown?.contents ?? null;
   const fileTokens = shown?.tokens ?? null;
 
-  const shownView = `${modeKey}:${file?.path}`;
+  const shownView = `${modeKey}:${ignoreWhitespace}:${file?.path}`;
   const [resetFor, setResetFor] = useState(shownView);
   const shownRef = useRef(shownView);
   shownRef.current = shownView;
@@ -580,7 +592,7 @@ export function App() {
       const r = agentNotes.chapters[chapter].ranges[range];
       if (r.path !== file.path) return;
       const at = placeRange(r, bLines);
-      if (at !== "all" && at !== "lost") marks.push({ ...at, chapter, stop });
+      if (at !== "all" && at !== "lost") marks.push({ ...at, chapter, stop, title: agentNotes.chapters[chapter].title });
     });
     return marks.length ? marks : null;
   }, [agentNotes, stops, file, bLines]);
@@ -760,7 +772,8 @@ export function App() {
     requestAnimationFrame(() => viewRef.current?.scrollToRow(index, "center"));
   }, [rows, file, search.revealTick]);
 
-  const actions = mode.kind === "unstaged" || mode.kind === "staged" ? mode.kind : null;
+  const actions = !ignoreWhitespace && (mode.kind === "unstaged" || mode.kind === "staged") ? mode.kind : null;
+  const stageOff = ignoreWhitespace ? `Turn off Ignore whitespace (${k("ignoreWhitespace")}) to stage or discard, so nothing changes that you can't see` : null;
   const notify = useCallback((text: string, undo = false) => setToast({ text, undo }), []);
   const writable = !folder && diff?.b.kind === "worktree";
   const filesIn = useFilesIn({ repo, writable, tree, view: filesView, onView: showFiles, open: active, notify, startActing, settle });
@@ -833,6 +846,7 @@ export function App() {
   }, [busy, file, want, focusHunk]);
 
   const actAll = async () => {
+    if (stageOff) return notify(stageOff);
     if (!repo || !actions || acting.current) return;
     if (!listed.length) return notify(`Nothing to ${actions === "staged" ? "unstage" : "stage"}`);
     startActing();
@@ -974,7 +988,7 @@ export function App() {
     notify(
       notesFor === "working"
         ? `No agent notes yet. An agent writes them to ${notesFile?.path ?? ".git/moire/notes.json"}`
-        : `No agent notes for this ${notesFor ? "commit" : "comparison"}`,
+        : `No agent notes for this ${mode.kind === "commit" ? "commit" : "comparison"}`,
     );
   const toggleNotes = () => {
     if (!agentNotes) return notesHelp();
@@ -1028,12 +1042,14 @@ export function App() {
     }
     return out;
   }, [agentNotes, notesFile, files, openPath, bLines]);
+  const invisibles = useMemo(() => (file ? hiddenLines(file) : []), [file]);
+  const invisibleKey = `${repo?.root}:${file?.path}:${invisibles.map((l) => l.text).join("\n")}`;
   const againstWorktree = mode.kind === "unstaged" || mode.kind === "all";
   const doneChapters = useMemo(
-    () => new Set(againstWorktree ? chapterTargets.flatMap((targets, c) => (targets.length ? [] : [c])) : []),
-    [againstWorktree, chapterTargets],
+    () => new Set(againstWorktree && !ignoreWhitespace ? chapterTargets.flatMap((targets, c) => (targets.length ? [] : [c])) : []),
+    [againstWorktree, ignoreWhitespace, chapterTargets],
   );
-  const missingCountsAsFullyStaged = mode.kind === "unstaged";
+  const missingCountsAsFullyStaged = mode.kind === "unstaged" && !ignoreWhitespace;
   const stagedStops = useMemo(() => {
     const out = new Map<number, "full" | "partial">();
     if (!agentNotes || (mode.kind !== "unstaged" && mode.kind !== "all")) return out;
@@ -1350,6 +1366,11 @@ export function App() {
     };
   }, [root, setMode, notify, refresh]);
 
+  const chooseWhitespace = (on: boolean) => {
+    setWhitespacePref(on ? "on" : "off");
+    notify(on ? "Hiding whitespace changes. Staging is off until you show them." : "Showing whitespace changes");
+  };
+
   const run: Record<CommandId, () => void> = {
     nextHunk: () => moveHunk(1),
     prevHunk: () => moveHunk(-1),
@@ -1370,10 +1391,10 @@ export function App() {
     stage: () =>
       actions
         ? onAct(actions === "staged" ? "unstage" : "stage", null)
-        : notify(`Stage from the Unstaged view (${k("unstaged")}), unstage from Staged (${k("staged")})`),
-    discard: () => (actions === "unstaged" ? onAct("discard", null) : notify(`Discard works in the Unstaged view (${k("unstaged")})`)),
+        : notify(stageOff ?? `Stage from the Unstaged view (${k("unstaged")}), unstage from Staged (${k("staged")})`),
+    discard: () => (actions === "unstaged" ? onAct("discard", null) : notify(stageOff ?? `Discard works in the Unstaged view (${k("unstaged")})`)),
     stageAll: toggleStageAll,
-    discardFile,
+    discardFile: () => (stageOff ? notify(stageOff) : discardFile()),
     undo,
     extendDown: () => extendSelection(1),
     extendUp: () => extendSelection(-1),
@@ -1401,6 +1422,7 @@ export function App() {
     branches: () => (special?.kind !== "branches" && lastPicked.branches ? setMode(lastPicked.branches) : setPicker("branches")),
     layout: () => chooseLayout(shownLayout === "split" ? "unified" : "split"),
     fullFile: () => setScope(scope === "full" ? "changed" : "full"),
+    ignoreWhitespace: () => chooseWhitespace(!ignoreWhitespace),
     preview: () => (previewable && !previewable.forced ? togglePreview() : notify("Only Markdown and SVG files switch between preview and diff")),
     theme: () => pickTheme(toneOf(theme) === "dark" ? lightTheme : darkTheme),
     palette: () => setPalette((open) => !open),
@@ -1480,60 +1502,70 @@ export function App() {
           </button>
         ),
       }
-    : allHidden
-      ? { copy: ["Everything is staged.", "Turn off Hide staged to see the staged files."] }
-      : stagedOnly
-        ? {
-            copy: [
-              stagedOnly === 1 ? "Everything is staged." : `All ${stagedOnly} changes are staged.`,
-              `Review ${stagedOnly === 1 ? "it" : "them"} in the Staged view, then commit.`,
-            ],
-            actions: (
-              <>
-                <button className="btn" onClick={() => setMode({ kind: "staged" })}>
-                  Review staged
-                  <Key id="staged" />
-                </button>
-                <button className="btn" onClick={commitNow}>
-                  Commit
-                </button>
-              </>
-            ),
-          }
-        : justCommitted
+    : ignoreWhitespace
+      ? {
+          copy: ["Nothing to show with whitespace hidden.", "There may still be whitespace changes here."],
+          actions: (
+            <button className="btn" onClick={() => chooseWhitespace(false)}>
+              Show whitespace changes
+              <Key id="ignoreWhitespace" />
+            </button>
+          ),
+        }
+      : allHidden
+        ? { copy: ["Everything is staged.", "Turn off Hide staged to see the staged files."] }
+        : stagedOnly
           ? {
               copy: [
-                "Committed.",
-                <>
-                  <code>{committedSha}</code> {committedSubject.join(" ")}
-                </>,
+                stagedOnly === 1 ? "Everything is staged." : `All ${stagedOnly} changes are staged.`,
+                `Review ${stagedOnly === 1 ? "it" : "them"} in the Staged view, then commit.`,
               ],
               actions: (
-                <button className="btn" onClick={() => setMode({ kind: "commit", sha: committedSha })}>
-                  Show commit
-                </button>
+                <>
+                  <button className="btn" onClick={() => setMode({ kind: "staged" })}>
+                    Review staged
+                    <Key id="staged" />
+                  </button>
+                  <button className="btn" onClick={commitNow}>
+                    Commit
+                  </button>
+                </>
               ),
             }
-          : mode.kind === "staged"
+          : justCommitted
             ? {
                 copy: [
-                  "Nothing staged.",
-                  `Stage hunks in Unstaged with ${k("stage") || "the Stage button"} as you review them. They wait here for the commit.`,
+                  "Committed.",
+                  <>
+                    <code>{committedSha}</code> {committedSubject.join(" ")}
+                  </>,
                 ],
                 actions: (
-                  <>
-                    <button className="btn" onClick={() => setMode({ kind: "unstaged" })}>
-                      Review unstaged
-                      <Key id="unstaged" />
-                    </button>
-                    <button className="btn" onClick={() => showFiles("all")}>
-                      All files
-                      <Key id="allFiles" />
-                    </button>
-                  </>
+                  <button className="btn" onClick={() => setMode({ kind: "commit", sha: committedSha })}>
+                    Show commit
+                  </button>
                 ),
               }
-            : {};
+            : mode.kind === "staged"
+              ? {
+                  copy: [
+                    "Nothing staged.",
+                    `Stage hunks in Unstaged with ${k("stage") || "the Stage button"} as you review them. They wait here for the commit.`,
+                  ],
+                  actions: (
+                    <>
+                      <button className="btn" onClick={() => setMode({ kind: "unstaged" })}>
+                        Review unstaged
+                        <Key id="unstaged" />
+                      </button>
+                      <button className="btn" onClick={() => showFiles("all")}>
+                        All files
+                        <Key id="allFiles" />
+                      </button>
+                    </>
+                  ),
+                }
+              : {};
 
   const toolbar = (
     <Toolbar
@@ -1563,6 +1595,8 @@ export function App() {
       codeSize={codeSize}
       onCodeFont={setCodeFont}
       onCodeSize={setCodeSize}
+      ignoreWhitespace={ignoreWhitespace}
+      onIgnoreWhitespace={chooseWhitespace}
       onSearch={openSearch}
       notes={agentNotes ? { open: notesOpen } : null}
       onNotes={toggleNotes}
@@ -1651,6 +1685,7 @@ export function App() {
                 message={draft}
                 busy={busy}
                 staged={files.length}
+                blocked={ignoreWhitespace ? "Show whitespace changes to commit, so nothing goes in that you can't see" : null}
                 unstageLabel={allLabel("Unstage")}
                 error={shownCommitError}
                 onMessage={setDraft}
@@ -1726,7 +1761,7 @@ export function App() {
                   : setMode({ kind: "staged" }, { path: file.path, newSideLine: stubs.find((s) => s.treeLine === line)?.indexLine ?? null })
               }
               notice={
-                <>
+                <div className="notices">
                   {file.changedSinceStaged && !quietNotices.has(`${repo.root}:${file.path}`) && (
                     <StagedNotice
                       newEdits={diff.a.kind === "index"}
@@ -1735,7 +1770,10 @@ export function App() {
                     />
                   )}
                   {!preview && undecoded && <EncodingNotice staging={!!actions && file.status !== "unchanged"} />}
-                </>
+                  {!preview && invisibles.length > 0 && !quietNotices.has(invisibleKey) && (
+                    <InvisibleNotice lines={invisibles} onClose={() => setQuietNotices((cur) => new Set(cur).add(invisibleKey))} />
+                  )}
+                </div>
               }
               notes={notesOpen && fileMarks ? { marks: fileMarks, chapter: currentStop === null ? null : stops[currentStop].chapter, stop: currentStop } : null}
               onRevealFolder={revealFolder}
@@ -1745,6 +1783,7 @@ export function App() {
             <NotesPanel
               width={shownNotesWidth}
               onWidth={setNotesWidth}
+              root={repo.root}
               notes={agentNotes}
               stops={stops}
               stop={currentStop}
@@ -1754,6 +1793,7 @@ export function App() {
               staged={stagedChapters}
               stagedStops={stagedStops}
               uncovered={notCovered}
+              commits={notesFile?.commits}
               onStop={goToStop}
               onStage={actions === "unstaged" ? (c) => void stageChapter(c) : null}
               onOpen={setActive}

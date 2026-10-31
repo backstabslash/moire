@@ -969,3 +969,46 @@ it("shows a moved submodule in a commit even when git config asks for submodule 
   const res = await diff(r.root, { kind: "commit", sha });
   expect(res.files.map((f) => f.path)).toEqual(["sub"]);
 });
+
+describe("diff options", () => {
+  it("drops whitespace-only changes when asked", async () => {
+    const r = seed({ "a.txt": "a\nb\n", "b.txt": "a\nb\n" }, { "a.txt": "  a\nb\n", "b.txt": "  a\nc\n" });
+    const shown = await diff(r.root, { kind: "unstaged" }, [], true);
+    expect(shown.files.map((f) => [f.path, f.additions, f.deletions])).toEqual([["b.txt", 1, 1]]);
+  });
+
+  it("counts staging progress from the real changes, and doesn't remember the filtered view", async () => {
+    const r = seed({ "a.txt": "a\nb\n" }, { "a.txt": "a\nc\n" });
+    r.git("add", "a.txt");
+    r.write("a.txt", "  a\nc\n");
+    const hidden = await diff(r.root, { kind: "unstaged" }, [], true);
+    const plain = await diff(r.root, { kind: "unstaged" });
+    expect(hidden.files).toEqual([]);
+    expect(hidden.progress).toEqual(plain.progress);
+    expect(plain.files[0].changedSinceStaged).toBeUndefined();
+  });
+});
+
+describe("comparing a revision to the working tree", () => {
+  it("includes commits, uncommitted edits and untracked files", async () => {
+    const r = seed({ "a.txt": "one\n" });
+    r.write("b.txt", "committed\n");
+    r.commit("two");
+    r.write("a.txt", "edited\n");
+    r.write("new.txt", "untracked\n");
+    const mode = { kind: "branches", base: "HEAD~1", head: "HEAD", worktree: true } as const;
+    const { b, files } = await diff(r.root, mode);
+    expect(b.kind).toBe("worktree");
+    expect(files.map((f) => f.path).sort()).toEqual(["a.txt", "b.txt", "new.txt"]);
+    expect((await fileContents(r.root, mode, { path: "a.txt", status: "modified" })).b).toBe("edited\n");
+  });
+
+  it("stops at HEAD without the worktree flag", async () => {
+    const r = seed({ "a.txt": "one\n" });
+    r.write("b.txt", "committed\n");
+    r.commit("two");
+    r.write("a.txt", "edited\n");
+    const { files } = await diff(r.root, { kind: "branches", base: "HEAD~1", head: "HEAD" });
+    expect(files.map((f) => f.path)).toEqual(["b.txt"]);
+  });
+});

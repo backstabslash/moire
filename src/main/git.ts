@@ -383,7 +383,7 @@ export async function sides(root: string, mode: CompareMode): Promise<{ a: SideI
       if (!mb) throw new Error(`No common ancestor between ${mode.base} and ${mode.head}`);
       return {
         a: { kind: "commit", rev: mb, label: `${mode.base} (merge base ${await short(root, mb)})` },
-        b: { kind: "commit", rev: head, label: mode.head },
+        b: mode.worktree ? WORKTREE : { kind: "commit", rev: head, label: mode.head },
       };
     }
   }
@@ -480,7 +480,7 @@ async function diffCommand(root: string, from: string | null, to: "index" | "wor
   return ["diff", ...opts, from, to];
 }
 
-export async function diff(root: string, mode: CompareMode, paths: string[] = []): Promise<DiffResult> {
+export async function diff(root: string, mode: CompareMode, paths: string[] = [], ignoreWhitespace = false): Promise<DiffResult> {
   if (existsSync(join(root, ".git")) === folders.has(root)) await repoInfo(root);
   if (folders.has(root)) {
     const repo = folderInfo(root);
@@ -489,13 +489,16 @@ export async function diff(root: string, mode: CompareMode, paths: string[] = []
   const [repo, { a, b }, empty] = await Promise.all([repoInfo(root), sides(root, mode), emptyTree(root)]);
   const pathspec = literal(paths);
   const from = mode.kind === "unstaged" ? null : treeish(a, empty);
-  const to = mode.kind === "unstaged" || mode.kind === "all" ? "worktree" : mode.kind === "staged" ? "index" : treeish(b, empty);
-  const args = [...(await diffCommand(repo.root, from, to)), "-U3", "--", ...pathspec];
   const worktree = mode.kind === "unstaged" || mode.kind === "all";
-  const [out, extra] = await Promise.all([git(repo.root, args), worktree ? untracked(repo.root, pathspec) : []]);
-  const files = await pairRenames(repo.root, mode.kind === "all" ? treeish(a, empty) : null, parseDiff(out), extra);
+  const toWorktree = b.kind === "worktree";
+  const to = toWorktree ? "worktree" : mode.kind === "staged" ? "index" : treeish(b, empty);
+  const shape = ["-U3", ...(ignoreWhitespace ? ["-w"] : [])];
+  const args = [...(await diffCommand(repo.root, from, to)), ...shape, "--", ...pathspec];
+  const [out, extra] = await Promise.all([git(repo.root, args), toWorktree ? untracked(repo.root, pathspec) : []]);
+  const renameBase = mode.kind === "all" || (mode.kind === "branches" && toWorktree) ? treeish(a, empty) : null;
+  const files = await pairRenames(repo.root, renameBase, parseDiff(out), extra, shape);
   const [progress] = await Promise.all([
-    worktree && !paths.length ? markChangedSinceStaged(repo.root, files, mode.kind === "unstaged", repo.head ?? empty) : undefined,
+    worktree && !paths.length ? markChangedSinceStaged(repo.root, files, mode.kind === "unstaged", ignoreWhitespace, repo.head ?? empty) : undefined,
     mode.kind === "all" && markStaged(repo.root, files, treeish(a, empty), pathspec),
     mode.kind === "unstaged" && !paths.length && markAlreadyStaged(repo.root, files, repo.head ?? empty),
     markNoise(repo.root, files),
@@ -506,7 +509,7 @@ export async function diff(root: string, mode: CompareMode, paths: string[] = []
 }
 
 // Git only pairs a deletion with an untracked file as a rename once that file is intent-to-add in an index.
-async function pairRenames(root: string, base: string | null, files: FileDiff[], extra: FileDiff[]): Promise<FileDiff[]> {
+async function pairRenames(root: string, base: string | null, files: FileDiff[], extra: FileDiff[], shape: string[]): Promise<FileDiff[]> {
   const gone = files.filter((f) => f.status === "deleted").map((f) => f.path);
   const fresh = extra.filter((f) => !f.unread).map((f) => f.path);
   if (!gone.length || !fresh.length) return [...files, ...extra];
@@ -521,7 +524,7 @@ async function pairRenames(root: string, base: string | null, files: FileDiff[],
     const entries = await git(root, ["ls-files", "-s", "-z", "--", ...literal(gone)]);
     await scratch(["update-index", "-z", "--index-info"], entries);
     await scratch(["add", "-N", "--pathspec-from-file=-", "--pathspec-file-nul"], fresh.map((p) => `${p}\0`).join(""));
-    const out = await scratch(["diff", ...DIFF, "-U3", ...(base ? [base] : []), "--", ...gone, ...fresh]);
+    const out = await scratch(["diff", ...DIFF, ...shape, ...(base ? [base] : []), "--", ...gone, ...fresh]);
     const [wasGone, isFresh] = [new Set(gone), new Set(fresh)];
     const renames = parseDiff(out).filter((f) => f.status === "renamed" && wasGone.has(f.oldPath!) && isFresh.has(f.path));
     if (!renames.length) return [...files, ...extra];
@@ -532,6 +535,15 @@ async function pairRenames(root: string, base: string | null, files: FileDiff[],
   } finally {
     await rm(index, { force: true });
   }
+}
+
+export async function commitChanges(root: string, sha: string): Promise<FileDiff[]> {
+  return parseDiff(await git(root, ["diff-tree", ...DIFF, "--root", "--no-commit-id", "-p", "-U0", sha]));
+}
+
+export async function changesSince(root: string, sha: string, to: "worktree" | string): Promise<FileDiff[]> {
+  const changes = parseDiff(await git(root, [...(await diffCommand(root, sha, to)), "-U0"]));
+  return to === "worktree" ? pairRenames(root, sha, changes, await untracked(root, []), ["-U0"]) : changes;
 }
 
 const hash = (text: string) => createHash("sha1").update(text).digest("base64url");
@@ -555,19 +567,20 @@ function rawBlobs(out: string): Map<string, string> {
   return blobs;
 }
 
-async function markChangedSinceStaged(root: string, files: FileDiff[], filesAreUnstaged: boolean, head: string) {
+async function markChangedSinceStaged(root: string, files: FileDiff[], filesAreUnstaged: boolean, filtered: boolean, head: string) {
+  const everyUnstaged = filesAreUnstaged && !filtered;
   const [cached, cachedStat, unstaged, memoryPath] = await Promise.all([
     git(root, ["diff-index", "--cached", "--ita-invisible-in-index", "--raw", "--no-abbrev", "-z", "-M", head]),
     git(root, ["diff-index", "--cached", "--ita-invisible-in-index", "--numstat", "-z", "-M", head]),
     // --numstat compares contents, so files whose stat info alone is stale don't count.
-    filesAreUnstaged ? "" : git(root, ["diff-files", "--numstat", "-z", "--no-renames"]),
+    everyUnstaged ? "" : git(root, ["diff-files", "--numstat", "-z", "--no-renames"]),
     fixedGit(root, ["rev-parse", "--git-path", "moire-staged"]),
   ]);
   const numstatPaths = unstaged
     .split("\0")
     .filter(Boolean)
     .map((rec) => rec.replace(/^[^\t]*\t[^\t]*\t/, ""));
-  const dirty = new Set([...numstatPaths, ...files.filter((f) => filesAreUnstaged || f.status === "untracked").map((f) => f.path)]);
+  const dirty = new Set([...numstatPaths, ...files.filter((f) => everyUnstaged || f.status === "untracked").map((f) => f.path)]);
   const memory = resolvePath(root, memoryPath!.trim());
   const before: Record<string, string> = await readFile(memory, "utf8")
     .then(JSON.parse)
@@ -590,7 +603,7 @@ async function markChangedSinceStaged(root: string, files: FileDiff[], filesAreU
     else if (filesAreUnstaged && staged.has(f.path)) f.staged = "partial";
   }
   const stagedLines = numstatLines(cachedStat);
-  const left = filesAreUnstaged
+  const left = everyUnstaged
     ? files.reduce((n, f) => n + Math.max(1, f.additions + f.deletions), 0)
     : numstatLines(unstaged) + files.filter((f) => f.status === "untracked").reduce((n, f) => n + Math.max(1, f.additions), 0);
   return {

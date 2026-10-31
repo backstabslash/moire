@@ -1,16 +1,18 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { AgentNotes, NoteRange } from "../../../shared/types";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { AgentNotes, NoteRange, NotesFile } from "../../../shared/types";
 import { noteSpans, type Stop } from "../model/notes";
 import { FileGlyph } from "./FileGlyph";
 import { Key } from "./Key";
 import { Lined } from "./Mark";
 import { Resizer } from "./Resizer";
+import { Screenshots } from "./Screenshots";
 
 export const NOTES_WIDTH = { initial: 330, min: 260, max: 640 };
 
 interface Props {
   width: number;
   onWidth(width: number): void;
+  root: string;
   notes: AgentNotes;
   stops: Stop[];
   stop: number | null;
@@ -20,6 +22,7 @@ interface Props {
   staged: ReadonlyMap<number, "full" | "partial">;
   stagedStops: ReadonlyMap<number, "full" | "partial">;
   uncovered: { path: string; count: number }[];
+  commits?: NotesFile["commits"];
   onStop(index: number): void;
   onStage: ((chapter: number) => void) | null;
   onOpen(path: string): void;
@@ -29,6 +32,7 @@ interface Props {
 export function NotesPanel({
   width,
   onWidth,
+  root,
   notes,
   stops,
   stop,
@@ -38,6 +42,7 @@ export function NotesPanel({
   staged,
   stagedStops,
   uncovered,
+  commits,
   onStop,
   onStage,
   onOpen,
@@ -73,66 +78,76 @@ export function NotesPanel({
             const open = current?.chapter === c;
             const finished = doneChapters.has(c) || staged.get(c) === "full";
             const partly = !finished && staged.get(c) === "partial";
+            const from = chapter.from !== notes.chapters[c - 1]?.from ? chapter.from : undefined;
             return (
-              <li key={c} className={`chapter${open ? " is-current" : ""}${finished ? " is-done" : partly ? " is-partly" : ""}`}>
-                <button className="chapter-head" data-tip={open ? undefined : chapterTip(chapter)} onClick={() => onStop(firstLeft(c))}>
-                  <span className="note-no">{c + 1}</span>
-                  <span className="chapter-title">
-                    <span className="chapter-name">{chapter.title}</span>
-                    {chapter.warn && <span className="note-warn">Check this</span>}
-                  </span>
-                  {open && chapter.text && (
-                    <span className="note-text">
-                      <NoteText text={chapter.text} />
+              <Fragment key={c}>
+                {from && (
+                  <li className="chapter-from" data-tip={from.summary}>
+                    {from.short && <code>{from.short}</code>}
+                    <span>{from.subject}</span>
+                  </li>
+                )}
+                <li className={`chapter${open ? " is-current" : ""}${finished ? " is-done" : partly ? " is-partly" : ""}`}>
+                  <button className="chapter-head" data-tip={open ? undefined : chapterTip(chapter)} onClick={() => onStop(firstLeft(c))}>
+                    <span className="note-no">{c + 1}</span>
+                    <span className="chapter-title">
+                      <span className="chapter-name">{chapter.title}</span>
+                      {chapter.warn && <span className="note-warn">Check this</span>}
                     </span>
-                  )}
-                </button>
-                {open && (
-                  <div className="chapter-body">
-                    <ul className="stops">
-                      {chapter.ranges.map((range, r) => {
-                        const index = first(c) + r;
-                        const mark = stagedStops.get(index);
-                        const tip = mark === "full" ? "Staged" : "Partly staged";
-                        return (
-                          <li key={r}>
-                            <button
-                              className={`stop${index === stop ? " is-current" : ""}${shownPaths.has(range.path) ? "" : " is-elsewhere"}`}
-                              data-tip={
-                                shownPaths.has(range.path)
-                                  ? range.path
-                                  : `${range.path}\n${otherTab ? `Not in this tab. Click to look in ${otherTab}.` : "No changes in this view"}`
-                              }
-                              onClick={() => onStop(index)}
-                            >
-                              <span className="stop-where">
-                                <FileGlyph path={range.path} />
-                                {where(range)}
-                                {mark && (
-                                  <span className="stop-staged" role="img" aria-label={tip} data-tip={tip}>
-                                    <Lined state={mark} />
+                    {open && chapter.text && (
+                      <span className="note-text">
+                        <NoteText text={chapter.text} />
+                      </span>
+                    )}
+                  </button>
+                  {open && (
+                    <div className="chapter-body">
+                      {chapter.screenshots && <Screenshots root={root} shots={chapter.screenshots} />}
+                      <ul className="stops">
+                        {chapter.ranges.map((range, r) => {
+                          const index = first(c) + r;
+                          const mark = stagedStops.get(index);
+                          const tip = mark === "full" ? "Staged" : "Partly staged";
+                          return (
+                            <li key={r}>
+                              <button
+                                className={`stop${index === stop ? " is-current" : ""}${shownPaths.has(range.path) ? "" : " is-elsewhere"}`}
+                                data-tip={
+                                  shownPaths.has(range.path)
+                                    ? range.path
+                                    : `${range.path}\n${otherTab ? `Not in this tab. Click to look in ${otherTab}.` : "No changes in this view"}`
+                                }
+                                onClick={() => onStop(index)}
+                              >
+                                <span className="stop-where">
+                                  <FileGlyph path={range.path} />
+                                  {where(range)}
+                                  {mark && (
+                                    <span className="stop-staged" role="img" aria-label={tip} data-tip={tip}>
+                                      <Lined state={mark} />
+                                    </span>
+                                  )}
+                                  {range.warn && <span className="note-warn">Check this</span>}
+                                </span>
+                                {range.note && (
+                                  <span className="stop-note">
+                                    <NoteText text={range.note} />
                                   </span>
                                 )}
-                                {range.warn && <span className="note-warn">Check this</span>}
-                              </span>
-                              {range.note && (
-                                <span className="stop-note">
-                                  <NoteText text={range.note} />
-                                </span>
-                              )}
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                    {onStage && !doneChapters.has(c) && (
-                      <button className="chapter-stage" onClick={() => onStage(c)}>
-                        Stage this chapter
-                      </button>
-                    )}
-                  </div>
-                )}
-              </li>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      {onStage && !doneChapters.has(c) && (
+                        <button className="chapter-stage" onClick={() => onStage(c)}>
+                          Stage this chapter
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </li>
+              </Fragment>
             );
           })}
         </ol>
@@ -146,6 +161,9 @@ export function NotesPanel({
               </button>
             ))}
           </div>
+        )}
+        {commits && commits.noted < commits.total && (
+          <p className="notes-cover">{`Notes for ${commits.noted} of ${commits.total} ${commits.total === 1 ? "commit" : "commits"}`}</p>
         )}
       </div>
       <div className="notes-foot">

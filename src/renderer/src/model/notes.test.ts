@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { FileDiff } from "../../../shared/types";
 import { chapterFile, chapterHunks, chapterText } from "../../../main/test-repo";
-import { lineKeys, noteClass, noteSpans, rowOfLine, stopsOf } from "./notes";
-import { buildRows } from "./rows";
+import { lineKeys, noteSpans, rowNotes, rowOfLine, stopsOf } from "./notes";
+import { buildRows, type Row } from "./rows";
 
 describe("stopsOf", () => {
   it("lists every range of every chapter in order", () => {
@@ -36,19 +36,33 @@ describe("rows for a range", () => {
   });
 });
 
-describe("noteClass", () => {
+describe("rowNotes", () => {
   const marks = [
-    { chapter: 0, stop: 0, start: 3, end: 8 },
-    { chapter: 1, stop: 1, start: 5, end: 5 },
-    { chapter: 1, stop: 2, start: 7, end: 9 },
+    { chapter: 0, stop: 0, title: "One", start: 3, end: 8 },
+    { chapter: 1, stop: 1, title: "Two", start: 5, end: 5 },
+    { chapter: 1, stop: 2, title: "Two", start: 7, end: 9 },
   ];
-  it("brackets chapter lines and prefers the current stop, then its chapter", () => {
-    expect(noteClass(2, marks, null, null)).toBe("");
-    expect(noteClass(3, marks, null, null)).toBe("noted noted-top");
-    expect(noteClass(5, marks, 1, 1)).toBe("noted in-chapter note-now noted-top noted-bot");
-    expect(noteClass(8, marks, 1, 1)).toBe("noted in-chapter");
-    expect(noteClass(8, marks, 0, 0)).toBe("noted in-chapter note-now noted-bot");
-    expect(noteClass(undefined, marks, 0, 0)).toBe("");
+  const line = (b: number) => ({ t: "uni", kind: "ctx", b }) as Row;
+  const del = { t: "uni", kind: "del" } as Row;
+  const head = { t: "hunk" } as Row;
+  const classes = (rows: Row[], chapter: number | null, stop: number | null) => rowNotes(rows, marks, chapter, stop).map((n) => n?.cls ?? "");
+
+  it("prefers the current stop, then its chapter", () => {
+    const rows = [2, 3, 4, 5, 6].map(line);
+    expect(classes(rows, null, null)).toEqual(["", "noted noted-top", "noted", "noted", "noted noted-bot"]);
+    expect(classes(rows, 1, 1)[3]).toBe("noted in-chapter note-now noted-top noted-bot");
+    expect(classes(rows, 0, 0)[3]).toBe("noted in-chapter note-now");
+  });
+
+  it("carries deleted lines into the range of the line after them", () => {
+    const notes = rowNotes([line(3), del, line(4), del, line(10)], marks, null, null);
+    expect(notes.map((n) => n?.mark.stop ?? null)).toEqual([0, 0, 0, null, null]);
+    expect(notes.map((n) => n?.first ?? false)).toEqual([true, false, false, false, false]);
+  });
+
+  it("numbers each visible piece of a range", () => {
+    const notes = rowNotes([line(3), line(4), head, line(6)], marks, null, null);
+    expect(notes.map((n) => n?.first ?? null)).toEqual([true, false, null, true]);
   });
 });
 

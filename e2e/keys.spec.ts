@@ -21,7 +21,7 @@ test.beforeAll(async () => {
   git("commit", "-qm", "init");
   writeFileSync(join(repo, "a.ts"), edited);
   writeFileSync(join(repo, "b.ts"), body.slice(2).join("\n") + "\n");
-  writeFileSync(join(userData(), "keys.json"), JSON.stringify({ stage: "w", stge: "x" }));
+  writeFileSync(join(userData(), "keys.json"), JSON.stringify({ stage: "y", stge: "x" }));
 
   ({ app, page } = await launch(repo, { prefs: { theme: "light" } }));
   await expect(page.locator(".file")).toHaveCount(2);
@@ -30,10 +30,10 @@ test.beforeAll(async () => {
 
 test("keys.json remaps a key, every label follows, and mistakes are reported", async () => {
   await expect(page.locator(".toast.show")).toHaveText('keys.json: No command is called "stge".');
-  await expect(page.locator(".hunk-head.is-focus .hh-stage kbd")).toHaveText("w");
-  await expect(page.locator(".status .keys button", { hasText: "stage" }).locator("kbd")).toHaveText("w");
+  await expect(page.locator(".hunk-head.is-focus .hh-stage kbd")).toHaveText("y");
+  await expect(page.locator(".status .keys button", { hasText: "stage" }).locator("kbd")).toHaveText("y");
   await page.keyboard.press("s");
-  await page.keyboard.press("w");
+  await page.keyboard.press("y");
   await expect(page.locator(".toast.show")).toContainText("Staged 2 lines in a.ts");
   expect(hunks(git("diff", "--cached"))).toBe(1);
   await page.keyboard.press("Control+z");
@@ -43,9 +43,9 @@ test("keys.json remaps a key, every label follows, and mistakes are reported", a
 
 test("pressing stage while one runs queues it, so three presses stage three hunks", async () => {
   await idle();
-  await page.keyboard.press("w");
-  await page.keyboard.press("w");
-  await page.keyboard.press("w");
+  await page.keyboard.press("y");
+  await page.keyboard.press("y");
+  await page.keyboard.press("y");
   await expect.poll(() => hunks(git("diff", "--cached"))).toBe(3);
   await idle();
   expect(hunks(git("diff", "--", "a.ts"))).toBe(1);
@@ -61,7 +61,7 @@ test("? shows every key, remapped ones included, and closes with ? or Esc", asyn
   await page.keyboard.press("?");
   const help = page.getByRole("dialog", { name: "Keyboard shortcuts" });
   await expect(help).toBeVisible();
-  await expect(help.locator(".keys-row", { has: page.getByText("Stage or unstage", { exact: true }) }).locator("kbd")).toHaveText("w");
+  await expect(help.locator(".keys-row", { has: page.getByText("Stage or unstage", { exact: true }) }).locator("kbd")).toHaveText("y");
   await expect(help.locator(".keys-row", { hasText: "First hunk" }).locator("kbd")).toHaveText("g g");
   await expect(help.locator("h3")).toHaveText(["Navigate", "Review", "Copy", "View"]);
   await shot("keys-help-light");

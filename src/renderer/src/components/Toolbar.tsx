@@ -49,6 +49,8 @@ interface Props {
   codeSize: number;
   onCodeFont(font: string): void;
   onCodeSize(size: number): void;
+  ignoreWhitespace: boolean;
+  onIgnoreWhitespace(on: boolean): void;
   picker: PickerState;
   lastPicked: LastPicked;
   onPicker(picker: PickerState): void;
@@ -151,6 +153,15 @@ export function Toolbar(props: Props) {
                 </button>
               </div>
             </>
+          )}
+          {props.ignoreWhitespace && (
+            <button
+              className="tool-chip"
+              data-tip="Whitespace changes are hidden, and staging is off. Click to show them."
+              onClick={() => props.onIgnoreWhitespace(false)}
+            >
+              Whitespace hidden
+            </button>
           )}
           {props.notes && (
             <div className="seg">
@@ -272,12 +283,20 @@ function PickerPop({ initial, root, mode, lastPicked, onMode, onClose }: PickerP
         <small>A merge base, B the branch</small>
       </button>
       {sub === "commit" && <CommitList root={root} selected={commit?.sha ?? null} onPick={(sha) => pick({ kind: "commit", sha })} />}
-      {sub === "branches" && <BranchForm root={root} last={branches} onPick={(base, head) => pick({ kind: "branches", base, head })} />}
+      {sub === "branches" && (
+        <BranchForm
+          root={root}
+          last={branches}
+          onPick={(base, head) => pick(head === WORKING_TREE ? { kind: "branches", base, head: "HEAD", worktree: true } : { kind: "branches", base, head })}
+        />
+      )}
     </div>
   );
 }
 
 const COMMIT_LIMIT = 1000;
+// A colon can't appear in a ref name, so this never collides with a branch.
+const WORKING_TREE = ":working-tree";
 
 function CommitList({ root, selected, onPick }: { root: string; selected: string | null; onPick(sha: string): void }) {
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
@@ -333,7 +352,7 @@ function CommitList({ root, selected, onPick }: { root: string; selected: string
 function BranchForm({ root, last, onPick }: { root: string; last?: BranchesMode; onPick(base: string, head: string): void }) {
   const [refs, setRefs] = useState<Refs | null>(null);
   const [base, setBase] = useState(last?.base ?? "");
-  const [head, setHead] = useState(last?.head ?? "");
+  const [head, setHead] = useState(last?.worktree ? WORKING_TREE : (last?.head ?? ""));
   useEffect(() => {
     void window.moire.branches(root).then((r) => {
       setRefs(r);
@@ -343,9 +362,10 @@ function BranchForm({ root, last, onPick }: { root: string; last?: BranchesMode;
       setBase((b) => b || r.upstream || main || r.branches.find((n) => n !== head) || head);
     });
   }, [root]);
-  const select = (value: string, onChange: (value: string) => void, label: string, autoFocus = false) => (
+  const select = (value: string, onChange: (value: string) => void, label: string, autoFocus = false, worktree = false) => (
     <select autoFocus={autoFocus} value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}>
-      {refs && !known(refs, value) && value && <option>{value}</option>}
+      {worktree && <option value={WORKING_TREE}>Working tree</option>}
+      {refs && !known(refs, value) && value && value !== WORKING_TREE && <option>{value}</option>}
       {refs?.branches.map((n) => (
         <option key={n}>{n}</option>
       ))}
@@ -371,7 +391,7 @@ function BranchForm({ root, last, onPick }: { root: string; last?: BranchesMode;
         <span className="plate-tag tag-a">A</span>
         {select(base, setBase, "Base branch", true)}
         <span className="plate-tag tag-b">B</span>
-        {select(head, setHead, "Branch to review")}
+        {select(head, setHead, "Branch to review", false, true)}
         <button className="btn" disabled={!base || !head} onClick={() => onPick(base, head)}>
           Compare
         </button>

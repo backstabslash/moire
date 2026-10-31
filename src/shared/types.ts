@@ -1,5 +1,9 @@
 export type CompareMode =
-  { kind: "unstaged" } | { kind: "staged" } | { kind: "all" } | { kind: "commit"; sha: string } | { kind: "branches"; base: string; head: string };
+  | { kind: "unstaged" }
+  | { kind: "staged" }
+  | { kind: "all" }
+  | { kind: "commit"; sha: string }
+  | { kind: "branches"; base: string; head: string; worktree?: boolean };
 
 export interface SideInfo {
   kind: "commit" | "index" | "worktree" | "empty";
@@ -204,6 +208,22 @@ export interface Chapter {
   text: string;
   warn?: boolean;
   ranges: NoteRange[];
+  from?: ChapterSource;
+  screenshots?: Screenshot[];
+}
+
+export interface Screenshot {
+  file: string;
+  caption?: string;
+  version?: number;
+  stale?: boolean;
+  missing?: boolean;
+}
+
+export interface ChapterSource {
+  short?: string;
+  subject: string;
+  summary?: string;
 }
 
 export interface AgentNotes {
@@ -218,4 +238,5 @@ export interface NotesFile {
   notes: AgentNotes | null;
   problem?: string;
   placed?: Placement[][];
+  commits?: { noted: number; total: number };
 }

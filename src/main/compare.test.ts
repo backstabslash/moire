@@ -12,7 +12,8 @@ describe("parseComparison", () => {
   it("reads ranges and single revisions, defaulting to HEAD", () => {
     expect(parseComparison(["main..feature"])).toEqual({ base: "main", head: "feature" });
     expect(parseComparison(["main...feature"])).toEqual({ base: "main", head: "feature" });
-    expect(parseComparison(["HEAD~3"])).toEqual({ base: "HEAD~3", head: "HEAD" });
+    expect(parseComparison(["HEAD~3"])).toEqual({ base: "HEAD~3", head: "HEAD", worktree: true });
+    expect(parseComparison(["HEAD~3.."])).toEqual({ base: "HEAD~3", head: "HEAD" });
     expect(parseComparison(["main.."])).toEqual({ base: "main", head: "HEAD" });
     expect(parseComparison(["..feature"])).toEqual({ base: "HEAD", head: "feature" });
     expect(parseComparison(["pr", "123"])).toEqual({ pr: "123" });
@@ -56,7 +57,7 @@ describe("compareMode", () => {
     const r = seed({ "a.txt": "1\n" }, { "a.txt": "2\n" });
     r.commit("two");
     const mode = await compareMode(r.root, ["HEAD~1"]);
-    expect(mode).toEqual({ kind: "branches", base: "HEAD~1", head: "HEAD" });
+    expect(mode).toEqual({ kind: "branches", base: "HEAD~1", head: "HEAD", worktree: true });
     expect((await diff(r.root, mode)).files.map((f) => f.path)).toEqual(["a.txt"]);
     await expect(compareMode(r.root, ["nope..HEAD"])).rejects.toThrow("Unknown revision: nope");
   });

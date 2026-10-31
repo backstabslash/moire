@@ -1,4 +1,5 @@
 import type { DiffLine, FileContents, FileDiff, Hunk } from "../../../shared/types";
+import { hasInvisible } from "./invisible";
 import { langFor } from "./lang";
 import { LINK, MODULE, modeNote } from "./modes";
 import { gapKey, lineKey } from "./selection";
@@ -335,6 +336,7 @@ function symlinkNote(file: FileDiff): string | null {
 }
 
 function whitespaceOnly(hunk: Hunk, indented: boolean): boolean {
+  if (hunk.lines.some((l) => l.kind === "add" && hasInvisible(l.text))) return false;
   const squash = (kind: "add" | "del") => {
     const texts = hunk.lines.filter((l) => l.kind === kind).map((l) => l.text);
     if (!indented) return dropSpacesExceptBetweenWordsAndInStrings(texts.join("\n"));

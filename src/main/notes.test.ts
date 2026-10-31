@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { notesPath, parseNotes, readNotes } from "./notes";
+import { uncovered } from "../shared/chapters";
+import { diff } from "./git";
+import { notesPath, parseNotes, readNotes, readRangeNotes, screenshotPath } from "./notes";
 import { makeRepo, seed } from "./test-repo";
 
 describe("parseNotes", () => {
@@ -48,7 +50,16 @@ describe("parseNotes", () => {
       }),
     );
     expect(notes?.chapters).toEqual([{ title: "Ok", text: "", ranges: [{ path: "a.ts" }, { path: "b.ts" }] }]);
-    expect(problem).toBe("Skipped 2 chapters without a title or any ranges");
+    expect(problem).toBe("Skipped 2 chapters without a title or any ranges in notes.json");
+  });
+
+  it("keeps a chapter's screenshots, from names or objects", () => {
+    const { notes } = parseNotes(
+      JSON.stringify({
+        chapters: [{ title: "A", ranges: ["a.ts"], screenshots: ["a.png", { file: "b.png", caption: " Dark. " }, { caption: "no file" }, 3] }],
+      }),
+    );
+    expect(notes?.chapters[0].screenshots).toEqual([{ file: "a.png" }, { file: "b.png", caption: "Dark." }]);
   });
 
   it("reports broken files", () => {
@@ -232,10 +243,255 @@ describe("readNotes", () => {
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ extra: 1, chapters: [{ text: "no title yet", ranges: ["b.ts"] }] });
   });
 
+  describe("screenshots", () => {
+    const save = async (r: ReturnType<typeof makeRepo>, file: string, age = 0) => {
+      const path = (await screenshotPath(r.root, file))!;
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "png");
+      const at = new Date(Date.now() - age);
+      utimesSync(path, at, at);
+    };
+    const repo = () => {
+      const r = makeRepo();
+      r.write("a.ts", "one\n");
+      r.commit("base");
+      r.write("a.ts", "two\n");
+      return r;
+    };
+    const notesWith = async (r: ReturnType<typeof makeRepo>, screenshots: unknown[]) => {
+      mkdirSync(dirname(await notesPath(r.root)), { recursive: true });
+      writeFileSync(await notesPath(r.root), JSON.stringify({ chapters: [{ title: "A", ranges: ["a.ts"], screenshots }] }));
+      return (await readNotes(r.root)).notes!.chapters[0].screenshots!;
+    };
+
+    it("stamps a saved image, and flags one the code has moved past or that's missing", async () => {
+      const r = repo();
+      await save(r, "new.png");
+      await save(r, "old.png", 60_000);
+      const [fresh, old, gone] = await notesWith(r, ["new.png", "old.png", "gone.png"]);
+      expect(fresh.version).toBeGreaterThan(0);
+      expect(fresh.stale).toBeUndefined();
+      expect(old.stale).toBe(true);
+      expect(gone).toEqual({ file: "gone.png", missing: true });
+    });
+
+    it("refuses names that aren't plain images in the media folder", async () => {
+      const r = repo();
+      for (const name of ["../notes.json", "../x.png", "a/b.png", ".hidden.png", "a.txt", "/etc/x.png"]) expect(await screenshotPath(r.root, name)).toBeNull();
+    });
+  });
+
+  it("gives a moved chapter its commit's line numbers, and the work tree's back on reset", async () => {
+    const r = makeRepo();
+    const text = (lines: string[]) => lines.join("\n") + "\n";
+    const code = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
+    r.write("a.ts", text(code));
+    r.commit("base");
+    await readNotes(r.root);
+    const edited = code.map((l, i) => (i === 29 ? "changed" : l));
+    r.write("a.ts", text(edited));
+    r.git("add", "a.ts");
+    r.write("a.ts", text(["n1", "n2", "n3", "n4", "n5", ...edited]));
+    writeFileSync(await notesPath(r.root), JSON.stringify({ chapters: [{ title: "A", text: "", ranges: [{ path: "a.ts", lines: [35, 35] }] }] }));
+    r.git("commit", "-qm", "only the edit");
+    const { notes } = await readNotes(r.root, "HEAD");
+    expect(notes?.chapters[0].ranges[0].lines).toEqual([30, 30]);
+
+    r.git("reset", "-q", "--soft", "HEAD~1");
+    expect((await readNotes(r.root)).notes?.chapters[0].ranges[0].lines).toEqual([35, 35]);
+  });
+
   it("places ranges in the work tree", async () => {
     const { r, write } = await setup(["a.ts"]);
     r.write("a.ts", "new\none\nadded\n");
     write({ chapters: [{ title: "A", ranges: [{ path: "a.ts", lines: [2, 2], code: "added" }, "a.ts", { path: "../x", lines: [1, 1] }] }] });
     expect((await readNotes(r.root)).placed).toEqual([[{ start: 3, end: 3 }, "all", { start: 1, end: 1 }]]);
+  });
+});
+
+describe("readRangeNotes", () => {
+  const commitNotes = (r: ReturnType<typeof makeRepo>, sha: string, notes: unknown) => {
+    const path = join(r.root, ".git", "moire", "commits", `${sha}.json`);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(notes));
+  };
+  const numbered = (n: number, edit: Record<number, string> = {}) => Array.from({ length: n }, (_, i) => edit[i + 1] ?? `line ${i + 1}`).join("\n") + "\n";
+  const branch = (r: ReturnType<typeof makeRepo>) => {
+    r.write("a.ts", numbered(30));
+    r.commit("base");
+    r.git("checkout", "-q", "-b", "feature");
+  };
+  const range = { kind: "branches", base: "main", head: "feature" } as const;
+  const chapter = (title: string, ranges: unknown[]) => ({ title, text: "", ranges });
+
+  it("stitches chapters from each commit in order and counts the commits without notes", async () => {
+    const r = makeRepo();
+    branch(r);
+    r.write("a.ts", numbered(30, { 5: "first" }));
+    r.commit("one");
+    commitNotes(r, r.git("rev-parse", "HEAD"), { summary: "One", chapters: [chapter("First", [{ path: "a.ts", lines: [5, 5] }])] });
+    r.write("a.ts", numbered(30, { 5: "first", 10: "unexplained" }));
+    r.commit("two");
+    r.write("b.ts", "new\n");
+    r.commit("three");
+    commitNotes(r, r.git("rev-parse", "HEAD"), { summary: "Three", chapters: [chapter("Third", ["b.ts"])] });
+
+    const file = await readRangeNotes(r.root, range);
+    expect(file.notes?.chapters.map((c) => c.title)).toEqual(["First", "Third"]);
+    expect(file.notes?.chapters.map((c) => c.from?.subject)).toEqual(["one", "three"]);
+    expect(file.notes?.summary).toBeUndefined();
+    expect(file.commits).toEqual({ noted: 2, total: 3 });
+  });
+
+  it("moves line ranges past lines added by later commits", async () => {
+    const r = makeRepo();
+    branch(r);
+    r.write("a.ts", numbered(30, { 20: "chapter line" }));
+    r.commit("one");
+    commitNotes(r, r.git("rev-parse", "HEAD"), { chapters: [chapter("Line", [{ path: "a.ts", lines: [20, 20], code: "chapter line" }])] });
+    r.write("a.ts", "added\nadded\n" + numbered(30, { 20: "chapter line" }));
+    r.commit("two");
+
+    const file = await readRangeNotes(r.root, range);
+    expect(file.notes?.chapters[0].ranges[0]).toEqual({ path: "a.ts", lines: [22, 22] });
+    expect(file.placed).toEqual([[{ start: 22, end: 22 }]]);
+  });
+
+  it("drops chapters a later commit undid and follows renames", async () => {
+    const r = makeRepo();
+    branch(r);
+    r.write("a.ts", numbered(30, { 5: "kept" }));
+    r.write("gone.ts", "temporary\n");
+    r.commit("one");
+    commitNotes(r, r.git("rev-parse", "HEAD"), {
+      chapters: [chapter("Kept", [{ path: "a.ts", lines: [5, 5] }]), chapter("Undone", ["gone.ts"])],
+    });
+    r.git("mv", "a.ts", "renamed.ts");
+    r.git("rm", "-q", "gone.ts");
+    r.commit("two");
+
+    const file = await readRangeNotes(r.root, range);
+    expect(file.notes?.chapters.map((c) => c.title)).toEqual(["Kept"]);
+    expect(file.notes?.chapters[0].ranges[0].path).toBe("renamed.ts");
+  });
+
+  const unexplained = async (r: ReturnType<typeof makeRepo>, mode: Parameters<typeof readRangeNotes>[1]) => {
+    const { notes, placed } = await readRangeNotes(r.root, mode);
+    return uncovered((await diff(r.root, mode)).files, notes ?? { chapters: [] }, placed);
+  };
+
+  it("doesn't let a whole-file range cover the file once that commit's lines are gone", async () => {
+    const r = makeRepo();
+    branch(r);
+    r.write("a.ts", numbered(30).replace("line 5\n", "line 5\nchapter line\n"));
+    r.commit("one");
+    commitNotes(r, r.git("rev-parse", "HEAD"), { chapters: [chapter("Whole file", ["a.ts"])] });
+    r.write("a.ts", numbered(30, { 25: "stray" }));
+    r.commit("two");
+
+    expect(await unexplained(r, range)).toEqual([{ path: "a.ts", count: 2 }]);
+  });
+
+  it("finds a whole-file range's lines in the earlier commit that made them", async () => {
+    const r = makeRepo();
+    branch(r);
+    r.write("a.ts", numbered(30, { 5: "explained" }));
+    r.commit("one");
+    r.write("b.ts", "new\n");
+    r.commit("two");
+    commitNotes(r, r.git("rev-parse", "HEAD"), { chapters: [chapter("Two files", ["a.ts", "b.ts"])] });
+    expect(await unexplained(r, range)).toEqual([]);
+
+    r.write("a.ts", numbered(30, { 5: "explained", 25: "stray" }));
+    r.commit("three");
+    const { notes } = await readRangeNotes(r.root, range);
+    expect(notes?.chapters[0].ranges).toEqual([{ path: "a.ts", lines: [5, 5] }, { path: "b.ts" }]);
+    expect(await unexplained(r, range)).toEqual([{ path: "a.ts", count: 2 }]);
+  });
+
+  it("keeps a whole-file range on a change with no lines, until later lines arrive", async () => {
+    const r = makeRepo();
+    branch(r);
+    r.git("mv", "a.ts", "b.ts");
+    r.commit("moved");
+    commitNotes(r, r.git("rev-parse", "HEAD"), { chapters: [chapter("Moved", ["b.ts"])] });
+    expect((await readRangeNotes(r.root, range)).notes?.chapters[0].ranges).toEqual([{ path: "b.ts" }]);
+
+    r.write("b.ts", numbered(30, { 25: "stray" }));
+    r.commit("stray");
+    expect(await unexplained(r, range)).toEqual([{ path: "b.ts", count: 2 }]);
+  });
+
+  it("limits an uncommitted whole-file range to the uncommitted lines", async () => {
+    const r = makeRepo();
+    branch(r);
+    r.write("a.ts", numbered(30, { 25: "committed, no notes" }));
+    r.commit("one");
+    r.write("a.ts", numbered(30, { 5: "uncommitted", 25: "committed, no notes" }));
+    const notes = await notesPath(r.root);
+    mkdirSync(dirname(notes), { recursive: true });
+    writeFileSync(notes, JSON.stringify({ chapters: [chapter("Working", ["a.ts"]), chapter("Elsewhere", ["clean.ts"])] }));
+
+    const mode = { ...range, head: "HEAD", worktree: true } as const;
+    const file = await readRangeNotes(r.root, mode);
+    expect(file.notes?.chapters.map((c) => c.ranges)).toEqual([[{ path: "a.ts", lines: [5, 5] }]]);
+    expect(await unexplained(r, mode)).toEqual([{ path: "a.ts", count: 2 }]);
+  });
+
+  it("reports notes it can't read instead of showing none", async () => {
+    const r = makeRepo();
+    branch(r);
+    r.write("a.ts", numbered(30, { 5: "changed" }));
+    const sha = r.commit("one");
+    commitNotes(r, sha, {});
+    writeFileSync(join(r.root, ".git", "moire", "commits", `${sha}.json`), "{ nope");
+    expect((await readRangeNotes(r.root, range)).problem).toContain(`${sha}.json isn't valid JSON`);
+
+    const notes = await notesPath(r.root);
+    writeFileSync(notes, "{ nope");
+    expect((await readRangeNotes(r.root, { ...range, head: "HEAD", worktree: true })).problem).toContain("notes.json isn't valid JSON");
+  });
+
+  it("reports chapters it skipped alongside the ones it shows", async () => {
+    const r = makeRepo();
+    branch(r);
+    r.write("a.ts", numbered(30, { 5: "changed" }));
+    const sha = r.commit("one");
+    commitNotes(r, sha, { chapters: [chapter("Kept", ["a.ts"]), { title: "No ranges" }] });
+
+    const file = await readRangeNotes(r.root, range);
+    expect(file.notes?.chapters.map((c) => c.title)).toEqual(["Kept"]);
+    expect(file.problem).toBe(`Skipped 1 chapter without a title or any ranges in ${sha}.json`);
+  });
+
+  it("follows a file moved without git add", async () => {
+    const r = makeRepo();
+    branch(r);
+    r.write("a.ts", numbered(30, { 5: "changed" }));
+    commitNotes(r, r.commit("one"), { chapters: [chapter("Moved", [{ path: "a.ts", lines: [5, 5] }])] });
+    r.git("mv", "a.ts", "b.ts");
+    r.git("reset", "-q");
+    const { notes } = await readRangeNotes(r.root, { ...range, head: "HEAD", worktree: true });
+    expect(notes?.chapters[0].ranges).toEqual([{ path: "b.ts", lines: [5, 5] }]);
+  });
+
+  it("adds the uncommitted chapters when the comparison reaches the working tree", async () => {
+    const r = makeRepo();
+    r.write("a.ts", numbered(30));
+    r.commit("base");
+    r.write("a.ts", numbered(30, { 5: "committed" }));
+    r.commit("one");
+    commitNotes(r, r.git("rev-parse", "HEAD"), { chapters: [chapter("Committed", [{ path: "a.ts", lines: [5, 5] }])] });
+    r.write("a.ts", "new top\n" + numbered(30, { 5: "committed", 20: "uncommitted" }));
+    const notes = await notesPath(r.root);
+    mkdirSync(dirname(notes), { recursive: true });
+    writeFileSync(notes, JSON.stringify({ chapters: [chapter("Working", [{ path: "a.ts", lines: [21, 21] }])] }));
+
+    const file = await readRangeNotes(r.root, { kind: "branches", base: "HEAD~1", head: "HEAD", worktree: true });
+    expect(file.notes?.chapters.map((c) => [c.title, c.from?.subject])).toEqual([
+      ["Committed", "one"],
+      ["Working", "Uncommitted"],
+    ]);
+    expect(file.notes?.chapters[0].ranges[0].lines).toEqual([6, 6]);
   });
 });

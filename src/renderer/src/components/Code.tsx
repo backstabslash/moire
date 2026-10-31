@@ -1,4 +1,5 @@
 import type { Tok } from "../highlight/types";
+import { codePoint, invisibleName, MARKED } from "../model/invisible";
 import { type Swatch, swatches } from "../model/swatch";
 import type { Range } from "../model/words";
 
@@ -10,25 +11,18 @@ interface Piece {
   wbr?: boolean;
   join?: boolean;
   swatch?: string;
+  marked?: boolean;
+  trailing?: boolean;
 }
 
 const ITALIC = 1;
 const BOLD = 2;
 const NARROWEST_PANE_CHARS = 40;
-const TAB_WIDTH = 4;
 const BREAK_AFTER = /[,(=/]|(?<!\d)\.(?!\d)/g;
 const WORD_JOINER = "\u2060";
 
 function indentOf(text: string): number {
   return text.length - text.trimStart().length;
-}
-
-export function hangingIndent(text: string): React.CSSProperties | undefined {
-  const indent = indentOf(text);
-  if (text.length <= NARROWEST_PANE_CHARS || !indent) return undefined;
-  let cols = 0;
-  for (const ch of text.slice(0, indent)) cols += ch === "\t" ? TAB_WIDTH : 1;
-  return { paddingLeft: `calc(8px + ${cols + 2}ch)`, textIndent: `-${cols + 2}ch` };
 }
 
 export function withoutJoins(text: string): string {
@@ -63,13 +57,15 @@ interface CodeProps {
   hits?: Range[];
   current?: number;
   styles?: boolean;
+  changed?: boolean;
 }
 
-export function Code({ text, tokens, words, mark, hits, current, styles }: CodeProps) {
+export function Code({ text, tokens, words, mark, hits, current, styles, changed }: CodeProps) {
   if (!text) return "​";
   let pieces: Piece[] = tokens && tokensMatch(tokens, text) ? tokens.map(([t, color, fontStyle]) => ({ text: t, color, fontStyle })) : [{ text, fontStyle: 0 }];
   if (text.length > NARROWEST_PANE_CHARS) pieces = splitAtWrapPoints(pieces, text);
   pieces = withSwatches(pieces, swatches(text, !!styles));
+  if (changed) pieces = withMarks(pieces, text.trimEnd().length);
   if (hits?.length) pieces = splitAt(pieces, hits, (_, i) => i + 1);
   const isCurrent = (hit: number) => hits?.[hit - 1]?.[0] === current;
   if (!words?.length) return withHits(pieces, isCurrent);
@@ -103,6 +99,20 @@ export function Code({ text, tokens, words, mark, hits, current, styles }: CodeP
   }
   flush();
   return out;
+}
+
+function withMarks(pieces: Piece[], codeEnd: number): Piece[] {
+  let pos = 0;
+  return pieces.flatMap((piece): Piece[] => {
+    const cut = codeEnd - pos;
+    pos += piece.text.length;
+    if (cut >= piece.text.length) return [{ ...piece, marked: true }];
+    if (cut <= 0) return [{ ...piece, marked: true, trailing: true }];
+    return [
+      { ...piece, marked: true, text: piece.text.slice(0, cut) },
+      { ...piece, marked: true, trailing: true, text: piece.text.slice(cut), wbr: false, join: false, swatch: undefined },
+    ];
+  });
 }
 
 function withSwatches(pieces: Piece[], spots: Swatch[]): Piece[] {
@@ -177,23 +187,37 @@ function withHits(pieces: Piece[], isCurrent: (hit: number) => boolean) {
 
 const BIDI = /([\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069])/;
 
-function showBidi(text: string): React.ReactNode {
-  if (!BIDI.test(text)) return text;
+function showBidi(text: string, marked?: boolean): React.ReactNode {
+  if (!BIDI.test(text)) return marked ? showHidden(text) : text;
   return text.split(BIDI).map((s, i) =>
     i % 2 ? (
-      <span key={i} className="bidi" data-tip={`U+${s.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`}>
+      <span key={i} className="bidi" data-tip={codePoint(s)}>
         ⇄
       </span>
+    ) : marked ? (
+      <span key={i}>{showHidden(s)}</span>
     ) : (
       s
     ),
   );
 }
 
+// The real character stays in the text and the label is CSS, so copying a line gives back what's in the file.
+function showHidden(text: string): React.ReactNode {
+  if (!MARKED.test(text)) return text;
+  return text.split(MARKED).map((s, i) => {
+    if (!(i % 2)) return s;
+    if (s === "\t") return <span key={i} className="ws-tab" children={s} />;
+    return <span key={i} className="invisible-char" data-name={invisibleName(s)} data-tip={codePoint(s)} children={s} />;
+  });
+}
+
 function renderPiece(p: Piece, key: number): React.ReactNode {
   if (p.wbr) return [<wbr key={`w${key}`} />, renderPiece({ ...p, wbr: false }, key)];
   if (p.swatch) return [<i key={`s${key}`} className="swatch" style={{ background: p.swatch }} />, renderPiece({ ...p, swatch: undefined }, key)];
-  const text = showBidi(p.join ? WORD_JOINER + p.text : p.text);
+  const shown = showBidi(p.text, p.marked);
+  const joined = p.join ? (typeof shown === "string" ? WORD_JOINER + shown : [WORD_JOINER, shown]) : shown;
+  const text = p.trailing ? <span className="ws-trail">{joined}</span> : joined;
   if (!p.color && !p.fontStyle) return typeof text === "string" ? text : <span key={key}>{text}</span>;
   const style: React.CSSProperties = { color: p.color || undefined };
   if (p.fontStyle & BOLD) style.fontWeight = 700;

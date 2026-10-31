@@ -55,6 +55,7 @@ export const COMMANDS = {
   branches: { keys: ["5"], label: "Branch vs branch…", group: "View" },
   layout: { keys: ["v"], label: "Split or unified", group: "View" },
   fullFile: { keys: ["f"], label: "Full file", group: "View" },
+  ignoreWhitespace: { keys: ["w"], label: "Ignore whitespace", group: "View" },
   notes: { keys: ["I"], label: "Agent notes", group: "View" },
   preview: { keys: ["m"], label: "Preview or diff", group: "View" },
   theme: { keys: ["t"], label: "Light or dark theme", group: "View" },

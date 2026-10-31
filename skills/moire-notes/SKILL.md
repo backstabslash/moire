@@ -1,6 +1,6 @@
 ---
 name: moire-notes
-description: Write moire notes, chapters that walk a reviewer through your uncommitted changes beside the diff in moire. Use after making code changes in a git repo the user reviews in moire, before handing back, or when asked to write or update moire notes or chapters.
+description: Write moire notes, chapters that walk a reviewer through your changes beside the diff in moire. Use after making code changes in a git repo the user reviews in moire, before committing or handing back, or when asked to write or update moire notes or chapters.
 ---
 
 # moire notes
@@ -9,7 +9,9 @@ Notes walk a reviewer through a change you made, as a few chapters. Each chapter
 
 ## When
 
-Write notes when you've finished a change, before handing back to the user. Skip them if nothing is left uncommitted.
+Write notes when you've finished a change, before you commit it and before handing back to the user. If you commit as you go, write them before each commit: moire moves finished chapters onto the commit that lands them, and a branch review stitches those back together in commit order.
+
+If you've already committed without notes, write them for that commit instead, see "Notes for a commit you've already made". Skip this only for commits you didn't make.
 
 ## File
 
@@ -47,6 +49,33 @@ The file tells the story of everything uncommitted, not just your last task. If 
 - `note` pins a sentence to just those lines, for the one thing a reader wouldn't guess. Most ranges have none.
 - `warn` marks something the reviewer must check themselves. Use it once or twice per change at most.
 
+## Screenshots
+
+When a chapter changes what someone sees, show it instead of describing it. Save images in the media folder, then list them on the chapter:
+
+```sh
+echo "$(git rev-parse --git-common-dir)/moire/media"
+```
+
+```json
+{ "title": "Empty state", "text": "...", "ranges": ["src/Empty.tsx"], "screenshots": [{ "file": "empty-dark.png", "caption": "No repo open, dark theme" }] }
+```
+
+- `file` is a bare name, PNG, JPEG, GIF or WebP, with no folders. Pick a name that's unique across chapters, since the folder is shared.
+- Take them from the real app, after your last edit to that chapter's files. moire flags a screenshot as out of date when one of those files changes later.
+- `caption` says what to look at, in one line. Most chapters need no screenshots, and the ones that do need one or two.
+- Screenshots stay on this machine and don't travel with a push. Don't capture secrets or personal data.
+
+## Notes for a commit you've already made
+
+The format is the same, but the file is per commit and the line numbers are that commit's:
+
+```sh
+echo "$(git rev-parse --git-common-dir)/moire/commits/$(git rev-parse HEAD).json"
+```
+
+Create the `commits` folder if it's missing. Use the full commit hash of the commit you're describing, which isn't always `HEAD`. If that file exists, read it first and add to it.
+
 ## Writing them
 
 - Split by behaviour, not by file or function: "retrying failed requests", "showing the error to the user". One chapter usually touches several files.
@@ -55,7 +84,7 @@ The file tells the story of everything uncommitted, not just your last task. If 
 - Three to seven chapters for a typical change. Imports, renames and formatting go in the chapter that uses them, not a chapter of their own.
 - Name things: the function, the value, the number. Skip "ensure", "handle", "robust", "improve", "clean" and other words that fit any code.
 - The summary is one or two sentences: what changed and why, as you'd tell a colleague.
-- Warn about weakened tests, behaviour changes nobody asked for, guesses about data you didn't check, and anything risky to run.
+- Warn about weakened tests, turned-off lint or type checks, hardcoded credentials, behaviour changes nobody asked for, guesses about data you didn't check, and anything risky to run. moire doesn't check for these itself, so your warning is the only one the reviewer gets.
 
 | Instead of | Write |
 | --- | --- |

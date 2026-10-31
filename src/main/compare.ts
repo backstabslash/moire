@@ -1,7 +1,7 @@
 import type { CompareMode } from "../shared/types";
 import { gh, git, gitError, gitFetch, sides } from "./git";
 
-export type Comparison = { base: string; head: string } | { pr: string };
+export type Comparison = { base: string; head: string; worktree?: boolean } | { pr: string };
 
 interface PrView {
   baseRefName: string;
@@ -16,6 +16,7 @@ export function parseComparison(args: string[]): Comparison {
   if (args[0] === "pr" && args.length === 2 && /^\d+$/.test(args[1])) return { pr: args[1] };
   const parts = args[0].split(/\.{2,3}/);
   if (args.length > 1 || parts.length > 2) throw new Error(`Can't compare "${args.join(" ")}". Try main..feature, HEAD~3 or pr 123.`);
+  if (parts.length === 1) return { base: parts[0], head: "HEAD", worktree: true };
   return { base: parts[0] || "HEAD", head: parts[1] || "HEAD" };
 }
 

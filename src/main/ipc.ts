@@ -28,7 +28,7 @@ import { chooseEditor, installedEditors, openInEditor } from "./editor";
 import { clipboardFiles, dragOut, pickFiles } from "./filesin";
 import { editKeys, loadKeys } from "./keys";
 import { buildMenu, reportIssue } from "./menu";
-import { readNotes } from "./notes";
+import { readNotes, readRangeNotes } from "./notes";
 import { type LaunchRequest, usableCwd } from "./launch";
 import { openWithDefault, revealFile } from "./open";
 import { allowPreviews } from "./preview";
@@ -177,7 +177,7 @@ export function registerIpc(): void {
   ipcMain.handle("app:report-issue", () => reportIssue());
   ipcMain.handle("app:version", () => app.getVersion());
   ipcMain.handle("clipboard:write", (_e, text: string) => clipboard.writeText(text));
-  ipcMain.handle("git:diff", (_e, root: string, mode: CompareMode) => diff(root, mode));
+  ipcMain.handle("git:diff", (_e, root: string, mode: CompareMode, ignoreWhitespace?: boolean) => diff(root, mode, [], ignoreWhitespace));
   ipcMain.handle("git:file", (_e, root: string, mode: CompareMode, file: Pick<FileDiff, "path" | "oldPath" | "status">) => fileContents(root, mode, file));
   ipcMain.handle("git:files", (_e, root: string, mode: CompareMode, files: Pick<FileDiff, "path" | "oldPath" | "status">[]) => manyContents(root, mode, files));
   ipcMain.handle("git:sizes", (_e, root: string, mode: CompareMode, file: Pick<FileDiff, "path" | "oldPath" | "status">) => blobSizes(root, mode, file));
@@ -204,6 +204,10 @@ export function registerIpc(): void {
   ipcMain.handle("git:drop-discarded", gitOnly(dropDiscarded));
   ipcMain.handle("git:commit", gitOnly(commit));
   ipcMain.handle("notes:get", (_e, root: string, commit?: string) => (isFolder(root) ? { path: "", notes: null } : readNotes(root, commit)));
+  ipcMain.handle(
+    "notes:range",
+    gitOnly((root, mode: Extract<CompareMode, { kind: "branches" }>) => readRangeNotes(root, mode)),
+  );
   ipcMain.handle("editor:open", (_e, root: string, path: string, line: number) => openInEditor(root, path, line, loadState().editor));
   ipcMain.handle("editor:list", () => installedEditors());
   ipcMain.handle("editor:choose", (_e, template: string) => {

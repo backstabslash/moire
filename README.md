@@ -19,7 +19,7 @@ Moire is a desktop diff viewer for reviewing what a coding agent changed. The ag
 
 ### Read the agent's notes
 
-The agent writes a short summary and a few chapters, each one behaviour of the change with the lines that make it up, across files. Press `.` to walk them in order while the diff follows. Risky lines carry a "Check this" note, and lines no chapter explains are listed, so a stray edit can't hide. Install the skill once and your agent writes the notes after every change:
+The agent writes a short summary and a few chapters, each one behaviour of the change with the lines that make it up, across files. Press `.` to walk them in order while the diff follows. Risky lines carry a "Check this" note, and lines no chapter explains are listed, so a stray edit can't hide. Chapters stay with their commits, so comparing a branch or a pull request stitches them back together in commit order. Install the skill once and your agent writes the notes after every change:
 
 ```sh
 npx skills add backstabslash/moire -g
@@ -36,10 +36,12 @@ It works with Claude Code, Codex, Cursor and other agents that read skills.
 
 ### And a fast diff viewer
 
-- Side-by-side or unified, with syntax highlighting: unstaged, staged, everything since the last commit, a single commit, or one branch against another
+- Side-by-side or unified, with syntax highlighting: unstaged, staged, everything since the last commit, a single commit, or one branch against another or against your working tree
 - Updates by itself as files change
 - Changed tests sit right under their code, so you read them together
-- Search across every changed file; lockfiles, generated files and whitespace-only changes are folded away
+- Search across every changed file; lockfiles, generated files and whitespace-only changes are folded away, or hide whitespace changes everywhere
+- Agents can attach screenshots to a chapter, shown right beside the code they prove
+- Changed lines show tabs, trailing spaces and invisible characters like a no-break space, which a plain diff hides
 - Changed images shown old and new; Markdown and SVG can be previewed rendered, with changed blocks marked
 - Keyboard-first, with keys you can remap, a command palette, and six light and dark themes that can follow your desktop
 
@@ -62,7 +64,8 @@ Or download from [Releases](https://github.com/backstabslash/moire/releases):
 moire                 # the repo in the current folder, else the last one
 moire path/to/repo
 moire main..feature   # what feature adds since it left main
-moire HEAD~3          # the last three commits together
+moire HEAD~3          # the last three commits plus uncommitted work
+moire HEAD~3..        # the last three commits, stopping at HEAD
 moire pr 123          # a pull request against its base, fetched with gh
 ```
 
@@ -96,6 +99,7 @@ A path can come first, as in `moire path/to/repo main..feature`. `moire` returns
 | `o` | Recent repos and the repo's other worktrees |
 | `Ctrl+O` | Open a repository |
 | `f` | Show full files |
+| `w` | Ignore whitespace (turns staging off until you show it again) |
 | `v` | Split or unified layout |
 | `m` | Preview a Markdown or SVG file, or go back to its diff |
 | `t` | Light or dark theme |

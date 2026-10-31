@@ -329,6 +329,10 @@ describe("noise folding", () => {
     expect(folded(["x = 1  ", "y = 2"], ["x = 1", "", "y = 2"], "a.py")).toBe(true);
   });
 
+  it("doesn't fold a space swapped for an invisible character", () => {
+    expect(folded(["const a = 1;"], ["const a\u00A0= 1;"])).toBe(false);
+  });
+
   it("counts whitespace inside string literals", () => {
     expect(folded(['s.split(" ")'], ['s.split("")'])).toBe(false);
     expect(folded(["xs.join(', ')"], ["xs.join(',')"])).toBe(false);

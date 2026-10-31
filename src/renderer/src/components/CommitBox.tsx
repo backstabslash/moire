@@ -6,6 +6,7 @@ interface Props {
   message: string;
   busy: boolean;
   staged: number;
+  blocked: string | null;
   unstageLabel: string;
   error: string | null;
   onMessage(message: string): void;
@@ -15,8 +16,21 @@ interface Props {
   onDismissError(): void;
 }
 
-export function CommitBox({ inputRef, message, busy, staged, unstageLabel, error, onMessage, onCommit, onUnstageAll, onCopyError, onDismissError }: Props) {
-  const ready = !busy && message.trim() !== "";
+export function CommitBox({
+  inputRef,
+  message,
+  busy,
+  staged,
+  blocked,
+  unstageLabel,
+  error,
+  onMessage,
+  onCommit,
+  onUnstageAll,
+  onCopyError,
+  onDismissError,
+}: Props) {
+  const ready = !busy && !blocked && message.trim() !== "";
   return (
     <div className="commit-box">
       {staged > 0 && (
@@ -52,6 +66,7 @@ export function CommitBox({ inputRef, message, busy, staged, unstageLabel, error
           }
         }}
       />
+      {blocked && <p className="commit-blocked">{blocked}</p>}
       <button className="btn" disabled={!ready} onClick={onCommit}>
         Commit
         <kbd>{window.moire.platform === "darwin" ? "⌘↵" : "Ctrl+Enter"}</kbd>

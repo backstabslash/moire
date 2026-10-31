@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, png } from "./harness";
 
 const { git, idle, initRepo, launch, open, shot } = harness();
 let repo: string;
@@ -59,23 +59,23 @@ test(". steps through each chapter's ranges across files", async () => {
   await expect(page.locator(".file.is-active .name")).toHaveText("b.ts");
   await expect(panel.locator(".chapter.is-current .stop-where")).toHaveText(["b.ts:26", "a.ts:4Check this"]);
   await expect(panel.locator(".stop.is-current .stop-note")).toHaveText("Read once at startup, so changing it needs a restart.");
-  await expect(page.locator(".row.note-now .ln.b")).toHaveText("26");
+  await expect(page.locator(".row.note-now .ln.b:not(.del)")).toHaveText("26");
 
   await page.keyboard.press(".");
   await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
-  await expect(page.locator(".row.note-now .ln.b")).toHaveText("4");
+  await expect(page.locator(".row.note-now .ln.b:not(.del)")).toHaveText("4");
   await shot("notes-light");
 
   await page.keyboard.press(".");
   await expect(panel.locator(".chapter.is-current .chapter-title")).toHaveText("Callers");
-  await expect(page.locator(".row.note-now .ln.b")).toHaveText(["40", "41", "42"]);
+  await expect(page.locator(".row.note-now .ln.b:not(.del)")).toHaveText(["40", "41", "42"]);
   await expect(page.locator(".row.note-now").first()).toBeInViewport();
   await page.keyboard.press(".");
   await expect(page.locator(".toast")).toContainText("That was the last chapter");
 
   await page.keyboard.press("t");
   await page.keyboard.press(",");
-  await expect(page.locator(".row.note-now .ln.b")).toHaveText("4");
+  await expect(page.locator(".row.note-now .ln.b:not(.del)")).toHaveText("4");
   await shot("notes-dark");
   await page.keyboard.press("t");
 });
@@ -83,7 +83,7 @@ test(". steps through each chapter's ranges across files", async () => {
 test("ranges follow their code and reload when the agent rewrites notes", async () => {
   writeFileSync(join(repo, "a.ts"), ["// header", "// more", ...edit(3, 40)].join("\n") + "\n");
   await page.locator(".chapter-head").nth(1).click();
-  await expect(page.locator(".row.note-now .ln.b")).toHaveText(["42", "43", "44"]);
+  await expect(page.locator(".row.note-now .ln.b:not(.del)")).toHaveText(["42", "43", "44"]);
 
   writeNotes({ chapters: [NOTES.chapters[0]] });
   await expect(page.locator(".chapter")).toHaveCount(1);
@@ -159,7 +159,7 @@ test("staging a chapter's hunk moves on to the next range, and other hunks leave
   await page.keyboard.press("s");
   await expect(stop).toContainText("a.ts:4");
   await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
-  await expect(page.locator(".row.note-now .ln.b")).toHaveText("4");
+  await expect(page.locator(".row.note-now .ln.b:not(.del)")).toHaveText("4");
 
   await page.locator(".file", { hasText: "c.ts" }).click();
   await expect(page.locator(".file.is-active .name")).toHaveText("c.ts");
@@ -169,10 +169,10 @@ test("staging a chapter's hunk moves on to the next range, and other hunks leave
 
   await open("a.ts");
   await page.locator(".stop.is-current").click();
-  await expect(page.locator(".row.note-now .ln.b")).toHaveText("4");
+  await expect(page.locator(".row.note-now .ln.b:not(.del)")).toHaveText("4");
   await page.keyboard.press("s");
   await expect(page.locator(".chapter.is-current .chapter-title")).toHaveText("Callers");
-  await expect(page.locator(".row.note-now .ln.b")).toHaveText(["40", "41", "42"]);
+  await expect(page.locator(".row.note-now .ln.b:not(.del)")).toHaveText(["40", "41", "42"]);
   await expect(page.locator(".row.note-now").first()).toBeInViewport();
 
   git("reset", "-q");
@@ -216,7 +216,7 @@ test("a chapter stages all its ranges at once, then the next one opens", async (
   await expect(page.locator(".chapter").first()).toHaveClass(/is-done/);
   await expect(page.locator(".chapter").nth(1)).not.toHaveClass(/is-done/);
   await expect(page.locator(".chapter.is-current .chapter-title")).toHaveText("Callers");
-  await expect(page.locator(".row.note-now .ln.b")).toHaveText(["40", "41", "42"]);
+  await expect(page.locator(".row.note-now .ln.b:not(.del)")).toHaveText(["40", "41", "42"]);
   await expect(page.locator(".fold.has-done")).toHaveText("37 lines unchanged, 1 staged");
   expect(git("diff", "--cached", "--name-only").trim().split("\n")).toEqual(["a.ts", "b.ts"]);
   expect(git("diff", "--cached", "a.ts")).toContain("+export const v3 = 30;");
@@ -227,7 +227,7 @@ test("a staged chapter's ranges open in the Staged tab", async () => {
   await page.locator(".chapter-head").first().click();
   await expect(page.locator(".picker-btn")).toHaveText("Staged");
   await expect(page.locator(".file.is-active .name")).toHaveText("b.ts");
-  await expect(page.locator(".row.note-now .ln.b")).toHaveText(["26"]);
+  await expect(page.locator(".row.note-now .ln.b:not(.del)")).toHaveText(["26"]);
 
   await page.keyboard.press("3");
   await page.locator(".chapter-head").first().click();
@@ -237,6 +237,36 @@ test("a staged chapter's ranges open in the Staged tab", async () => {
   await expect(page.locator(".chapter.is-current .stop-staged")).toHaveCount(0);
   await page.keyboard.press("1");
   await expect(page.locator(".picker-btn")).toHaveText("Unstaged");
+});
+
+test("a chapter shows its screenshots and refuses paths outside the media folder", async () => {
+  mkdirSync(join(repo, ".git", "moire", "media"), { recursive: true });
+  writeFileSync(join(repo, ".git", "moire", "media", "after.png"), png(80, 40, [9, 131, 149]));
+  writeFileSync(join(repo, ".git", "moire", "outside.png"), png(80, 40, [9, 131, 149]));
+  const shotNotes = [{ ...NOTES.chapters[0], screenshots: [{ file: "after.png", caption: "After the change" }, "../outside.png"] }];
+  writeNotes({ chapters: shotNotes });
+  await page.locator(".chapter-head").first().click();
+  const shot = page.locator(".shot").first();
+  await expect(shot.locator("figcaption")).toHaveText("After the change");
+  await expect.poll(() => shot.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(80);
+  await expect(page.locator(".shot").nth(1)).toHaveText("Screenshot not found: ../outside.png");
+  const blocked = await page.evaluate((root) => {
+    const url = `moire://media/?root=${encodeURIComponent(root)}&file=${encodeURIComponent("../outside.png")}`;
+    return new Promise((done) => {
+      const img = new Image();
+      img.onload = () => done("loaded");
+      img.onerror = () => done("blocked");
+      img.src = url;
+    });
+  }, repo);
+  expect(blocked).toBe("blocked");
+  await shot.locator("button").click();
+  await expect(page.locator(".shot-view")).toBeVisible();
+  await page.keyboard.press("j");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".shot-view")).toHaveCount(0);
+  writeNotes(NOTES);
+  await expect(page.locator(".shot")).toHaveCount(0);
 });
 
 test("committing moves a chapter to its commit", async () => {
