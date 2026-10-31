@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { git, idle, initRepo, launch } = harness();
+const { git, idle, initRepo, launch, open } = harness();
 let repo: string;
 let page: Page;
 
@@ -88,7 +88,7 @@ test("a press queued on a file's last hunk doesn't reach into a file not yet see
 });
 
 test("a press queued on the last hunk doesn't go back to one passed over", async () => {
-  await page.locator(".file", { hasText: "a.ts" }).click();
+  await open("a.ts");
   await page.keyboard.press("g");
   await page.keyboard.press("g");
   await expect(focusedRange()).toHaveText(/^−3,/);

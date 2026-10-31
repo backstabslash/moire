@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { harness, png } from "./harness";
 
-const { git, initRepo, launch, shot, tmp } = harness();
+const { git, initRepo, launch, open, shot, tmp } = harness();
 let repo: string;
 let outside: string;
 let page: Page;
@@ -79,7 +79,7 @@ test("m switches an SVG between its diff and the rendered images", async () => {
 });
 
 test("Markdown renders with changed and removed blocks marked, and j walks to the next hunk", async () => {
-  await page.locator(".file", { hasText: "plan.md" }).click();
+  await open("plan.md");
   await page.getByRole("button", { name: /Preview/ }).click();
   await expect(page.locator(".md h1")).toHaveText("Plan");
   await expect(page.locator(".md .md-chg")).toHaveCount(1);

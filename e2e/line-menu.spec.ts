@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { clipboard, git, initRepo, launch, open, shot } = harness();
+const { git, initRepo, launch, open, shot } = harness();
 let repo: string;
 let page: Page;
 
@@ -48,24 +48,6 @@ test("a right click on a line offers the actions for it", async () => {
   await expect.poll(() => git("diff", "--cached", "--name-only").trim()).toBe("web/page.py");
   await page.keyboard.press("u");
   await expect.poll(() => git("diff", "--cached", "--name-only").trim()).toBe("");
-});
-
-test("the line menu copies the same text as the keyboard", async () => {
-  await open("zz/blanks.txt");
-  await page.evaluate(() => {
-    const text = (n: number) => document.createTreeWalker(document.querySelectorAll(".cell.b .text")[n], NodeFilter.SHOW_TEXT).nextNode()!;
-    getSelection()!.setBaseAndExtent(text(0), 0, text(2), 3);
-  });
-  await page.keyboard.press("ControlOrMeta+c");
-  const keyboard = await clipboard();
-  expect(keyboard).toBe("one\n\ntwo");
-  await page
-    .locator(".cell.b .text")
-    .first()
-    .click({ button: "right", position: { x: 4, y: 6 } });
-  await page.locator(".file-menu").getByRole("menuitem", { name: "Copy", exact: true }).click();
-  await expect.poll(clipboard).toBe(keyboard);
-  await page.evaluate(() => getSelection()!.removeAllRanges());
 });
 
 test("a removed line opens next to the change, not at its old number", async () => {

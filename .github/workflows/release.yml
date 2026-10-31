@@ -33,7 +33,9 @@ jobs:
 
   ci:
     needs: guard
-    uses: ./.github/workflows/ci.yml
+    permissions:
+      actions: read
+    uses: ./.github/workflows/ci-passed.yml
 
   build:
     needs: ci

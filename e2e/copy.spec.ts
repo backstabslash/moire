@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { clipboard, git, initRepo, launch, shots } = harness();
+const { clipboard, git, initRepo, launch, open, shots } = harness();
 let repo: string;
 let app: ElectronApplication;
 let page: Page;
@@ -28,29 +28,6 @@ test.beforeAll(async () => {
   ({ app, page } = await launch(repo, { prefs: { theme: "light" } }));
   await expect(page.locator(".file")).toHaveCount(2);
   await expect(page.locator(".hunk-head")).toHaveCount(2);
-});
-
-test("a text drag across two hunks copies one side, without header text or duplicates", async () => {
-  await clearClipboard();
-  const from = (await cell("b", 4).boundingBox())!;
-  const to = (await cell("b", 14).boundingBox())!;
-  await page.mouse.move(from.x + 2, from.y + from.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 8 });
-  await page.mouse.move(to.x + to.width - 2, to.y + to.height / 2);
-  await page.mouse.up();
-  await page.keyboard.press(`${mod}+c`);
-  await expect.poll(clipboard).toBe([4, 5, 6, 7, 8, 13, 14].map((n) => edited[n - 1]).join("\n"));
-
-  await page.evaluate(() => {
-    const textOf = (n: number) => {
-      const row = [...document.querySelectorAll(".row.split")].find((r) => r.querySelector(".ln.b")?.textContent === String(n));
-      return document.createTreeWalker(row!.querySelector(".cell.b .text")!, NodeFilter.SHOW_TEXT).nextNode()!;
-    };
-    getSelection()!.setBaseAndExtent(textOf(4), 2, textOf(14), 3);
-  });
-  await page.keyboard.press(`${mod}+c`);
-  await expect.poll(clipboard).toBe(["port const v4 = 4;", ...[5, 6, 7, 8, 13].map((n) => edited[n - 1]), "exp"].join("\n"));
 });
 
 test("a click replaces the selection, Mod+click toggles a line and shift-click adds a range", async () => {
@@ -170,7 +147,7 @@ test("a gutter drag to the bottom edge scrolls the diff and extends the selectio
 });
 
 test("staging a hunk picked from its header stages the whole hunk, not just its new lines", async () => {
-  await page.locator(".file", { hasText: "a.ts" }).click();
+  await open("a.ts");
   await page.locator(".hunk-head .hh-range").first().click();
   await expect(picked()).toHaveText(["5"]);
   await expect(page.locator(".hunk-head.has-sel .hh-stage")).toHaveText(/^Stage 2 lines/);

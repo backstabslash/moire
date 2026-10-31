@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { git, idle, initRepo, launch, shot, shots } = harness();
+const { git, idle, initRepo, launch, open, shot, shots } = harness();
 let repo: string;
 let page: Page;
 
@@ -62,6 +62,7 @@ test("selecting a line focuses its hunk, and s stages just that line", async () 
   expect(git("show", ":a.ts")).toContain("export const v33 = 1 + 33;");
   await page.keyboard.press("u");
   await expect.poll(() => git("diff", "--cached")).toBe("");
+  await idle();
 
   await page.locator(".ln.b.add[data-line]").first().click();
   await expect(page.locator(".hunk-head").first()).toHaveClass(/is-focus/);
@@ -101,7 +102,7 @@ test("staging a whole file moves on to the next one, and the All view marks what
   await expect(page.locator(".file", { hasText: "a.ts" })).toHaveAttribute("data-tip", /partly staged/);
   await shot("all-view");
   await page.keyboard.press("1");
-  await page.locator(".file", { hasText: "a.ts" }).click();
+  await open("a.ts");
   await page.getByRole("button", { name: "Stage file" }).click();
   await expect(page.locator(".file")).toHaveCount(1);
   await expect(page.locator(".file.is-active .name")).toHaveText("new.ts");

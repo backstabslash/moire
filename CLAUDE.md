@@ -25,8 +25,8 @@ Flow: renderer → `window.moire` (preload) → `ipcMain` (`src/main/ipc.ts`) �
 - `MOIRE_SHOTS=/tmp/shots pnpm test:e2e`: also saves screenshots from the specs that take them
 - `pnpm demo`: builds, then records `demo/demo-light.gif` and `demo/demo-dark.gif` (in the README, picked by the reader's color scheme) and `demo/demo.mp4` from a scripted run on a throwaway repo. Re-run it after UI changes
 - `pnpm dist --linux AppImage deb --publish never`: local packages in `dist/` (rpm also needs `rpmbuild`)
-- Release: bump `version` in package.json, then push `git tag -a v<version> --cleanup=verbatim -F notes.md`; `.github/workflows/release.yml` builds Linux and macOS and publishes the release with the tag message as notes
-- Launcher release, only when `launcher/` changes: bump `launcher/package.json`, push tag `launcher-v<version>`; `.github/workflows/launcher.yml` publishes to npm
+- Release: bump `version` in package.json, then push `git tag -a v<version> --cleanup=verbatim -F notes.md`; `.github/workflows/release.yml` waits for CI to pass on main for that commit, then builds Linux and macOS and publishes the release with the tag message as notes
+- Launcher release, only when `launcher/` changes: bump `launcher/package.json`, push tag `launcher-v<version>`; `.github/workflows/launcher.yml` waits for the same CI pass, then publishes to npm
 
 Dev-only env vars (ignored when packaged): `MOIRE_PREFS` (preset UI state as JSON), `MOIRE_SCREENSHOT=file.png` (capture once the first file is coloured, then quit), `MOIRE_BENCH=1` (scroll benchmark), `MOIRE_HIDDEN=1` (offscreen window; the e2e specs set it), `MOIRE_UPDATE` (an `UpdateNotice` as JSON, to show the status bar's update button). The launcher and the packaged app's updater read `MOIRE_RELEASES`, a URL standing in for GitHub's latest-release JSON.
 
@@ -46,4 +46,5 @@ Subject is `area: imperative summary`, lowercase area from the source layout (`s
 - Stage, unstage and discard write the index or file directly (`src/main/stage.ts`), not through `git apply`. Each action carries the file diff the user saw and is refused if it no longer matches.
 - Discard backups are unreferenced git objects, so `git gc` prunes them after about two weeks and undo stops working for older discards.
 - pnpm blocks install scripts. If `node_modules/electron/dist/electron` is missing, run `node node_modules/electron/install.js`.
+- E2e spec files run in parallel, so they can't share anything outside their temp dirs. The harness gives each app its own clipboard, except `e2e/native-copy.spec.ts`, which needs the real one: any test using Chromium's own copy goes there.
 - `pkill -f`/`pgrep -f` with a pattern that also appears in your own command kills your shell. Kill by PID instead.

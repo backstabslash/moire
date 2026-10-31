@@ -18,7 +18,10 @@ const commit = (file: string, message: string) => {
 test.beforeAll(async () => {
   repo = initRepo();
   bin = tmp("bin");
-  writeFileSync(join(bin, "gh"), `#!/bin/sh\nsleep 0.5\ntouch ${join(bin, "ran")}\necho 'no pull requests found' >&2\nexit 1\n`);
+  writeFileSync(
+    join(bin, "gh"),
+    `#!/bin/sh\nfor _ in $(seq 200); do [ -e ${join(bin, "finish")} ] && break; sleep 0.05; done\ntouch ${join(bin, "ran")}\necho 'no pull requests found' >&2\nexit 1\n`,
+  );
   chmodSync(join(bin, "gh"), 0o755);
   commit("base.txt", "base");
   git("checkout", "-q", "-b", "feature");
@@ -57,6 +60,7 @@ test("a newer comparison wins over a slower one still running", async () => {
   expect(await launchAgain(repo, "pr", "7")).toBe(0);
   expect(await launchAgain(repo, "HEAD~1")).toBe(0);
   await expect(page.locator(".slot").first()).toContainText("HEAD~1");
+  writeFileSync(join(bin, "finish"), "");
   await expect.poll(() => existsSync(join(bin, "ran"))).toBe(true);
   await page.waitForTimeout(200);
   await expect(page.locator(".toast.show")).not.toContainText("no pull requests found");

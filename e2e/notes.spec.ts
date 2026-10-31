@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { git, idle, initRepo, launch, shot } = harness();
+const { git, idle, initRepo, launch, open, shot } = harness();
 let repo: string;
 let app: ElectronApplication;
 let page: Page;
@@ -167,7 +167,7 @@ test("staging a chapter's hunk moves on to the next range, and other hunks leave
   await expect.poll(() => git("diff", "--cached", "--name-only").trim().split("\n")).toEqual(["b.ts", "c.ts"]);
   await expect(stop).toContainText("a.ts:4");
 
-  await page.locator(".file", { hasText: "a.ts" }).click();
+  await open("a.ts");
   await page.locator(".stop.is-current").click();
   await expect(page.locator(".row.note-now .ln.b")).toHaveText("4");
   await page.keyboard.press("s");

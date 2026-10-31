@@ -9,6 +9,7 @@ interface LaunchOptions {
   data?: string;
   env?: Record<string, string>;
   prefs?: Record<string, string>;
+  systemClipboard?: boolean;
 }
 
 export const gitIn =
@@ -67,7 +68,7 @@ export function harness() {
     return dir;
   };
 
-  const launch = async (args: string | string[] = [], { data = userData(), env, prefs }: LaunchOptions = {}) => {
+  const launch = async (args: string | string[] = [], { data = userData(), env, prefs, systemClipboard }: LaunchOptions = {}) => {
     app = await electron.launch({
       args: [resolve("."), `--user-data-dir=${data}`, ...[args].flat()],
       env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_REPO: "", ...(prefs && { MOIRE_PREFS: JSON.stringify(prefs) }), ...env },
@@ -75,6 +76,16 @@ export function harness() {
     const launched = app;
     running.add(launched);
     launched.on("close", () => running.delete(launched));
+    // Workers share the system clipboard, so each app keeps its own.
+    if (!systemClipboard) {
+      await launched.evaluate(({ clipboard }) => {
+        let copied = "";
+        clipboard.writeText = async (text) => {
+          copied = text;
+        };
+        clipboard.readText = async () => copied;
+      });
+    }
     page = await launched.firstWindow();
     page.on("pageerror", (e) => errors.push(e.message));
     return { app: launched, page };

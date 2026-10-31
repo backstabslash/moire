@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { clipboard, git, initRepo, launch, shot, shots } = harness();
+const { git, initRepo, launch, shot, shots } = harness();
 let repo: string;
 let page: Page;
 
@@ -131,18 +131,11 @@ test("long folds reveal twenty lines at a time", async () => {
   await expect(page.getByText("83 lines unchanged")).toHaveCount(0);
 });
 
-test("colours get a swatch that copying leaves out", async () => {
+test("colours get a swatch", async () => {
   await open("web/app.css").click();
   await expect(page.locator(".cell.add .swatch")).toHaveCount(1);
   await open("src/other/index.ts").click();
   await expect(page.locator(".cell.add .swatch")).toHaveCount(1);
   await expect(page.locator(".cell.add").nth(1)).toHaveText('export const frame = "#1f252c";');
   await shot("swatch");
-  await page
-    .locator(".cell.add .text")
-    .nth(1)
-    .evaluate((el) => getSelection()!.selectAllChildren(el));
-  await page.keyboard.press("ControlOrMeta+c");
-  await expect.poll(clipboard).toBe('export const frame = "#1f252c";');
-  await page.evaluate(() => getSelection()!.removeAllRanges());
 });

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { git, initRepo, launch, shot } = harness();
+const { git, initRepo, launch, open, shot } = harness();
 let repo: string;
 let page: Page;
 
@@ -60,7 +60,7 @@ test("search finds hits in folded context and in other files", async () => {
 });
 
 test("opening and closing search leaves the diff lines where they were", async () => {
-  await page.locator(".file", { hasText: "a.ts" }).click();
+  await open("a.ts");
   await page.keyboard.press("f");
   await page.locator(".diff-scroller").evaluate((el) => {
     el.scrollTop = 300;

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { git, initRepo, launch, shots } = harness();
+const { git, initRepo, launch, open, shots } = harness();
 let repo: string;
 let page: Page;
 
@@ -26,7 +26,7 @@ test.beforeAll(async () => {
 test("the sidebar counts staged lines as you stage them", async () => {
   await expect(progress()).toContainText("0% staged");
   for (const name of ["a.ts", "c.ts"]) {
-    await page.locator(".file", { hasText: name }).click();
+    await open(name);
     await page.getByRole("button", { name: "Stage file" }).click();
   }
   await expect(page.locator(".file .name")).toHaveText(["b.ts"]);
@@ -58,7 +58,7 @@ test("a file edited after it was staged comes back, showing only the new edits",
 test("the All view can hide fully staged files", async () => {
   await expect(page.locator(".file .name")).toHaveText(["a.ts", "b.ts", "c.ts"]);
   await expect(page.locator(".file.is-staged .name")).toHaveText(["c.ts"]);
-  await page.locator(".file", { hasText: "c.ts" }).click();
+  await open("c.ts");
   await progress().getByLabel("Hide staged").check();
   await expect(page.locator(".file .name")).toHaveText(["a.ts", "b.ts"]);
   await expect(page.locator(".file.is-active .name")).toHaveText("a.ts");
@@ -69,7 +69,7 @@ test("the All view can hide fully staged files", async () => {
 
 test("switching views never flashes an empty view that isn't", async () => {
   for (const name of ["a.ts", "b.ts"]) {
-    await page.locator(".file", { hasText: name }).click();
+    await open(name);
     await page.getByRole("button", { name: "Stage file" }).click();
   }
   await expect(page.locator(".empty-state h2")).toHaveText("All 3 changes are staged.");

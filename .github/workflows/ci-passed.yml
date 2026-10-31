@@ -1,0 +1,29 @@
+name: CI passed
+
+on:
+  workflow_call:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: CI passed on main for this commit
+        run: |
+          # A tag can be pushed alongside main, before CI has even started.
+          for _ in $(seq 80); do
+            run=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --branch main --event push --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' || true)
+            case "$run" in
+              "completed success") exit 0 ;;
+              completed*)
+                echo "::error::CI on main ended with '$run' for $GITHUB_SHA; re-run it or tag a newer commit"
+                exit 1
+                ;;
+            esac
+            sleep 15
+          done
+          echo "::error::No finished CI run on main for $GITHUB_SHA; is the commit on main?"
+          exit 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}

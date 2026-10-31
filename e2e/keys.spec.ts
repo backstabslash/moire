@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { clipboard, git, idle, initRepo, launch, shot, shots, userData } = harness();
+const { clipboard, git, idle, initRepo, launch, open, shot, shots, userData } = harness();
 let repo: string;
 let app: ElectronApplication;
 let page: Page;
@@ -151,7 +151,7 @@ test("a selection gets copy buttons, and Shift+J extends it", async () => {
 });
 
 test("arrow keys walk the file list after a click there, and the toolbar opens search", async () => {
-  await page.locator(".file", { hasText: "a.ts" }).click();
+  await open("a.ts");
   await page.keyboard.press("ArrowDown");
   await expect(page.locator(".file.is-active .name")).toHaveText("b.ts");
   await page.keyboard.press("ArrowUp");
