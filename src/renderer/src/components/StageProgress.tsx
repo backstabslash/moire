@@ -41,10 +41,18 @@ export function StageProgress({ staged, total, files, changed, hideStaged, onHid
   );
 }
 
-export function StagedNotice({ newEdits, onMode, onClose }: { newEdits: boolean; onMode(mode: CompareMode): void; onClose(): void }) {
+interface StagedNoticeProps {
+  newEdits: boolean;
+  preview: boolean;
+  onMode(mode: CompareMode): void;
+  onClose(): void;
+}
+
+export function StagedNotice({ newEdits, preview, onMode, onClose }: StagedNoticeProps) {
+  const shown = newEdits ? "These are the new edits." : preview ? "This is the whole diff." : "Staged lines are faded.";
   return (
     <div className="since">
-      <p>{newEdits ? "Staged, then changed again. These are the new edits." : "Staged, then changed again. Staged lines are faded."}</p>
+      <p>Staged, then changed again. {shown}</p>
       <div className="seg" role="group" aria-label="Edits shown">
         <button aria-pressed={newEdits} onClick={() => onMode({ kind: "unstaged" })}>
           New edits

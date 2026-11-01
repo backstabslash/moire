@@ -13,6 +13,8 @@ extraResources:
     to: licenses/commit-mono.txt
   - from: node_modules/@fontsource/ibm-plex-sans-condensed/LICENSE
     to: licenses/ibm-plex-sans-condensed.txt
+  - from: build/licenses/elkjs.txt
+    to: licenses/elkjs.txt
 linux:
   target: [AppImage, deb, rpm, tar.gz]
   category: Development

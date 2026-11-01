@@ -2,14 +2,14 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines, numbered } from "./harness";
 
-const { git, initRepo, launch, shot, tmp, userData } = harness();
+const { commitAll, initRepo, launch, shot, tmp, userData } = harness();
 let repo: string;
 let bin: string;
 let page: Page;
 
-const body = Array.from({ length: 40 }, (_, i) => `export const v${i} = ${i};`);
+const { body, edit } = numbered(40);
 const script = (name: string, log: string) => {
   writeFileSync(join(bin, name), `#!/bin/sh\nprintf '%s\\n' "$*" > ${join(bin, log)}\n`);
   chmodSync(join(bin, name), 0o755);
@@ -28,10 +28,9 @@ test.beforeAll(async () => {
   bin = tmp("bin");
   const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
   symlinkSync(realGit, join(bin, "git"));
-  writeFileSync(join(repo, "hunk.ts"), body.join("\n") + "\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
-  writeFileSync(join(repo, "hunk.ts"), body.map((l, i) => (i === 3 ? l.replace("= 3", "= 30") : l)).join("\n") + "\n");
+  writeFileSync(join(repo, "hunk.ts"), lines(body));
+  commitAll("init");
+  writeFileSync(join(repo, "hunk.ts"), lines(edit(3)));
   writeFileSync(join(repo, "a.txt"), "a\n");
   script("nvim", "nvim.log");
   writeFileSync(join(bin, "x-terminal-emulator"), `#!/bin/sh\nprintf '%s\\n' "$1" > ${join(bin, "terminal.log")}\nshift\nexec "$@"\n`);

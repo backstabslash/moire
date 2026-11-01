@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { diffHunk } from "../../../main/test-repo";
 import type { FileDiff } from "../../../shared/types";
-import { blobUrl, previewOf, resolveRelative } from "./preview";
+import { blobUrl, previewOf, readOnly, resolveRelative } from "./preview";
 
 function file(path: string, extra: Partial<FileDiff> = {}): FileDiff {
   return { path, status: "modified", binary: false, additions: 0, deletions: 0, hunks: [], ...extra };
@@ -50,5 +50,18 @@ describe("resolveRelative", () => {
     expect(resolveRelative("plan.md", "/abs.png")).toBeNull();
     expect(resolveRelative("plan.md", "data:image/png;base64,AA")).toBeNull();
     expect(resolveRelative("plan.md", "caf%E9.png")).toBeNull();
+  });
+});
+
+describe("readOnly", () => {
+  const big = "- line\n".repeat(11_000);
+
+  it.each([
+    ["two ordinary versions", "modified", "new", "old", false],
+    ["a new file", "added", "new", null, true],
+    ["a new version too big to render", "modified", big, "old", true],
+    ["an old version too big to render", "modified", "new", big, true],
+  ] as const)("%s", (_name, status, text, old, expected) => {
+    expect(readOnly({ status }, text, old)).toBe(expected);
   });
 });

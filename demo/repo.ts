@@ -13,17 +13,32 @@ const before: Record<string, string> = {
 
 Tiny rate limiter for HTTP handlers.
 
+## Over the limit
+
+\`\`\`mermaid
+flowchart LR
+  R[Request] --> T{Over the limit?}
+  T -- no --> N[Handler]
+  T -- yes --> W[429]
+\`\`\`
+
+> [!TIP]
+> Clients get a **429** and retry at once.
+
 ## Usage
 
 \`\`\`ts
 app.use(limit({ max: 100, windowMs: 60_000 }));
 \`\`\`
 
-Requests over the limit get a 429.
+| Option | Default | Meaning |
+| --- | --- | --- |
+| \`max\` | 100 | Requests in a window |
+| \`windowMs\` | 60000 | Length of a window |
 `,
-  "src/client.ts": `export function clientIp(forwarded: string, fallback: string) {
+  "src/client.ts": `export function clientIp(forwarded: string, peer: string) {
   const first = forwarded.split(",")[1]?.trim();
-  return first || fallback;
+  return first || peer;
 }
 `,
   "src/http.ts": `export interface Req {
@@ -137,7 +152,7 @@ app.get("/health", (_req, res) => res.send("ok"));
 
 app.listen(3000);
 `,
-  "tests/limiter.test.ts": `import { describe, expect, it } from "vitest";
+  "tests/limit.test.ts": `import { describe, expect, it } from "vitest";
 import { fixedWindow } from "../src/limiter";
 
 describe("fixedWindow", () => {
@@ -163,23 +178,32 @@ const after: Record<string, string> = {
 
 Tiny token-bucket rate limiter for HTTP handlers.
 
+## Over the limit
+
+\`\`\`mermaid
+flowchart LR
+  R[Request] --> T{Over the limit?}
+  T -- no --> N[Handler]
+  T -- yes --> W[429]
+\`\`\`
+
+> [!TIP]
+> Clients get a **429** and wait for \`Retry-After\`.
+
 ## Usage
 
 \`\`\`ts
 app.use(limit({ capacity: 20, refillPerSec: 5 }));
 \`\`\`
 
-Each client gets a bucket of \`capacity\` tokens that refills
-at \`refillPerSec\`, so short bursts go through.
-
-## Over the limit
-
-Requests get a **429** with a \`Retry-After\` header saying
-how many seconds until a token is free.
+| Option | Default | Meaning |
+| --- | --- | --- |
+| \`capacity\` | 20 | Requests in a burst |
+| \`refillPerSec\` | 5 | Tokens back per second |
 `,
-  "src/client.ts": `export function clientIp(forwarded: string, fallback: string) {
+  "src/client.ts": `export function clientIp(forwarded: string, peer: string) {
   const first = forwarded.split(",")[0]?.trim();
-  return first || fallback;
+  return first || peer;
 }
 `,
   "src/limiter.ts": `import type { Next, Req, Res } from "./http";
@@ -188,6 +212,11 @@ export interface Options {
   capacity: number;
   refillPerSec: number;
   keyOf?: (req: Req) => string;
+}
+
+interface Bucket {
+  tokens: number;
+  at: number;
 }
 
 const byIp = (req: Req) => req.ip;
@@ -200,16 +229,18 @@ export function byHeader(name: string) {
 }
 
 export function tokenBucket(opts: Options) {
-  const buckets = new Map<string, { tokens: number; at: number }>();
+  const { capacity, refillPerSec } = opts;
+  const buckets = new Map<string, Bucket>();
 
   return (key: string): number => {
     const now = Date.now();
-    const b = buckets.get(key) ?? { tokens: opts.capacity, at: now };
-    const refill = ((now - b.at) / 1000) * opts.refillPerSec;
-    b.tokens = Math.min(opts.capacity, b.tokens + refill);
+    const full = { tokens: capacity, at: now };
+    const b = buckets.get(key) ?? full;
+    const refill = ((now - b.at) / 1000) * refillPerSec;
+    b.tokens = Math.min(capacity, b.tokens + refill);
     b.at = now;
     buckets.set(key, b);
-    if (b.tokens < 1) return (1 - b.tokens) / opts.refillPerSec;
+    if (b.tokens < 1) return (1 - b.tokens) / refillPerSec;
     b.tokens -= 1;
     return 0;
   };
@@ -219,6 +250,7 @@ export function exempt(paths: string[]) {
   const skipped = new Set(paths);
   return (req: Req): boolean => {
     if (skipped.has(req.path)) return true;
+    if (req.path === "/login") return true;
     return req.path.startsWith("/internal/");
   };
 }
@@ -280,9 +312,8 @@ app.use(limit({ capacity: 20, refillPerSec: 5 }));
 app.get("/health", (_req, res) => res.send("ok"));
 
 app.listen(3000);
-console.log("DEBUG limiter on");
 `,
-  "tests/limiter.test.ts": `import { describe, expect, it, vi } from "vitest";
+  "tests/limit.test.ts": `import { describe, expect, it, vi } from "vitest";
 import { tokenBucket } from "../src/limiter";
 
 describe("tokenBucket", () => {
@@ -319,26 +350,57 @@ const range = (path: string, firstLineHas: string, lastLineHas: string, linesAft
 };
 
 const notes = {
-  summary: "Swaps the fixed-window limiter for a token bucket, so short bursts go through and blocked clients learn when to retry.",
+  format: 2,
+  asked: "Clients behind our proxy keep getting blocked after short bursts, can the limiter let those through?",
+  summary: "Swaps the limiter for a token bucket, so short bursts get through.",
+  sections: [
+    {
+      title: "A client over the limit",
+      before: "```\nHTTP/1.1 429 Too Many Requests\n```\nNo hint when to come back, so clients retry at once.",
+      after: "```\nHTTP/1.1 429 Too Many Requests\nRetry-After: 2\n```\nWaiting that long always gets through.",
+    },
+  ],
+  decisions: [
+    "Renamed the options to capacity and refillPerSec, because max and windowMs mean nothing for a bucket.",
+    "Kept one bucket per process, since nothing here runs more than one.",
+  ],
   chapters: [
     {
       title: "A token bucket per client",
-      text: "Each client gets a bucket of tokens that refills over time, and every request spends one. An empty bucket says how long to wait.",
-      ranges: [range("src/limiter.ts", "export interface Options", "keyOf?", 1), range("src/limiter.ts", "export function tokenBucket", "return 0;", 2)],
+      text: "Short bursts pass, because tokens build up while a client is quiet.",
+      ranges: [
+        range("src/limiter.ts", "export interface Options", "at: number;", 1, {
+          note: "Two numbers replace the window: burst size and refill rate.",
+        }),
+        range("src/limiter.ts", "export function tokenBucket", "return 0;", 2, {
+          note: "An empty bucket says how long to wait.",
+        }),
+      ],
     },
     {
       title: "The real client address",
-      text: "X-Forwarded-For lists the client first, so reading entry 1 limited the proxy instead of the client.",
-      ranges: ["src/client.ts"],
+      text: "Every client behind the proxy was sharing one bucket.",
+      ranges: [
+        range("src/client.ts", "const first", "const first", 0, {
+          note: "The client comes first, so check your proxy overwrites this header.",
+          warn: true,
+        }),
+      ],
     },
     {
       title: "Telling clients when to retry",
-      text: "Over the limit, limit answers 429 with Retry-After rounded up to whole seconds, so a client that waits as told always gets through.",
-      ranges: [range("src/limiter.ts", "export function limit", "res.status(429)", 2), range("README.md", "## Over the limit", "how many seconds")],
+      text: "A client that waits as told always gets through.",
+      ranges: [
+        range("src/limiter.ts", "export function limit", "res.status(429)", 2, {
+          note: "Retry-After rounds up to whole seconds, so waiting it out can't land just short.",
+        }),
+        range("README.md", "## Over the limit", "Retry-After"),
+      ],
     },
     {
       title: "New options for callers",
       text: "The server, every route and the README move from max and windowMs to capacity and refillPerSec.",
+      skim: true,
       ranges: [
         range("src/server.ts", "app.use(limit", "app.use(limit"),
         "src/routes/auth.ts",
@@ -346,11 +408,12 @@ const notes = {
         "src/routes/search.ts",
         "src/routes/uploads.ts",
         "src/routes/webhooks.ts",
-        range("README.md", "Tiny token-bucket", "so short bursts go through"),
+        range("README.md", "Tiny token-bucket", "Tiny token-bucket"),
+        range("README.md", "app.use(limit", "Tokens back per second"),
         "CHANGELOG.md",
       ],
     },
-    { title: "Tests", text: "Covers a burst followed by a wait, and refilling with fake timers.", ranges: ["tests/limiter.test.ts"] },
+    { title: "Tests", text: "Covers a burst followed by a wait, and refilling with fake timers.", skim: true, ranges: ["tests/limit.test.ts"] },
   ],
 };
 

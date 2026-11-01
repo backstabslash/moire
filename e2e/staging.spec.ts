@@ -1,20 +1,19 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines, numbered } from "./harness";
 
-const { git, idle, initRepo, launch, open, shot, shots } = harness();
+const { commitAll, git, idle, initRepo, launch, open, shot, shots } = harness();
 let repo: string;
 let page: Page;
 
-const body = Array.from({ length: 40 }, (_, i) => `export const v${i} = ${i};`);
-const edited = body.map((l, i) => (i === 3 || i === 33 ? l.replace("=", "= 1 +") : l)).join("\n") + "\n";
+const { body } = numbered(40);
+const edited = lines(body.map((l, i) => (i === 3 || i === 33 ? l.replace("=", "= 1 +") : l)));
 
 test.beforeAll(async () => {
   repo = initRepo();
-  writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  writeFileSync(join(repo, "a.ts"), lines(body));
+  commitAll("init");
   writeFileSync(join(repo, "a.ts"), edited);
   writeFileSync(join(repo, "new.ts"), "export const fresh = true;\n");
 
@@ -22,10 +21,11 @@ test.beforeAll(async () => {
   await expect(page.locator(".file")).toHaveCount(2);
 });
 
-test("selecting one line stages only that line, and u undoes it", async () => {
-  const added = page.locator(".ln.b.add[data-line]").first();
-  await added.click();
+test("selecting a line focuses its hunk, s stages only that line, and u undoes it", async () => {
+  const added = page.locator(".ln.b.add[data-line]");
+  await added.first().click();
   await expect(page.locator(".ln.sel")).toHaveCount(1);
+  await expect(page.locator(".hunk-head").first()).toHaveClass(/is-focus/);
   await expect(page.locator(".hunk-head.has-sel .hh-stage")).toHaveText(/^Stage 1 line/);
   await shot("selected");
   await page.keyboard.press("s");
@@ -35,6 +35,23 @@ test("selecting one line stages only that line, and u undoes it", async () => {
   await page.keyboard.press("u");
   await expect(page.locator(".toast.show")).toContainText("Undid: Staged 1 line in a.ts");
   await expect.poll(() => git("diff", "--cached")).toBe("");
+
+  await expect(page.locator(".hunk-head")).toHaveCount(2);
+  await idle();
+  await added.nth(1).click();
+  await expect(page.locator(".hunk-head").nth(1)).toHaveClass(/is-focus/);
+  await expect(page.locator(".hunk-head.is-focus")).toHaveCount(1);
+  await page.keyboard.press("s");
+  await expect(page.locator(".toast.show")).toHaveText(/^Staged 1 line in a\.ts/);
+  await expect.poll(() => git("show", ":a.ts")).toContain("export const v33 = 1 + 33;");
+  await page.keyboard.press("u");
+  await expect.poll(() => git("diff", "--cached")).toBe("");
+  await idle();
+
+  await added.first().click();
+  await expect(page.locator(".hunk-head").first()).toHaveClass(/is-focus/);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".ln.sel")).toHaveCount(0);
 });
 
 test("x discards the focused hunk and u brings it back", async () => {
@@ -47,27 +64,6 @@ test("x discards the focused hunk and u brings it back", async () => {
   await page.keyboard.press("u");
   await expect(page.locator(".hunk-head")).toHaveCount(2);
   expect(readFileSync(join(repo, "a.ts"), "utf8")).toBe(edited);
-});
-
-test("selecting a line focuses its hunk, and s stages just that line", async () => {
-  await expect(page.locator(".hunk-head")).toHaveCount(2);
-  await idle();
-  await page.locator(".ln.b.add[data-line]").first().click();
-  await expect(page.locator(".hunk-head").first()).toHaveClass(/is-focus/);
-  await page.locator(".ln.b.add[data-line]").nth(1).click();
-  await expect(page.locator(".hunk-head").nth(1)).toHaveClass(/is-focus/);
-  await expect(page.locator(".hunk-head.is-focus")).toHaveCount(1);
-  await page.keyboard.press("s");
-  await expect(page.locator(".toast.show")).toContainText("Staged 1 line in a.ts");
-  expect(git("show", ":a.ts")).toContain("export const v33 = 1 + 33;");
-  await page.keyboard.press("u");
-  await expect.poll(() => git("diff", "--cached")).toBe("");
-  await idle();
-
-  await page.locator(".ln.b.add[data-line]").first().click();
-  await expect(page.locator(".hunk-head").first()).toHaveClass(/is-focus/);
-  await page.keyboard.press("Escape");
-  await expect(page.locator(".ln.sel")).toHaveCount(0);
 });
 
 test("a staged hunk leaves a stub in its place, which undoes it or shows it in Staged", async () => {

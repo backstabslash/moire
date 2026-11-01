@@ -5,7 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import type { FileDiff, LineRef, StageRequest } from "../shared/types";
 import { diff, UNTRACKED_READ_LIMIT } from "./git";
-import { act, actAll, adoptLegacyUndo, commit, dropDiscarded, saveDiscarded, serial, setWorktree, undo } from "./stage";
+import { act, actAll, actGroup, adoptLegacyUndo, commit, dropDiscarded, saveDiscarded, serial, setWorktree, undo } from "./stage";
 import { dirs, type Files, makeRepo, type Repo, seed } from "./test-repo";
 
 function setup(committed?: Files, edits?: Files) {
@@ -243,6 +243,40 @@ describe("undo", () => {
     expect(readFileSync(join(r.root, "a.txt"), "utf8")).toBe(edited);
     expect(await undo(r.root)).toBeNull();
   });
+
+  it("undoes a group of files in one go, including the ones done before a failure", async () => {
+    const r = setup({ "a.txt": "a\n", "b.txt": "b\n", "c.txt": "c\n" }, { "a.txt": "a2\n", "b.txt": "b2\n", "c.txt": "c2\n" });
+    const req = async (path: string) => ({ mode: "unstaged" as const, action: "stage" as const, file: (await r.file("unstaged", path))!, lines: null });
+    const [a, b, c] = [await req("a.txt"), await req("b.txt"), await req("c.txt")];
+    expect(await actGroup(r.root, [a, b], "Staged chapter 1 in 2 files")).toBe("Staged chapter 1 in 2 files");
+    expect(r.git("diff", "--cached", "--name-only").split("\n").filter(Boolean)).toEqual(["a.txt", "b.txt"]);
+    expect(await undo(r.root)).toMatchObject({ label: "Staged chapter 1 in 2 files" });
+    expect(r.git("diff", "--cached", "--name-only").trim()).toBe("");
+    expect(await undo(r.root)).toBeNull();
+
+    writeFileSync(join(r.root, "c.txt"), "c3\n");
+    await expect(actGroup(r.root, [a, c], "Staged chapter 2 in 2 files")).rejects.toThrow("changed since you looked");
+    expect(r.git("diff", "--cached", "--name-only").trim()).toBe("a.txt");
+    expect(await undo(r.root)).toMatchObject({ label: "Staged chapter 2 in 2 files" });
+    expect(r.git("diff", "--cached", "--name-only").trim()).toBe("");
+  });
+
+  it("undoes a group bigger than the log, and keeps the history before it", async () => {
+    const names = Array.from({ length: 130 }, (_, i) => `f${i}.txt`);
+    const r = setup(
+      { ...Object.fromEntries(names.map((n) => [n, "a\n"])), "first.txt": "a\n" },
+      { ...Object.fromEntries(names.map((n) => [n, "b\n"])), "first.txt": "b\n" },
+    );
+    await r.run("unstaged", "stage", (await r.file("unstaged", "first.txt"))!);
+    const reqs = await Promise.all(
+      names.map(async (n) => ({ mode: "unstaged" as const, action: "stage" as const, file: (await r.file("unstaged", n))!, lines: null })),
+    );
+    await actGroup(r.root, reqs, "Staged chapter 1 in 130 files");
+    expect(await undo(r.root)).toMatchObject({ label: "Staged chapter 1 in 130 files" });
+    expect(r.git("diff", "--cached", "--name-only").trim()).toBe("first.txt");
+    expect(await undo(r.root)).toMatchObject({ label: "Staged first.txt" });
+    expect(r.git("diff", "--cached", "--name-only").trim()).toBe("");
+  }, 60_000);
 
   it("undoes a given entry only while it's the newest", async () => {
     const r = setup({ "a.txt": "a\n", "b.txt": "a\n" }, { "a.txt": "b\n", "b.txt": "b\n" });

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { app, BrowserWindow, Menu, type MenuItemConstructorOptions, shell } from "electron";
 import { accelerator, command, type CommandId, COMMANDS } from "../shared/keymap";
 import { loadKeys, watchKeys } from "./keys";
+import { watchThemes } from "./themes";
 import { loadState } from "./state";
 import { checkForUpdates } from "./update";
 
@@ -23,6 +24,9 @@ export function setupMenu(): void {
   watchKeys(() => {
     buildMenu();
     for (const win of BrowserWindow.getAllWindows()) win.webContents.send("keys:changed");
+  });
+  watchThemes(() => {
+    for (const win of BrowserWindow.getAllWindows()) win.webContents.send("themes:changed");
   });
 }
 
@@ -95,10 +99,12 @@ export function buildMenu(): void {
         item("preview"),
         item("allFiles"),
         item("notes"),
+        item("brief"),
         item("refresh"),
         sep,
         item("palette"),
         item("theme"),
+        item("editThemes"),
         item("zoomIn"),
         item("zoomOut"),
         item("zoomReset"),
@@ -124,6 +130,8 @@ export function buildMenu(): void {
         item("prevFile"),
         item("nextNote"),
         item("prevNote"),
+        item("nextPlace"),
+        item("prevPlace"),
         sep,
         item("blink"),
         sep,

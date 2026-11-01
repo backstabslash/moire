@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { CommitInfo, CompareMode, Refs, SideInfo } from "../../../shared/types";
 import type { Layout, Scope } from "../model/rows";
+import type { Theme, ThemeId } from "../model/themes";
 import { timeAgo } from "../model/time";
 import { AgentChip, Avatar } from "./Avatar";
 import { Icon, type IconName } from "./Icon";
 import { Key, keyText, useKeymap } from "./Key";
 import { Mark } from "./Mark";
-import { type ThemeId, ThemePicker } from "./ThemePicker";
+import { ThemePicker } from "./ThemePicker";
 
 export type PickerState = null | "main" | "commit" | "branches";
 type BranchesMode = Extract<CompareMode, { kind: "branches" }>;
@@ -39,8 +40,13 @@ interface Props {
   b?: SideInfo;
   layout: Layout;
   autoLayout: boolean;
+  previewing: boolean;
   scope: Scope;
   theme: ThemeId;
+  themes: readonly Theme[];
+  onEditThemes(): void;
+  themeProblems: readonly string[];
+  themeWarnings: Readonly<Record<string, string[]>>;
   themeMenu: boolean;
   onThemeMenu(open: boolean): void;
   cvd: boolean;
@@ -69,6 +75,7 @@ export function Toolbar(props: Props) {
   const { root, folder, mode, a, b, layout, scope, onPicker } = props;
   const searchKey = keyText(useKeymap(), "search");
   const searchTip = searchKey ? `Search (${searchKey})` : "Search";
+  const offInPreview = props.previewing ? "A preview always shows the whole page" : undefined;
   return (
     <header className="toolbar">
       <div className="brand">
@@ -127,12 +134,12 @@ export function Toolbar(props: Props) {
           </button>
           {!folder && (
             <>
-              <div className="seg" role="group" aria-label="Scope">
-                <button aria-pressed={scope === "changed"} onClick={() => props.onScope("changed")}>
+              <div className="seg" role="group" aria-label="Scope" data-tip={offInPreview}>
+                <button aria-pressed={scope === "changed"} disabled={props.previewing} onClick={() => props.onScope("changed")}>
                   <Icon name="changes" />
                   <span className="lbl">Changes only</span>
                 </button>
-                <button aria-pressed={scope === "full"} onClick={() => props.onScope("full")}>
+                <button aria-pressed={scope === "full"} disabled={props.previewing} onClick={() => props.onScope("full")}>
                   <Icon name="file" />
                   <span className="lbl">Full file</span>
                 </button>
@@ -141,13 +148,18 @@ export function Toolbar(props: Props) {
                 className="seg"
                 role="group"
                 aria-label="Layout"
-                data-tip={props.autoLayout ? "Unified while the window is narrow. Click Split to use it anyway." : undefined}
+                data-tip={offInPreview ?? (props.autoLayout ? "Unified while the window is narrow. Click Split to use it anyway." : undefined)}
               >
-                <button aria-pressed={layout === "split"} onClick={() => props.onLayout("split")}>
+                <button aria-pressed={layout === "split"} disabled={props.previewing} onClick={() => props.onLayout("split")}>
                   <Icon name="split" />
                   <span className="lbl">Split</span>
                 </button>
-                <button aria-pressed={layout === "unified"} className={props.autoLayout ? "is-auto" : undefined} onClick={() => props.onLayout("unified")}>
+                <button
+                  aria-pressed={layout === "unified"}
+                  className={props.autoLayout ? "is-auto" : undefined}
+                  disabled={props.previewing}
+                  onClick={() => props.onLayout("unified")}
+                >
                   <Icon name="unified" />
                   <span className="lbl">Unified</span>
                 </button>
@@ -178,6 +190,10 @@ export function Toolbar(props: Props) {
         open={props.themeMenu}
         onOpen={props.onThemeMenu}
         theme={props.theme}
+        themes={props.themes}
+        onEditThemes={props.onEditThemes}
+        problems={props.themeProblems}
+        warnings={props.themeWarnings}
         cvd={props.cvd}
         follow={props.followSystem}
         codeFont={props.codeFont}

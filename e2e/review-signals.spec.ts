@@ -1,34 +1,28 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines, numbered, staged, writeCommitNotes, writeNotes } from "./harness";
 
-const { git, initRepo, launch, shots } = harness();
+const { commitAll, git, initRepo, launch, shots } = harness();
 let repo: string;
 let page: Page;
 
-const body = Array.from({ length: 40 }, (_, i) => `export const v${i} = ${i};`);
-const edit = (at: Record<number, string>) => body.map((l, i) => at[i] ?? l).join("\n") + "\n";
+const { body } = numbered(40);
+const edit = (at: Record<number, string>) => lines(body.map((l, i) => at[i] ?? l));
 const write = (file: string, text: string) => writeFileSync(join(repo, file), text);
 const save = (message: string) => {
-  git("add", "-A");
-  git("commit", "-qm", message);
+  commitAll(message);
   return git("rev-parse", "HEAD").trim();
 };
-const commitNotes = (sha: string, notes: unknown) => {
-  mkdirSync(join(repo, ".git", "moire", "commits"), { recursive: true });
-  write(join(".git", "moire", "commits", `${sha}.json`), JSON.stringify(notes));
-};
-
 test.beforeAll(async () => {
   repo = initRepo();
-  write("a.ts", body.join("\n") + "\n");
+  write("a.ts", lines(body));
   write("a.test.ts", 'it("adds", () => {\n  expect(add(1, 2)).toBe(3);\n  expect(add(2, 2)).toBe(4);\n});\n');
   save("base");
   git("checkout", "-q", "-b", "feature");
   write("a.ts", edit({ 4: "export const v4 = 40;" }));
   const one = save("first step");
-  commitNotes(one, { summary: "First", chapters: [{ title: "Raises v4", text: "Raises it.", ranges: [{ path: "a.ts", lines: [5, 5] }] }] });
+  writeCommitNotes(repo, one, { summary: "First", chapters: [{ title: "Raises v4", text: "Raises it.", ranges: [{ path: "a.ts", lines: [5, 5] }] }] });
   write("a.ts", "// top\n// top\n" + edit({ 4: "export const v4 = 40;", 30: "export const v30 = 300;" }));
   write("a.test.ts", 'it("adds", () => {\n  expect(add(1, 2)).toBe(3);\n  expect(add(2, 2)).toBe(5);\n});\n');
   save("second step");
@@ -61,7 +55,7 @@ test("notes from each commit are stitched together and placed on today's lines",
   await expect(panel.locator(".chapter-from")).toContainText(["first step"]);
   await expect(panel.locator(".chapter-title")).toHaveText(["Raises v4"]);
   await expect(panel.locator(".notes-cover")).toHaveText("Notes for 1 of 2 commits");
-  await expect(panel.locator(".uncovered button")).toHaveText(["a.ts", "a.test.ts", "fresh.ts"]);
+  await expect(panel.locator(".uncovered button > span:last-of-type")).toHaveText(["a.ts", "a.test.ts", "fresh.ts"]);
   await panel.locator(".chapter-head").click();
   await expect(panel.locator(".stop-where")).toHaveText("a.ts:7");
 });
@@ -95,7 +89,7 @@ test("ignoring whitespace hides those changes, says so, and turns staging off", 
   await expect(page.locator('.file[data-path="a.test.ts"]')).toBeVisible();
   await page.keyboard.press("w");
   await expect(page.locator(".tool-chip")).toHaveText("Whitespace hidden");
-  write(join(".git", "moire", "notes.json"), JSON.stringify({ chapters: [{ title: "Reindent", text: "", ranges: ["a.test.ts"] }] }));
+  writeNotes(repo, { chapters: [{ title: "Reindent", text: "", ranges: ["a.test.ts"] }] });
   const chapter = page.locator(".chapter", { hasText: "Reindent" });
   await expect(chapter).not.toHaveClass(/is-done/);
   await chapter.locator(".chapter-head").click();
@@ -113,7 +107,7 @@ test("ignoring whitespace hides those changes, says so, and turns staging off", 
   await expect(page.locator(".commit-box .btn")).toBeDisabled();
   await page.locator(".commit-box .stage-progress-line button").click();
   await expect(page.locator(".toast.show")).toContainText("Turn off Ignore whitespace");
-  expect(git("diff", "--cached", "--name-only")).toContain("a.ts");
+  expect(staged(repo)).toContain("a.ts");
   git("reset", "-q");
   await page.keyboard.press("1");
   await page.locator(".tool-chip").click();

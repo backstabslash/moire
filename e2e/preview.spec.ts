@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { harness, png } from "./harness";
 
-const { git, initRepo, launch, open, shot, tmp } = harness();
+const { commitAll, initRepo, launch, open, shot, tmp } = harness();
 let repo: string;
 let outside: string;
 let page: Page;
@@ -25,14 +25,13 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
   writeFileSync(join(repo, "64x64.png"), png(64, 64, [204, 34, 80]));
   writeFileSync(join(repo, "data.bin"), Buffer.from([0, 1, 2, 0, 255]));
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
   writeFileSync(join(repo, "img/logo.png"), png(60, 30, [10, 140, 160]));
   writeFileSync(join(repo, "icon.svg"), svg("#0a8ca0"));
   writeFileSync(join(repo, "plan.md"), plan("write the **e2e** test", ""));
   writeFileSync(join(repo, "a.ts"), "export const a = 2;\n");
 
-  ({ page } = await launch(repo, { prefs: { theme: "dark" } }));
+  ({ page } = await launch(repo, { prefs: { theme: "dark", markdownView: "changes" } }));
   await expect(page.locator(".file")).toHaveCount(4);
 });
 
@@ -83,7 +82,9 @@ test("Markdown renders with changed and removed blocks marked, and j walks to th
   await page.getByRole("button", { name: /Preview/ }).click();
   await expect(page.locator(".md h1")).toHaveText("Plan");
   await expect(page.locator(".md .md-chg")).toHaveCount(1);
-  await expect(page.locator(".md .md-chg")).toHaveText("write the e2e test");
+  await expect(page.locator(".md-chg .md-del")).toHaveText("a");
+  await expect(page.locator(".md-chg .md-ins").first()).toHaveText("the");
+  await expect(page.locator(".md-chg strong .md-ins")).toHaveText("e2e");
   await expect(page.locator(".md-bar.chg.is-focus")).toHaveCount(1);
   await expect(page.locator(".md-bar.cut")).toHaveCount(1);
   await expect(page.locator(".md strong")).toHaveText("e2e");

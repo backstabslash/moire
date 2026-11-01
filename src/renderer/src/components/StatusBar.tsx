@@ -21,10 +21,26 @@ interface Props {
   hints?: boolean;
   folder?: boolean;
   notes?: boolean;
+  walking?: boolean;
+  brief?: boolean;
+  ended?: boolean;
   onCommand(id: CommandId): void;
 }
 
-export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true, folder = false, notes = false, onCommand }: Props) {
+export function StatusBar({
+  loadedAt,
+  files,
+  error,
+  actions,
+  zoom,
+  hints = true,
+  folder = false,
+  notes = false,
+  walking = false,
+  brief = false,
+  ended = false,
+  onCommand,
+}: Props) {
   const keymap = useKeymap();
   const hint = (ids: CommandId[], text: string, run = ids[0]) => {
     const bound = ids.filter((id) => keymap.keys[id].length);
@@ -78,13 +94,20 @@ export function StatusBar({ loadedAt, files, error, actions, zoom, hints = true,
         </span>
       )}
       <span className="keys">
-        {hints && (
+        {brief && (
+          <span className="keys-list">
+            {ended ? hint(["prevNote"], "last step") : hint(["nextNote"], walking ? "next step" : "start")}
+            {hint(["brief"], "close")}
+          </span>
+        )}
+        {hints && !brief && (
           <span className="keys-list">
             {!folder && hint(["nextHunk", "prevHunk"], "hunk")}
             {!folder && hint(["prevFile", "nextFile"], "file", "nextFile")}
-            {notes && hint(["prevNote", "nextNote"], "note", "nextNote")}
+            {notes && hint(["prevNote", "nextNote"], "step", "nextNote")}
             {!folder && hint(["blinkHold"], "blink", "blink")}
             {actions && hint(["stage"], actions === "staged" ? "unstage" : "stage")}
+            {actions === "unstaged" && walking && hint(["stageChapter"], "stage chapter")}
             {actions === "unstaged" && hint(["discard"], "discard")}
             {actions && hint(["undo"], "undo")}
             {hint(["copyMarkdown"], "copy")}

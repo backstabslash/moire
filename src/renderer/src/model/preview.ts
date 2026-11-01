@@ -1,6 +1,12 @@
 import type { FileDiff, SideInfo } from "../../../shared/types";
 
 export type PreviewKind = "image" | "markdown";
+export const PREVIEW_VIEWS = ["read", "changes", "sides"] as const;
+export type PreviewView = (typeof PREVIEW_VIEWS)[number];
+export const PREVIEW_CHOICES = ["auto", ...PREVIEW_VIEWS] as const;
+export type PreviewChoice = (typeof PREVIEW_CHOICES)[number];
+
+export const resolveView = (choice: PreviewChoice, roomy: boolean): PreviewView => (choice === "auto" ? (roomy ? "sides" : "changes") : choice);
 
 const RASTER = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico"]);
 const MARKDOWN = new Set(["md", "markdown"]);
@@ -20,6 +26,19 @@ export function previewOf(file: FileDiff): { kind: PreviewKind; forced: boolean 
   if (MARKDOWN.has(ext) && !file.binary && !file.tooLarge) return { kind: "markdown", forced: false };
   return null;
 }
+
+export const hasTwoVersions = (file: Pick<FileDiff, "status">, old: string | null) =>
+  old !== null && file.status !== "added" && file.status !== "untracked" && file.status !== "deleted" && file.status !== "unchanged";
+
+const MAX_RENDERED = 256 * 1024;
+const MAX_RENDERED_LINES = 10_000;
+
+// Past this, rendering alone can hold the window for seconds, whatever the file is made of.
+export const tooBigToRender = (text: string | null) => !!text && (text.length > MAX_RENDERED || text.split("\n").length > MAX_RENDERED_LINES);
+
+// When only Read can show this file, whatever view was chosen: nothing here may act as if Changes or Side by side were up.
+export const readOnly = (file: Pick<FileDiff, "status">, text: string | null, old: string | null) =>
+  !hasTwoVersions(file, old) || tooBigToRender(text) || tooBigToRender(old);
 
 export function sidePaths(file: Pick<FileDiff, "path" | "oldPath" | "status">): [string | null, string | null] {
   const isNew = file.status === "added" || file.status === "untracked" || file.status === "unchanged";

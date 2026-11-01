@@ -29,25 +29,29 @@ interface Changed {
   ref: LineRef;
   newLine: number;
   del: boolean;
+  atEnd: boolean;
 }
 
 export function changedLines(file: FileDiff): Changed[] {
   return file.hunks.flatMap((hunk, h) => {
     const out: Changed[] = [];
     let next = hunk.newLines === 0 ? hunk.newStart + 1 : hunk.newStart + hunk.newLines;
+    let atEnd = true;
     for (let i = hunk.lines.length - 1; i >= 0; i--) {
       const line = hunk.lines[i];
-      if (line.kind === "del") out.push({ ref: { hunk: h, line: i }, newLine: next, del: true });
+      if (line.kind === "del") out.push({ ref: { hunk: h, line: i }, newLine: next, del: true, atEnd });
       else {
+        atEnd = false;
         next = line.newNo!;
-        if (line.kind === "add") out.push({ ref: { hunk: h, line: i }, newLine: next, del: false });
+        if (line.kind === "add") out.push({ ref: { hunk: h, line: i }, newLine: next, del: false, atEnd: false });
       }
     }
     return out.reverse();
   });
 }
 
-const covers = (p: Placed | "all", c: Changed) => p === "all" || (c.newLine >= p.start && c.newLine <= p.end + (c.del ? 1 : 0));
+// A deletion belongs to the line after it, so a replaced line can't be half taken. End of file has no such line.
+const covers = (p: Placed | "all", c: Changed) => p === "all" || (c.newLine >= p.start && c.newLine <= p.end + (c.atEnd ? 1 : 0));
 
 const blank = (file: FileDiff, c: Changed) => !file.hunks[c.ref.hunk].lines[c.ref.line].text.trim();
 
@@ -87,6 +91,17 @@ function scan(file: FileDiff): Scan {
   return out;
 }
 
+export interface ChapterTarget {
+  file: FileDiff;
+  lines: LineRef[] | null;
+}
+
+export const targetRefs = ({ file, lines }: ChapterTarget) => lines ?? changedLines(file).map((c) => c.ref);
+
+export function chapterSize(targets: ChapterTarget[]): number {
+  return targets.reduce((n, t) => n + targetRefs(t).filter((r) => t.file.hunks[r.hunk].lines[r.line].text.trim()).length, 0);
+}
+
 export function chapterRefs(file: FileDiff, chapterRanges: (Placed | "all")[], everyChapterRanges: (Placed | "all")[]): LineRef[] {
   const { lines, isBlank, nearestSolid } = scan(file);
   const ours = (c: Changed) => chapterRanges.some((p) => covers(p, c));
@@ -99,7 +114,7 @@ export function chapterRefs(file: FileDiff, chapterRanges: (Placed | "all")[], e
     .map((c) => c.ref);
 }
 
-export function uncovered(files: FileDiff[], notes: AgentNotes, placed?: Placement[][]): { path: string; count: number }[] {
+function uncoveredLines(files: FileDiff[], notes: AgentNotes, placed?: Placement[][]) {
   const byPath = new Map<string, (Placed | "all")[]>();
   notes.chapters.forEach((c, ci) =>
     c.ranges.forEach((r, ri) => {
@@ -107,18 +122,51 @@ export function uncovered(files: FileDiff[], notes: AgentNotes, placed?: Placeme
       if (at !== "lost") byPath.set(r.path, [...(byPath.get(r.path) ?? []), at]);
     }),
   );
-  return files.flatMap((file) => {
+  return files.map((file) => {
     const placed = byPath.get(file.path) ?? [];
     const { lines, isBlank } = scan(file);
-    const count = lines.filter((c, i) => !isBlank[i] && !placed.some((p) => covers(p, c))).length;
-    return count ? [{ path: file.path, count }] : [];
+    return { path: file.path, left: lines.filter((c, i) => !isBlank[i] && !placed.some((p) => covers(p, c))) };
   });
 }
 
-export function hasChanges(files: FileDiff[], chapter: Chapter, placed: Placement[]): boolean {
-  return chapter.ranges.some((r, i) => {
-    const file = files.find((f) => f.path === r.path);
-    return !!file && (!file.hunks.length || chapterRefs(file, [lostAsAll(placed[i])], []).length > 0);
+export function uncovered(files: FileDiff[], notes: AgentNotes, placed?: Placement[][]): { path: string; count: number }[] {
+  return uncoveredLines(files, notes, placed).flatMap(({ path, left }) => (left.length ? [{ path, count: left.length }] : []));
+}
+
+export const firstUncovered = (file: FileDiff, notes: AgentNotes, placed?: Placement[][]) => uncoveredLines([file], notes, placed)[0].left[0]?.newLine ?? null;
+
+// Older notes can end just above a deletion. It stays unexplained, but a chapter that close isn't finished, unless another chapter explains it.
+export const bordersDeletion = (file: FileDiff, at: Placed | "all", every: (Placed | "all")[]) =>
+  at !== "all" && scan(file).lines.some((c) => c.del && c.newLine === at.end + 1 && !every.some((p) => covers(p, c)));
+
+export function placesByPath(chapters: Pick<Chapter, "ranges">[], placed: Placement[][]): Map<string, (Placed | "all")[]> {
+  const out = new Map<string, (Placed | "all")[]>();
+  chapters.forEach((c, ci) =>
+    c.ranges.forEach((r, ri) => {
+      const at = placed[ci]?.[ri];
+      if (at && at !== "lost") out.set(r.path, [...(out.get(r.path) ?? []), at]);
+    }),
+  );
+  return out;
+}
+
+function rangeHasChanges(files: FileDiff[], r: NoteRange, placed: Placement, every: ReadonlyMap<string, (Placed | "all")[]>): boolean {
+  const file = files.find((f) => f.path === r.path);
+  if (!file) return false;
+  const at = lostAsAll(placed);
+  return !file.hunks.length || chapterRefs(file, [at], []).length > 0 || bordersDeletion(file, at, every.get(r.path) ?? []);
+}
+
+export function hasChanges(files: FileDiff[], chapter: Chapter, placed: Placement[], every: ReadonlyMap<string, (Placed | "all")[]>): boolean {
+  return chapter.ranges.some((r, i) => rangeHasChanges(files, r, placed[i], every));
+}
+
+// A warning can be about lines nobody changed, which staging can never finish, so it has to be told from one on lines already staged.
+export function standingWarns(files: FileDiff[], chapters: Chapter[], placed: Placement[][]): number[][] {
+  const every = placesByPath(chapters, placed);
+  return chapters.map((c, ci) => {
+    const quiet = c.ranges.map((r, i) => !rangeHasChanges(files, r, placed[ci][i], every));
+    return c.ranges.flatMap((r, i) => (quiet[i] && (r.warn || (c.warn && quiet.every(Boolean))) ? [i] : []));
   });
 }
 
@@ -140,10 +188,19 @@ export function carryLines(hunks: Hunk[], [start, end]: [number, number]): [numb
   return from > to ? null : [from, to];
 }
 
-export function changedRegions(hunks: Hunk[]): [number, number][] {
-  return hunks.map((h) => {
-    const start = Math.max(1, h.newStart);
-    return [start, h.newLines ? start + h.newLines - 1 : start];
+// A later edit beside a deletion isn't explained by it, so the note moves to the line above, which borders the deletion and claims nothing.
+export function carryDeletion(later: Hunk[], before: number, lastLine: number): [number, number] {
+  const after = before + 1;
+  const disturbed = later.some((h) => (h.oldLines ? h.oldStart <= after && after < h.oldStart + h.oldLines : h.oldStart === before));
+  const line = Math.max(1, carryLine(later, Math.max(1, !disturbed && after <= lastLine ? after : before), "end"));
+  return [line, line];
+}
+
+export function carryRegions(own: Hunk[], later: Hunk[], lastLine: number): [number, number][] {
+  return own.flatMap((h) => {
+    if (!h.newLines) return [carryDeletion(later, h.newStart, lastLine)];
+    const lines = carryLines(later, [h.newStart, h.newStart + h.newLines - 1]);
+    return lines ? [lines] : [];
   });
 }
 

@@ -270,6 +270,8 @@ export function ClashView({ clash, layout, scope }: ViewProps) {
       onDiscardFile={noop}
       preview={null}
       onTogglePreview={null}
+      onPreviewView={noop}
+      onOpenLink={noop}
       blink={null}
       onBlink={noop}
       onMenu={noop}

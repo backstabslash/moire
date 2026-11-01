@@ -26,6 +26,9 @@ interface UndoEntry {
   dirs?: string[];
 }
 
+type Entry = Omit<UndoEntry, "id">;
+type Log = (entry: Entry) => Promise<void>;
+
 interface IndexState {
   blob: Blob | null;
   conflict?: string[];
@@ -50,6 +53,19 @@ export function serial<T>(fn: () => Promise<T>): Promise<T> {
 
 export function act(root: string, req: StageRequest): Promise<string> {
   return serial(() => runAct(root, req));
+}
+
+// One undo for the lot, even if a file partway through fails. Logged once at the end, so a big group can't push itself out of the log.
+export function actGroup(root: string, reqs: StageRequest[], label: string): Promise<string> {
+  return serial(async () => {
+    const done: Entry[] = [];
+    try {
+      for (const req of reqs) await runAct(root, req, async (entry) => void done.push(entry));
+    } finally {
+      if (done.length) await record(root, { label, steps: done.flatMap((e) => e.steps), head: done[0].head });
+    }
+    return label;
+  });
 }
 
 export function actAll(root: string, req: StageAllRequest): Promise<string> {
@@ -129,7 +145,7 @@ async function checkSeen(root: string, mode: StageRequest["mode"], files: FileDi
   if (moved) throw new Error(`${basename(moved.path)} changed since you looked. Refreshed.`);
 }
 
-async function runAct(root: string, req: StageRequest): Promise<string> {
+async function runAct(root: string, req: StageRequest, log: Log = (entry) => record(root, entry, req.undoId)): Promise<string> {
   const { mode, action, file } = req;
   if ((mode === "staged") !== (action === "unstage")) throw new Error(`Can't ${action} in the ${mode} view`);
   const name = basename(file.path);
@@ -140,7 +156,7 @@ async function runAct(root: string, req: StageRequest): Promise<string> {
   const picked = new Set((req.lines ?? []).map((r) => `${r.hunk}:${r.line}`).filter((k) => changed.includes(k)));
   const whole = req.lines === null || picked.size === changed.length;
   if (!whole && picked.size === 0) throw new Error("No changed lines selected");
-  if (whole && action !== "discard") return stageWhole(root, action, [file], paths, `${VERB[action]} ${name}`, req.undoId);
+  if (whole && action !== "discard") return stageWhole(root, action, [file], paths, `${VERB[action]} ${name}`, log);
 
   const kind = action === "discard" ? "worktree" : "index";
   const touched = action === "discard" && file.status !== "renamed" ? [file.path] : paths;
@@ -158,7 +174,7 @@ async function runAct(root: string, req: StageRequest): Promise<string> {
   const [after, head] = await Promise.all([Promise.all(touched.map((p) => read(p, false))), kind === "index" ? headSha(root) : undefined]);
 
   const label = whole ? `${VERB[action]} ${name}` : `${VERB[action]} ${picked.size} ${picked.size === 1 ? "line" : "lines"} in ${name}`;
-  await record(root, { label, steps: touched.map((path, i): Step => ({ path, [kind]: [before[i], after[i]] })), head }, req.undoId);
+  await log({ label, steps: touched.map((path, i): Step => ({ path, [kind]: [before[i], after[i]] })), head });
   return label;
 }
 
@@ -171,7 +187,14 @@ async function runActAll(root: string, { mode, files }: StageAllRequest): Promis
   return stageWhole(root, action, files, paths, label);
 }
 
-async function stageWhole(root: string, action: "stage" | "unstage", files: FileDiff[], paths: string[], label: string, undoId?: string): Promise<string> {
+async function stageWhole(
+  root: string,
+  action: "stage" | "unstage",
+  files: FileDiff[],
+  paths: string[],
+  label: string,
+  log: Log = (entry) => record(root, entry),
+): Promise<string> {
   for (const f of files.filter((f) => f.status === "conflicted")) {
     const name = basename(f.path);
     if (action === "unstage") throw new Error(`${name} has merge conflicts. Resolve them first.`);
@@ -191,7 +214,7 @@ async function stageWhole(root: string, action: "stage" | "unstage", files: File
     if (!b.conflict && same(b.blob, a.blob)) return [];
     return [{ path, index: [b.blob, a.blob], ...(b.conflict && { conflict: b.conflict }) }];
   });
-  await record(root, { label, steps, head }, undoId);
+  await log({ label, steps, head });
   return label;
 }
 
@@ -432,7 +455,7 @@ async function readLog(store: Store): Promise<UndoEntry[]> {
   }
 }
 
-export async function record(root: string, entry: Omit<UndoEntry, "id">, id: string = randomUUID()) {
+export async function record(root: string, entry: Entry, id: string = randomUUID()) {
   const store = await storeFor(root);
   const log = await readLog(store);
   await writeLog(root, store, [...log, { id, ...entry }], log);

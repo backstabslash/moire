@@ -1,21 +1,19 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { THEMES } from "../src/renderer/src/model/themes";
+import { harness, lines } from "./harness";
 
-const { git, initRepo, launch, shot, tmp } = harness();
+const { commitAll, git, html, idle, initRepo, launch, launchFresh, pick, shot, variable } = harness();
 let repo: string;
 let app: ElectronApplication;
 let page: Page;
 
-const html = () => page.locator("html");
-
 test.beforeAll(async () => {
   repo = initRepo();
   const body = Array.from({ length: 40 }, (_, i) => `export const v${i} = ${i}; // value ${i}`);
-  writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  writeFileSync(join(repo, "a.ts"), lines(body));
+  commitAll("init");
   const changed = [
     ...body.slice(0, 5),
     "export const v5 = 50; // value 5",
@@ -24,34 +22,49 @@ test.beforeAll(async () => {
     "export const v30 = 300;",
     ...body.slice(31),
   ];
-  writeFileSync(join(repo, "a.ts"), changed.join("\n") + "\n");
+  writeFileSync(join(repo, "a.ts"), lines(changed));
 
   ({ app, page } = await launch(repo, { prefs: { theme: "light" } }));
   await expect(page.locator(".hunk-head")).toHaveCount(2);
 });
 
 test("the theme menu switches themes and colour-blind plates", async () => {
-  const plateA = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--a").trim());
+  await expect(page.locator(".theme-btn")).not.toBeFocused();
   await page.locator(".theme-btn").click();
-  await expect(page.getByRole("menuitemradio")).toHaveCount(6);
+  await expect(page.getByRole("menuitemradio", { name: /Gypsum/ })).toBeVisible();
   await shot("theme-menu");
   await page.getByRole("menuitemradio", { name: /Safelight/ }).click();
   await expect(html()).toHaveAttribute("data-theme", "safelight");
   await expect(html()).toHaveAttribute("data-tone", "dark");
-  const warm = await plateA();
+  const warm = await variable("--a");
   await page.getByRole("menuitemcheckbox", { name: /Colour-blind/ }).click();
   await expect(html()).toHaveAttribute("data-cvd", "on");
-  expect(await plateA()).not.toBe(warm);
+  expect(await variable("--a")).not.toBe(warm);
   await page.getByRole("menuitemcheckbox", { name: /Colour-blind/ }).click();
   await page.keyboard.press("Escape");
   await expect(page.locator(".theme-pop")).toHaveCount(0);
   await expect(page.locator(".theme-btn")).toHaveAccessibleName("Theme: Safelight");
 });
 
+test("the theme menu walks by arrow keys and gives focus back", async () => {
+  await page.locator(".theme-btn").click();
+  await expect(page.getByRole("menuitemradio", { checked: true })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("menuitemradio", { name: "Phosphor" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(html()).toHaveAttribute("data-theme", "p7");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".theme-btn")).toBeFocused();
+  await pick(/Safelight/);
+});
+
 test("the theme menu holds review keys, and Escape closes only the menu", async () => {
   await page.keyboard.press("/");
   await page.locator(".theme-btn").click();
   for (const key of ["s", "x", "t"]) await page.keyboard.press(key);
+  await idle();
   expect(git("diff", "--cached")).toBe("");
   expect(git("diff")).toContain("export const extra = true;");
   await page.keyboard.press("Escape");
@@ -61,25 +74,13 @@ test("the theme menu holds review keys, and Escape closes only the menu", async 
 });
 
 test("t swaps between the last light and the last dark theme", async () => {
-  const pick = async (name: RegExp) => {
-    await page.locator(".theme-btn").click();
-    await page.getByRole("menuitemradio", { name }).click();
-    await page.keyboard.press("Escape");
-  };
-  await pick(/Engineering pad/);
+  await pick(/Ledger/);
   await page.keyboard.press("t");
   await expect(html()).toHaveAttribute("data-theme", "safelight");
   await page.keyboard.press("t");
   await expect(html()).toHaveAttribute("data-theme", "pad");
-  for (const [name, id] of [
-    [/^Plate$/, "light"],
-    [/^Plate dark/, "dark"],
-    [/Engineering/, "pad"],
-    [/P7/, "p7"],
-    [/Safelight/, "safelight"],
-    [/Cyanotype/, "cyanotype"],
-  ] as const) {
-    await pick(name);
+  for (const { name, id } of process.env.MOIRE_SHOTS ? THEMES : []) {
+    await pick(new RegExp(`^${name}$`));
     await expect(html()).toHaveAttribute("data-theme", id);
     await shot(`theme-${id}`);
   }
@@ -175,7 +176,7 @@ test("code font and size apply to the diff and survive a reload", async () => {
 });
 
 test("the theme follows the desktop until you pick the other tone", async () => {
-  ({ page } = await launch(repo, { data: tmp("data") }));
+  ({ page } = await launchFresh(repo));
   await page.emulateMedia({ colorScheme: "light" });
   await expect(page.locator(".hunk-head").first()).toBeVisible();
   const follow = page.getByRole("menuitemcheckbox", { name: /Follow system/ });

@@ -1,18 +1,15 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { gitIn, harness, png } from "./harness";
+import { commitAllIn, harness, png, writeIn } from "./harness";
 
-const { git, initRepo, launch, shots } = harness();
+const { commitAll, git, initRepo, launch, shots } = harness();
 let repo: string;
 let sub: string;
 let page: Page;
 
-const write = (path: string, data: string | Buffer) => {
-  mkdirSync(dirname(join(repo, path)), { recursive: true });
-  writeFileSync(join(repo, path), data);
-};
+const write = (path: string, data: string | Buffer) => writeIn(repo)(path, data);
 
 const oid = (data: Buffer) => createHash("sha256").update(data).digest("hex");
 const pointer = (data: Buffer) => `version https://git-lfs.github.com/spec/v1\noid sha256:${oid(data)}\nsize ${data.length}\n`;
@@ -23,16 +20,14 @@ test.beforeAll(async () => {
   repo = initRepo();
   sub = initRepo();
   writeFileSync(join(sub, "inner.txt"), "inner\n");
-  gitIn(sub)("add", "-A");
-  gitIn(sub)("commit", "-qm", "init");
+  commitAllIn(sub)("init");
 
   write(".gitattributes", "*.png filter=lfs diff=lfs merge=lfs -text\n");
   write("latin.txt", "menu\ncafe\n");
   write("img/logo.png", pointer(png(40, 20, [204, 34, 80])));
   write("img/icon.png", pointer(png(8, 8, [0, 0, 0])));
   git("-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "sub");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
 
   write("latin.txt", Buffer.from("menu\ncaf\xe9\n", "latin1"));
   write("img/icon.png", png(16, 16, [10, 140, 160]));

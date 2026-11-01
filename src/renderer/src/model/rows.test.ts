@@ -316,6 +316,13 @@ describe("noise folding", () => {
     expect(buildRows(file([ws]), null, { ...opts, showAll: true }).some((r) => r.t === "split" && r.kind === "chg")).toBe(true);
   });
 
+  it.each([
+    ["text that couldn't be decoded", ["-caf\uFFFD", "+caf\uFFFD"]],
+    ["a line moved past unchanged code", ["-guard();", " charge();", " log();", "+guard();"]],
+  ])("doesn't fold %s", (_name, body) => {
+    expect(buildRows(file([diffHunk(2, body)]), null, opts).some((r) => isHunk(r) && !!r.folded)).toBe(false);
+  });
+
   it("doesn't fold spaces that join words, or reindents where indentation matters", () => {
     const dedent: [string[], string[]] = [
       ["if admin:", "    grant(user)"],

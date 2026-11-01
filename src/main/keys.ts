@@ -23,13 +23,15 @@ export async function editKeys(): Promise<void> {
 }
 
 // Editors save by replacing the file, so the folder is watched rather than the file.
-export function watchKeys(onChange: () => void): void {
+export function watchUserFile(file: string, onChange: () => void): void {
   let timer: NodeJS.Timeout | undefined;
   try {
     watch(app.getPath("userData"), (_event, name) => {
-      if (name !== FILE) return;
+      if (name !== file) return;
       clearTimeout(timer);
       timer = setTimeout(onChange, 100);
     }).on("error", () => {});
   } catch {}
 }
+
+export const watchKeys = (onChange: () => void) => watchUserFile(FILE, onChange);

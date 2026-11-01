@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { changedLines, chapterRefs, hasChanges, placeRange, rangeStaged, uncovered } from "./chapters";
+import { changedLines, chapterRefs, chapterSize, hasChanges, placeRange, rangeStaged, uncovered } from "./chapters";
 import { chapterFile as file, chapterHunks as hunks, chapterText as text, diffHunk } from "../main/test-repo";
 import type { FileDiff, Placement } from "./types";
+
+describe("chapterSize", () => {
+  it("counts changed lines that aren't blank", () => {
+    const blank = { ...file, hunks: [diffHunk(1, ["+", "+code", " ctx", "-old"])] };
+    expect(chapterSize([{ file: blank, lines: null }])).toBe(2);
+    expect(
+      chapterSize([
+        { file: blank, lines: [{ hunk: 0, line: 1 }] },
+        { file, lines: null },
+      ]),
+    ).toBe(5);
+  });
+});
 
 describe("placeRange", () => {
   it("keeps line numbers when the code still matches or wasn't given", () => {
@@ -26,6 +39,8 @@ describe("placeRange", () => {
 });
 
 describe("chapters and coverage", () => {
+  const removed: FileDiff = { ...file, hunks: [diffHunk(4, [" a", " b", "-checkAuth();", " c"])] };
+
   it("places deleted lines at the line that now follows them", () => {
     expect(changedLines(file).map((c) => [c.newLine, c.del])).toEqual([
       [10, true],
@@ -43,6 +58,41 @@ describe("chapters and coverage", () => {
     ]);
     expect(chapterRefs(file, [{ start: 19, end: 19 }], [])).toEqual([{ hunk: 1, line: 0 }]);
     expect(chapterRefs(file, ["all"], ["all"])).toHaveLength(4);
+  });
+
+  it("leaves a deletion to the line after it, so a chapter can't take half of a replaced line", () => {
+    const replaced: FileDiff = { ...file, hunks: [diffHunk(4, [" a", " b", "-timeout = 30", "+timeout = 300", " c"])] };
+    const above = { start: 3, end: 5 };
+    const notes = { chapters: [{ title: "T", text: "", ranges: [{ path: "a.ts", lines: [3, 5] as [number, number] }] }] };
+    expect(chapterRefs(replaced, [above], [above])).toEqual([]);
+    expect(chapterRefs(removed, [above], [above])).toEqual([]);
+    expect(uncovered([removed], notes)).toEqual([{ path: "a.ts", count: 1 }]);
+    expect(chapterRefs(removed, [{ start: 6, end: 6 }], [])).toEqual([{ hunk: 0, line: 2 }]);
+  });
+
+  it("finishes a chapter when another chapter explains the deletion below it", () => {
+    const ranges = [{ path: "a.ts", lines: [3, 5] as [number, number] }];
+    const every = new Map([
+      [
+        "a.ts",
+        [
+          { start: 3, end: 5 },
+          { start: 6, end: 6 },
+        ],
+      ],
+    ]);
+    expect(hasChanges([removed], { title: "T", text: "", ranges }, [{ start: 3, end: 5 }], every)).toBe(false);
+  });
+
+  it("keeps a chapter ending just above a deletion, though the deletion stays unexplained", () => {
+    const ranges = [{ path: "a.ts", lines: [3, 5] as [number, number] }];
+    expect(hasChanges([removed], { title: "T", text: "", ranges }, [{ start: 3, end: 5 }], new Map())).toBe(true);
+    expect(hasChanges([removed], { title: "T", text: "", ranges }, [{ start: 3, end: 4 }], new Map())).toBe(false);
+  });
+
+  it("lets a range reach a deletion at the end of the file, which has no line after it", () => {
+    const tail: FileDiff = { ...file, hunks: [diffHunk(4, [" a", " b", "-gone"])] };
+    expect(chapterRefs(tail, [{ start: 5, end: 5 }], [])).toEqual([{ hunk: 0, line: 2 }]);
   });
 
   it("gives blank lines no range covers to the chapter of the nearest changed line", () => {
@@ -73,10 +123,10 @@ describe("chapters and coverage", () => {
     expect(uncovered([file], notes, [[{ start: 24, end: 25 }, "all"]])).toEqual([{ path: "a.ts", count: 3 }]);
     expect(uncovered([file], notes, [["lost", "all"]])).toEqual([{ path: "a.ts", count: 4 }]);
     const placed: Placement[] = [{ start: 10, end: 12 }, "all"];
-    expect(hasChanges([file], notes.chapters[0], placed)).toBe(true);
-    expect(hasChanges([other], notes.chapters[0], placed)).toBe(false);
-    expect(hasChanges([file], notes.chapters[0], [{ start: 40, end: 41 }, "all"])).toBe(false);
-    expect(hasChanges([file], notes.chapters[0], ["lost", "all"])).toBe(true);
+    expect(hasChanges([file], notes.chapters[0], placed, new Map())).toBe(true);
+    expect(hasChanges([other], notes.chapters[0], placed, new Map())).toBe(false);
+    expect(hasChanges([file], notes.chapters[0], [{ start: 40, end: 41 }, "all"], new Map())).toBe(false);
+    expect(hasChanges([file], notes.chapters[0], ["lost", "all"], new Map())).toBe(true);
   });
 });
 

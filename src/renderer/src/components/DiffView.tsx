@@ -8,7 +8,7 @@ import { familyOf } from "../model/family";
 import { modeNote } from "../model/modes";
 import { type NameParts, renameParts } from "../model/rename";
 import { FOLD_STEP, hunkSpans, type HunkSpan, type Layout, type LineRow, type Row, type Side } from "../model/rows";
-import type { PreviewKind } from "../model/preview";
+import { PREVIEW_VIEWS, type PreviewChoice, type PreviewKind, type PreviewView, readOnly, resolveView } from "../model/preview";
 import { type Mark, type RowNote, rowNotes } from "../model/notes";
 import type { Find, Hit } from "../model/search";
 import { type Col, changedRefs, hunkRefs } from "../model/selection";
@@ -21,7 +21,7 @@ import { Icon } from "./Icon";
 import { Key, keyText, MAC, useKeymap } from "./Key";
 import { Registered } from "./Mark";
 import { Minimap } from "./Minimap";
-import { ImagePreview, MarkdownPreview } from "./Preview";
+import { ImagePreview, MarkdownPreview, type ReadSpot } from "./Preview";
 
 const ROW = 21;
 const HUNK_HEAD = 36;
@@ -39,6 +39,7 @@ export interface DiffViewHandle {
   scrollToRow(index: number, align?: "start" | "center" | "auto"): void;
   showHunk?(hunk: number): void;
   scroller(): HTMLDivElement | null;
+  roomy?(): boolean;
   side?(): "a" | "b";
   selectedText?(): string | null;
 }
@@ -75,6 +76,8 @@ interface Props {
   onDiscardFile(): void;
   preview: Preview | null;
   onTogglePreview: (() => void) | null;
+  onPreviewView(view: PreviewView): void;
+  onOpenLink(path: string): void;
   blink: Blink | null;
   onBlink(hunk: number): void;
   onMenu(path: string, event: React.MouseEvent): void;
@@ -90,12 +93,17 @@ export interface Blink {
   plate: "a" | "b";
 }
 
+const VIEW_NAMES: Record<PreviewView, string> = { read: "Read", changes: "Changes", sides: "Side by side" };
+const SIDES_MIN_WIDTH = 1000;
+
 export interface Preview {
   kind: PreviewKind;
   root: string;
   mode: CompareMode;
   version: string;
   text: string | null;
+  old: string | null;
+  view: PreviewChoice;
 }
 
 export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(props, ref) {
@@ -130,6 +138,8 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     onDiscardFile,
     preview,
     onTogglePreview,
+    onPreviewView,
+    onOpenLink,
     blink,
     onBlink,
     onMenu,
@@ -143,12 +153,33 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
   const onlyB = file.status === "added" || file.status === "untracked" || file.status === "unchanged";
   const scrollRef = useRef<HTMLDivElement>(null);
   const diffRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const [roomy, setRoomy] = useState(true);
+  const measuresWidth = preview?.kind === "markdown";
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!main || !measuresWidth) return;
+    const fit = () => setRoomy(main.clientWidth >= SIDES_MIN_WIDTH);
+    fit();
+    const resize = new ResizeObserver(fit);
+    resize.observe(main);
+    return () => resize.disconnect();
+  }, [measuresWidth]);
+  const markdownView = resolveView(preview?.view ?? "auto", roomy);
   const previewRef = useRef<DiffViewHandle>(null);
+  const readSpot = useRef<ReadSpot | null>(null);
+  useEffect(() => {
+    if (readSpot.current?.path !== file.path) readSpot.current = null;
+  }, [file.path]);
   const selectionEndRows = useRef<number[]>([]);
   const spans = useMemo(() => hunkSpans(rows), [rows]);
   const marks = notes?.marks;
   const openChapter = notes?.chapter ?? null;
   const openStop = notes?.stop ?? null;
+  const previewStep = useMemo(
+    () => (marks ?? []).filter((m) => m.lead === openStop).map((m) => ({ from: m.start, to: m.end, no: m.chapter + 1 })),
+    [marks, openStop],
+  );
   const notesByRow = useMemo(() => (marks ? rowNotes(rows, marks, openChapter, openStop) : null), [rows, marks, openChapter, openStop]);
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -302,9 +333,11 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
     if (previewRef.current) return previewRef.current.scrollToRow(index, align);
     const [offset] = virtualizer.getOffsetForIndex(index, align) ?? [0];
     if (align === "auto" && offset === scrollRef.current?.scrollTop) return;
-    scrollRef.current?.scrollTo({ top: offset });
+    // Rows above can measure taller than estimated, and scrollToIndex keeps correcting until the row lands.
+    virtualizer.scrollToIndex(index, { align });
   };
   useImperativeHandle(ref, () => ({
+    roomy: () => roomy,
     scrollToRow,
     showHunk(hunk) {
       const index = rows.findIndex((r) => r.t === "hunk" && r.hunk === hunk);
@@ -370,6 +403,15 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
           <Key id="preview" />
         </button>
       )}
+      {preview?.kind === "markdown" && !readOnly(file, preview.text, preview.old) && (
+        <span className="md-views" role="group" aria-label="Markdown view">
+          {PREVIEW_VIEWS.map((id) => (
+            <button key={id} aria-pressed={markdownView === id} onClick={() => onPreviewView(id)}>
+              {VIEW_NAMES[id]}
+            </button>
+          ))}
+        </span>
+      )}
       {actions && (
         <button onClick={() => onAct(actions === "staged" ? "unstage" : "stage", "file")}>
           <Icon name={actions === "staged" ? "unstage" : "stage"} />
@@ -392,6 +434,7 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
   const styles = useMemo(() => familyOf(file.path, file) === "styles", [file]);
   return (
     <main
+      ref={mainRef}
       className={`main${preview ? ` is-preview preview-${preview.kind}` : file.status === "unchanged" ? " is-whole" : ""}`}
       data-plate={blink && !preview ? blink.plate : undefined}
     >
@@ -466,11 +509,17 @@ export const DiffView = forwardRef<DiffViewHandle, Props>(function DiffView(prop
           file={file}
           rows={rows}
           side={shown}
+          oldSide={a}
           text={preview.text}
+          old={preview.old}
+          view={markdownView}
           version={preview.version}
           focusHunk={focusHunk}
+          step={previewStep}
           find={find}
+          spot={readSpot}
           onFocusHunk={onFocusHunk}
+          onOpenFile={onOpenLink}
         />
       )}
       {!preview && (

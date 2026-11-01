@@ -1,23 +1,22 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines, numbered } from "./harness";
 
-const { git, initRepo, launch, open, shot } = harness();
+const { commitAll, initRepo, launch, open, shot } = harness();
 let repo: string;
 let page: Page;
 
-const body = Array.from({ length: 60 }, (_, i) => `export const v${i} = ${i};`);
+const { body, edit } = numbered(60);
 
 test.beforeAll(async () => {
   repo = initRepo();
-  writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
-  writeFileSync(join(repo, "b.ts"), body.join("\n") + "\n");
+  writeFileSync(join(repo, "a.ts"), lines(body));
+  writeFileSync(join(repo, "b.ts"), lines(body));
   writeFileSync(join(repo, "IDEAS.md"), "# Ideas\n\n- a file tree\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
-  writeFileSync(join(repo, "a.ts"), body.map((l, i) => (i === 3 ? l.replace("= 3", "= 30") : l)).join("\n") + "\n");
-  writeFileSync(join(repo, "b.ts"), body.map((l, i) => (i === 25 ? l.replace("= 25", "= 99") : l)).join("\n") + "\n");
+  commitAll("init");
+  writeFileSync(join(repo, "a.ts"), lines(edit(3)));
+  writeFileSync(join(repo, "b.ts"), lines(body.map((l, i) => (i === 25 ? l.replace("= 25", "= 99") : l))));
 
   ({ page } = await launch(repo));
   await expect(page.locator(".file")).toHaveCount(2);

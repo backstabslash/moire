@@ -1,11 +1,36 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { carryLines, changedLines, changedRegions, chapterRefs, hasChanges, newToOld, placeRange } from "../shared/chapters";
-import type { AgentNotes, Chapter, ChapterSource, CompareMode, FileDiff, NoteRange, NotesFile, Placement, Screenshot } from "../shared/types";
+import {
+  carryDeletion,
+  carryLines,
+  carryRegions,
+  changedLines,
+  chapterRefs,
+  hasChanges,
+  newToOld,
+  placeRange,
+  placesByPath,
+  standingWarns,
+} from "../shared/chapters";
+import type {
+  AgentNotes,
+  Chapter,
+  ChapterSource,
+  CompareMode,
+  FileDiff,
+  NoteRange,
+  NoteSection,
+  NotesFile,
+  NotesIntro,
+  Placement,
+  Screenshot,
+} from "../shared/types";
 import { changesSince, commitChanges, diff, git, gitBuffer, literal, sides, SIZE_LIMIT } from "./git";
 
 const LIMIT = 200;
+// From this format on, a note carries over the ranges after it. Before it, a note belongs to its own range alone.
+const CARRYING_FORMAT = 2;
 // Commits made here, by their reflog entry. Pulls and merges bring in other people's commits under other entries.
 const OWN = /^(commit( \([a-z]+\))?|cherry-pick|revert):|\((pick|reword|edit|squash|fixup|continue)\):/;
 const BUSY = ["rebase-merge", "rebase-apply", "MERGE_HEAD", "MERGE_AUTOSTASH", "CHERRY_PICK_HEAD", "REVERT_HEAD", "index.lock"];
@@ -40,7 +65,16 @@ export async function readNotes(root: string, commit?: string): Promise<NotesFil
     return { ...file, notes: await withScreenshots(root, file.notes, false) };
   }
   const file = await readFrom(path);
-  return file.notes ? { ...file, notes: await withScreenshots(root, file.notes, true), placed: await placements(root, file.notes.chapters) } : file;
+  if (!file.notes) return file;
+  const placed = await placements(root, file.notes.chapters);
+  return { ...file, notes: await withScreenshots(root, file.notes, true), placed, ...(await standing(root, file.notes.chapters, placed)) };
+}
+
+async function standing(root: string, chapters: Chapter[], placed: Placement[][]): Promise<Pick<NotesFile, "standing">> {
+  if (!chapters.some((c) => c.warn || c.ranges.some((r) => r.warn))) return {};
+  const found = await diff(root, { kind: "all" }).catch(() => null);
+  const warns = found ? standingWarns(found.files, chapters, placed) : [];
+  return warns.some((w) => w.length) ? { standing: warns } : {};
 }
 
 export async function screenshotPath(root: string, file: string): Promise<string | null> {
@@ -89,16 +123,16 @@ export async function readRangeNotes(root: string, mode: Extract<CompareMode, { 
     root,
     noted.map((c) => c.sha),
   );
-  const chapters: Chapter[] = [];
-  const placed: Placement[][] = [];
+  const found: Chapter[] = [];
+  const foundAt: Placement[][] = [];
   const keep = (chapter: Chapter, at: Placement[]) => {
-    if (!chapter.ranges.length || !hasChanges(files, chapter, at)) return;
-    chapters.push(chapter);
-    placed.push(at);
+    if (!chapter.ranges.length) return;
+    found.push(chapter);
+    foundAt.push(at);
   };
   for (const { sha, notes } of noted) {
     const [own, later] = await Promise.all([commitChanges(root, sha), changesSince(root, sha, end)]);
-    const source: ChapterSource = { ...named.get(sha)!, summary: notes.summary };
+    const source: ChapterSource = { ...named.get(sha)!, ...introOf(notes) };
     const carry = async (r: NoteRange) => {
       const last = !r.lines && !own.some((f) => f.path === r.path) ? await lastChange(root, `${a.rev}..${sha}`, r.path) : null;
       return last
@@ -106,32 +140,39 @@ export async function readRangeNotes(root: string, mode: Extract<CompareMode, { 
         : carryRange(root, sha, r, own, later, files);
     };
     for (const chapter of notes.chapters) {
-      const ranges = (await Promise.all(chapter.ranges.map(carry))).flat();
+      const ranges = keepSteps(chapter, chapter.ranges, await Promise.all(chapter.ranges.map(carry)), (range, note) => ({ ...range, note }));
       keep({ ...chapter, ranges, from: source }, ranges.map(placedAs));
     }
   }
   if (uncommitted?.chapters.length) {
     const [at, dirty] = await Promise.all([placements(root, uncommitted.chapters), changesSince(root, "HEAD", "worktree")]);
-    const from: ChapterSource = { subject: "Uncommitted", summary: uncommitted.summary };
+    const from: ChapterSource = { subject: "Uncommitted", ...introOf(uncommitted) };
     for (const [i, chapter] of uncommitted.chapters.entries()) {
       const parts = await Promise.all(
         chapter.ranges.map(async (r, ri) =>
           r.lines
             ? [{ range: r, place: at[i][ri] }]
-            : (await carryRange(root, "HEAD", r, dirty, [], files)).map((range) => ({ range, place: placedAs(range) })),
+            : (await carryRange(root, "worktree", r, dirty, [], files)).map((range) => ({ range, place: placedAs(range) })),
         ),
       );
+      const kept = keepSteps(chapter, chapter.ranges, parts, (part, note) => ({ ...part, range: { ...part.range, note } }));
       keep(
-        { ...chapter, ranges: parts.flat().map((p) => p.range), from },
-        parts.flat().map((p) => p.place),
+        { ...chapter, ranges: kept.map((p) => p.range), from },
+        kept.map((p) => p.place),
       );
     }
   }
+  const every = placesByPath(found, foundAt);
+  const stands = standingWarns(files, found, foundAt);
+  const left = found.map((chapter, i) => stands[i].length > 0 || hasChanges(files, chapter, foundAt[i], every));
+  const chapters = found.filter((_, i) => left[i]);
+  const placed = foundAt.filter((_, i) => left[i]);
+  const standing = stands.filter((_, i) => left[i]);
   if (!chapters.length) return empty;
-  const sources = new Set(chapters.map((c) => c.from));
-  const summary = sources.size === 1 ? chapters[0].from?.summary : undefined;
-  const notes = await withScreenshots(root, { summary, chapters }, !!mode.worktree);
-  return { path, notes, placed, problem, commits: { noted: noted.length, total: shas.length } };
+  const sources = [...new Set(chapters.map((c) => c.from!))];
+  const summary = sources.length === 1 ? sources[0].summary : undefined;
+  const notes = await withScreenshots(root, { ...joinIntros(sources), summary, chapters }, !!mode.worktree);
+  return { path, notes, placed, problem, commits: { noted: noted.length, total: shas.length }, ...(standing.some((w) => w.length) ? { standing } : {}) };
 }
 
 // A chapter lands on the newest commit touching any of its files, so one of those files may have changed in an earlier commit.
@@ -139,7 +180,38 @@ async function lastChange(root: string, range: string, path: string): Promise<st
   return (await git(root, ["rev-list", "-n1", range, "--", ...literal([path])])).trim() || null;
 }
 
+const introOf = ({ summary, asked, decisions, sections }: NotesIntro): NotesIntro => ({ summary, asked, decisions, sections });
+
+// Stitched, amended or undone commits repeat text, so each piece stays once.
+function joinIntros(intros: NotesIntro[]): NotesIntro {
+  const prose = (pick: (intro: NotesIntro) => string | undefined) =>
+    [...new Set(intros.flatMap((intro) => pick(intro)?.split(/\n{2,}/) ?? []))].join("\n\n") || undefined;
+  const decisions = [...new Set(intros.flatMap((intro) => intro.decisions ?? []))];
+  const seen = new Set<string>();
+  const sections = intros.flatMap((intro) => intro.sections ?? []).filter((s) => !seen.has(JSON.stringify(s)) && seen.add(JSON.stringify(s)));
+  return {
+    summary: prose((intro) => intro.summary),
+    asked: prose((intro) => intro.asked),
+    ...(decisions.length ? { decisions } : {}),
+    ...(sections.length ? { sections } : {}),
+  };
+}
+
 const placedAs = (r: NoteRange): Placement => (r.lines ? { start: r.lines[0], end: r.lines[1] } : "all");
+
+// Ranges after a step's first inherit its sentence by position, so when the first is gone the next one has to take it.
+function keepSteps<T>({ carries }: { carries?: boolean }, ranges: { note?: string }[], carried: T[][], withNote: (kept: T, note: string) => T): T[] {
+  let orphan: string | undefined;
+  return carried.flatMap((kept, i) => {
+    const { note } = ranges[i];
+    if (note && carries) orphan = note;
+    if (!kept.length) return [];
+    const [first, ...rest] = kept;
+    const adopted = orphan && !note ? withNote(first, orphan) : first;
+    orphan = undefined;
+    return [adopted, ...rest];
+  });
+}
 
 async function commitNames(root: string, shas: string[]): Promise<Map<string, ChapterSource>> {
   if (!shas.length) return new Map();
@@ -153,34 +225,42 @@ async function commitNames(root: string, shas: string[]): Promise<Map<string, Ch
 }
 
 async function linesAt(root: string, sha: string, path: string): Promise<string[] | null> {
+  if (sha === "worktree") return (await readText(join(root, path)))?.split("\n") ?? null;
   const text = await gitBuffer(root, ["cat-file", "blob", `${sha}:${path}`]).catch(() => null);
   return text && text.toString("utf8").split("\n");
+}
+
+async function lastLineAt(root: string, sha: string, path: string): Promise<number> {
+  const lines = await linesAt(root, sha, path);
+  return lines ? lines.length - (lines.at(-1) === "" ? 1 : 0) : 0;
 }
 
 async function carryRange(root: string, sha: string, r: NoteRange, own: FileDiff[], later: FileDiff[], files: FileDiff[]): Promise<NoteRange[]> {
   const moved = later.find((f) => (f.oldPath ?? f.path) === r.path);
   const path = moved?.path ?? r.path;
   const target = files.find((f) => f.path === path);
-  if (moved?.status === "deleted" || !target) return [];
-  const carry = (at: [number, number]) => carryLines(moved?.hunks ?? [], at);
+  // A warning can be about lines nobody changed, so it outlives the file leaving the diff.
+  if (moved?.status === "deleted" || (!target && !(r.warn && r.lines))) return [];
+  const after = moved?.hunks ?? [];
   const { code, ...rest } = r;
   const range = { ...rest, path };
+  const change = own.find((f) => f.path === r.path);
   if (r.lines) {
     const at = code ? placeRange(r, await linesAt(root, sha, r.path)) : null;
-    const lines = carry(at && at !== "lost" && at !== "all" ? [at.start, at.end] : r.lines);
-    return lines ? [{ ...range, lines }] : [];
+    const [start, end] = at && at !== "lost" && at !== "all" ? [at.start, at.end] : r.lines;
+    const lines = carryLines(after, [start, end]);
+    if (lines) return [{ ...range, lines }];
+    // Notes anchor a deletion on the next line, and the deletion outlives that line.
+    const deletion = change?.hunks.find((h) => !h.newLines && h.newStart + 1 >= start && h.newStart <= end);
+    return deletion ? [{ ...range, lines: carryDeletion(after, deletion.newStart, await lastLineAt(root, sha, r.path)) }] : [];
   }
   // "All of this file" meant this commit's changes, so a later stray edit to the file must not count as explained.
-  const change = own.find((f) => f.path === r.path);
   if (!change) return [];
   if (!change.hunks.length) return moved?.hunks.length ? [] : [range];
-  const regions = changedRegions(change.hunks).flatMap((at) => {
-    const lines = carry(at);
-    return lines ? [lines] : [];
-  });
+  const regions = carryRegions(change.hunks, after, change.hunks.some((h) => !h.newLines) ? await lastLineAt(root, sha, r.path) : 0);
   const spans = regions.map(([start, end]) => ({ start, end }));
   if (!regions.length) return [];
-  if (chapterRefs(target, spans, []).length === changedLines(target).length) return [range];
+  if (chapterRefs(target!, spans, []).length === changedLines(target!).length) return [range];
   return regions.map((lines, i) => (i ? { path, lines } : { ...range, lines }));
 }
 
@@ -266,25 +346,33 @@ async function move(root: string, path: string, head: string, seen: SeenHead, te
   ]);
   const open = async (chapters: Chapter[]) => {
     const placed = await placements(root, chapters);
-    return chapters.map((c, i) => hasChanges(files, c, placed[i]));
+    const every = placesByPath(chapters, placed);
+    return chapters.map((c, i) => hasChanges(files, c, placed[i], every));
   };
 
-  const into = new Map<string, { summary?: string; chapters: unknown[] }>();
-  const send = (sha: string, summary: string | undefined, chapter: unknown) => {
-    const to = into.get(sha) ?? { summary, chapters: [] };
+  const into = new Map<string, { intros: NotesIntro[]; chapters: unknown[] }>();
+  const send = (sha: string, intro: NotesIntro, chapter: unknown) => {
+    const to = into.get(sha) ?? { intros: [], chapters: [] };
+    to.intros.push(introOf(intro));
     to.chapters.push(chapter);
     into.set(sha, to);
   };
   const restored: unknown[] = [];
+  const restoredIntros: NotesIntro[] = [];
   for (const { sha, file } of old) {
     const { raw, notes, rawIndex } = file!;
     const later = await changesSince(root, sha, "worktree");
-    const kept = rawIndex.map((at) => raw!.chapters[at]);
+    const kept = rawIndex.map((at) => withFormat(raw!, raw!.chapters[at]));
     const inTree = kept.map((chapter) => asWorking(later, chapter));
-    const left = await open(inTree.map((chapter) => toChapter(chapter)!));
+    const chapters = inTree.map((chapter) => toChapter(chapter)!);
+    const left = await open(chapters);
+    // A warning on lines its commit didn't change still stands with that commit gone, though no diff brings it back.
+    const stands = pairs.has(sha) ? [] : standingWarns(await commitChanges(root, sha), chapters, await placements(root, chapters));
+    const back = left.map((open, i) => open || !!stands[i]?.length);
+    if (back.some(Boolean)) restoredIntros.push(notes!);
     kept.forEach((chapter, i) => {
-      if (left[i]) restored.push(inTree[i]);
-      else if (pairs.has(sha)) send(pairs.get(sha)!, notes!.summary, chapter);
+      if (back[i]) restored.push(inTree[i]);
+      else if (pairs.has(sha)) send(pairs.get(sha)!, notes!, chapter);
     });
   }
 
@@ -293,23 +381,31 @@ async function move(root: string, path: string, head: string, seen: SeenHead, te
     const left = await open(working.notes.chapters);
     const mine = added.filter((sha) => own.has(sha)).reverse();
     const touched = await Promise.all(mine.map((sha) => touchedBy(root, sha)));
+    const placed = await placements(root, working.notes.chapters);
+    const after = await commitsAfter(root, mine, await mtimeOf(path));
     for (const [i, c] of working.notes.chapters.entries()) {
       if (left[i]) continue;
       const at = touched.findIndex((paths) => c.ranges.some((r) => paths.has(r.path)));
-      if (at < 0) continue;
+      const last = at < 0 ? undefined : mine[at];
+      const warned = c.warn || c.ranges.some((r) => r.warn);
+      const stands = warned && (!last || seen.kind === "never-seen" || standingWarns(await commitChanges(root, last), [c], [placed[i]])[0].length > 0);
+      // Lines no commit changed have nothing to land with, so only a later commit closes the warning. With no head on record, a commit can't be told from the lines' own.
+      const sha = stands ? (last && after.has(last) ? last : mine.find((m) => after.has(m))) : last;
+      if (!sha) continue;
       moved.add(working.rawIndex[i]);
-      send(mine[at], working.notes.summary, await asCommitted(root, mine[at], working.raw!.chapters[working.rawIndex[i]]));
+      send(sha, working.notes, await asCommitted(root, sha, withFormat(working.raw!, working.raw!.chapters[working.rawIndex[i]])));
     }
   }
   if (!moved.size && !restored.length && !into.size) return "settled";
 
   if ((await readText(path)) !== text) return "notes-rewritten-meanwhile";
-  for (const [sha, { summary, chapters }] of into) await addToCommit(root, sha, summary, chapters);
-  const known = new Set((working?.raw?.chapters ?? []).map((c) => JSON.stringify(c)));
+  for (const [sha, { intros, chapters }] of into) await addToCommit(root, sha, intros, chapters);
+  const known = new Set((working?.raw?.chapters ?? []).map((c) => JSON.stringify(withFormat(working!.raw!, c))));
   const chapters = [...(working?.raw?.chapters ?? []).filter((_, i) => !moved.has(i)), ...restored.filter((c) => !known.has(JSON.stringify(c)))];
   if (chapters.length) {
     await mkdir(dirname(path), { recursive: true });
-    await writeJson(path, { ...working?.raw, chapters });
+    const intro = restored.length ? joinIntros([...restoredIntros, ...(working?.notes ? [working.notes] : [])]) : {};
+    await writeJson(path, { ...working?.raw, ...intro, chapters });
   } else await rm(path, { force: true });
   return "settled";
 }
@@ -363,6 +459,12 @@ async function ownCommits(root: string, shas: string[]): Promise<Set<string>> {
   return new Set(shas.filter((sha) => own.has(sha)));
 }
 
+async function commitsAfter(root: string, shas: string[], ms: number): Promise<Set<string>> {
+  if (!shas.length) return new Set();
+  const log = lines(await git(root, ["log", "--no-walk=unsorted", "--format=%H%x1f%ct", ...shas]));
+  return new Set(log.flatMap((line) => (Number(line.split("\x1f")[1]) * 1000 > ms ? [line.split("\x1f")[0]] : [])));
+}
+
 async function pairCommits(root: string, gone: string[], added: string[]): Promise<Map<string, string>> {
   if (!gone.length || !added.length) return new Map();
   if (gone.length === 1 && added.length === 1) return new Map([[gone[0], added[0]]]);
@@ -391,18 +493,26 @@ async function readCommit(root: string, sha: string): Promise<Parsed | null> {
   return text === null ? null : parse(text, basename(path));
 }
 
-async function addToCommit(root: string, sha: string, summary: string | undefined, chapters: unknown[]) {
+async function addToCommit(root: string, sha: string, intros: NotesIntro[], chapters: unknown[]) {
   const dest = await commitNotesPath(root, sha);
-  const before = (await readCommit(root, sha))?.raw;
-  const had = before?.chapters ?? [];
-  const seen = new Set(had.map((c) => JSON.stringify(c)));
+  const before = await readCommit(root, sha);
+  const had = before?.raw?.chapters ?? [];
+  const seen = new Set(had.map((c) => JSON.stringify(withFormat(before!.raw!, c))));
   const fresh = chapters.filter((c) => !seen.has(JSON.stringify(c)));
-  if (!fresh.length) return;
+  const stored = before?.notes ? [before.notes] : [];
+  const intro = joinIntros([...stored, ...intros]);
+  if (!fresh.length && JSON.stringify(intro) === JSON.stringify(joinIntros(stored))) return;
   await mkdir(dirname(dest), { recursive: true });
-  await writeJson(dest, { ...before, summary: before?.summary ?? summary, chapters: [...had, ...fresh] });
+  await writeJson(dest, { ...before?.raw, ...intro, chapters: [...had, ...fresh] });
 }
 
 type Raw = Record<string, unknown> & { chapters: unknown[] };
+
+// Chapters move between files that may differ in format, so each one leaves with its own.
+function withFormat(file: Raw, chapter: unknown): unknown {
+  const c = (chapter ?? {}) as Record<string, unknown>;
+  return { ...c, format: c.format ?? file.format ?? 1 };
+}
 interface Parsed {
   raw: Raw | null;
   notes: AgentNotes | null;
@@ -427,30 +537,71 @@ function parse(text: string, name = "notes.json"): Parsed {
   const rawIndex: number[] = [];
   const kept: Chapter[] = [];
   obj.chapters.forEach((c, i) => {
-    const chapter = toChapter(c);
+    const chapter = toChapter(withFormat(obj as Raw, c));
     if (!chapter) return;
     rawIndex.push(i);
     kept.push(chapter);
   });
   const skipped = obj.chapters.length - kept.length;
+  const badLines = obj.chapters.flatMap(rangesOf).filter(hasBadLines).length;
+  const problems = [
+    ...(skipped ? [`Skipped ${skipped} ${skipped === 1 ? "chapter" : "chapters"} without a title or any ranges in ${name}`] : []),
+    ...(badLines ? [`Left out ${badLines} ${badLines === 1 ? "range" : "ranges"} whose lines aren't [first, last] counting from 1 in ${name}`] : []),
+  ];
   return {
     raw: obj as Raw,
-    notes: { summary: str(obj.summary), chapters: kept },
+    notes: { summary: str(obj.summary), asked: str(obj.asked), ...decisionsOf(obj.decisions), ...sectionsOf(obj.sections), chapters: kept },
     rawIndex,
-    problem: skipped ? `Skipped ${skipped} ${skipped === 1 ? "chapter" : "chapters"} without a title or any ranges in ${name}` : undefined,
+    problem: problems.join(". ") || undefined,
   };
 }
 
 const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 
+function decisionsOf(raw: unknown): { decisions?: string[] } {
+  const decisions = (Array.isArray(raw) ? raw : []).flatMap((d) => str(d) ?? []);
+  return decisions.length ? { decisions } : {};
+}
+
+function sectionsOf(raw: unknown): { sections?: NoteSection[] } {
+  const sections = (Array.isArray(raw) ? raw : []).flatMap((s): NoteSection[] => {
+    if (!s || typeof s !== "object") return [];
+    const { title, body, before, after } = s as Record<string, unknown>;
+    const parts = { title: str(title), body: str(body), before: str(before), after: str(after) };
+    return parts.body || parts.before || parts.after ? [Object.fromEntries(Object.entries(parts).filter(([, v]) => v))] : [];
+  });
+  return sections.length ? { sections } : {};
+}
+
+function rangesOf(chapter: unknown): unknown[] {
+  const ranges = (chapter as Record<string, unknown> | null)?.ranges;
+  return Array.isArray(ranges) ? ranges : [];
+}
+
 function toChapter(raw: unknown): Chapter | null {
   if (!raw || typeof raw !== "object") return null;
   const c = raw as Record<string, unknown>;
   const title = str(c.title);
-  const ranges = (Array.isArray(c.ranges) ? c.ranges : []).map(toRange).filter((r): r is NoteRange => r !== null);
+  const written = rangesOf(c);
+  const carries = typeof c.format === "number" && c.format >= CARRYING_FORMAT;
+  const ranges = keepSteps(
+    { carries },
+    written.map((r) => ({ note: str((r as Record<string, unknown> | null)?.note) })),
+    written.map((r) => [toRange(r)].filter((kept) => kept !== null)),
+    (range, note) => ({ ...range, note }),
+  );
   if (!title || !ranges.length) return null;
   const screenshots = (Array.isArray(c.screenshots) ? c.screenshots : []).map(toScreenshot).filter((s): s is Screenshot => s !== null);
-  return { title, text: str(c.text) ?? "", ranges, ...(c.warn === true ? { warn: true } : {}), ...(screenshots.length ? { screenshots } : {}) };
+  return {
+    title,
+    text: str(c.text) ?? "",
+    ranges,
+    ...(c.warn === true ? { warn: true } : {}),
+    ...(c.skim === true ? { skim: true } : {}),
+    ...(carries ? { carries: true } : {}),
+    ...sectionsOf(c.sections),
+    ...(screenshots.length ? { screenshots } : {}),
+  };
 }
 
 function toScreenshot(raw: unknown): Screenshot | null {
@@ -466,6 +617,7 @@ function toRange(raw: unknown): NoteRange | null {
   const path = r && typeof r === "object" ? str(r.path) : undefined;
   if (!r || !path) return null;
   const range: NoteRange = { path: path.replace(/^\.\//, "") };
+  if (hasBadLines(r)) return null;
   const lines = toLines(r.lines);
   if (lines) range.lines = lines;
   if (typeof r.code === "string" && r.code.trim()) range.code = r.code;
@@ -473,6 +625,12 @@ function toRange(raw: unknown): NoteRange | null {
   if (note) range.note = note;
   if (r.warn === true) range.warn = true;
   return range;
+}
+
+// Taken as no lines at all, a typo would turn the range into the whole file, and staging it would take all of that.
+function hasBadLines(raw: unknown): boolean {
+  const lines = (raw as Record<string, unknown> | null)?.lines;
+  return lines !== undefined && lines !== null && !toLines(lines);
 }
 
 function toLines(raw: unknown): [number, number] | null {

@@ -14,36 +14,48 @@
 
 Moire is a desktop diff viewer for reviewing what a coding agent changed. The agent explains its work as chapters beside the diff, and you stage what's right and discard what isn't, down to a single line.
 
-![Moire reviewing an agent's rate limiter rewrite: reading a chapter of its notes beside the diff, staging that chapter, blinking a one-character fix, discarding a stray debug line no chapter explains, then staging the rest](demo/demo-light.gif#gh-light-mode-only)
-![Moire reviewing an agent's rate limiter rewrite: reading a chapter of its notes beside the diff, staging that chapter, blinking a one-character fix, discarding a stray debug line no chapter explains, then staging the rest](demo/demo-dark.gif#gh-dark-mode-only)
+![Moire reviewing an agent's rate limiter rewrite: reading its brief, walking a chapter step by step above the diff, staging that chapter, blinking a one-character fix, discarding a line no chapter explains that exempts login from the limit, previewing the README's changes and diagram while switching themes, then staging the rest](demo/demo-light.gif#gh-light-mode-only)
+![Moire reviewing an agent's rate limiter rewrite: reading its brief, walking a chapter step by step above the diff, staging that chapter, blinking a one-character fix, discarding a line no chapter explains that exempts login from the limit, previewing the README's changes and diagram while switching themes, then staging the rest](demo/demo-dark.gif#gh-dark-mode-only)
 
-### Read the agent's notes
+```sh
+npx @backstabslash/moire
+```
 
-The agent writes a short summary and a few chapters, each one behaviour of the change with the lines that make it up, across files. Press `.` to walk them in order while the diff follows. Risky lines carry a "Check this" note, and lines no chapter explains are listed, so a stray edit can't hide. Chapters stay with their commits, so comparing a branch or a pull request stitches them back together in commit order. Install the skill once and your agent writes the notes after every change:
+Run it in any repo. See [Install](#install) for other ways to get it.
+
+## Read the agent's notes
+
+The agent opens with a brief: what you asked for, what changed, what it decided and what you should check. Then come chapters, one behaviour each, across files. Press `.` to walk them: each step's sentence sits above its code, and the diff follows.
+
+- Risky lines carry a "Check this" note
+- Lines no chapter explains are listed, so a stray edit can't hide
+- Tests and docs fold away as chapters to skim, and whitespace-only chapters are spotted for you
+- The agent can add tables, code, a before and after, or screenshots beside the code they prove
+- Chapters stay with their commits, so a branch or pull request reads as one story
+
+Install the skill once and your agent writes the notes after every change. It works with Claude Code, Codex, Cursor and other agents that read skills.
 
 ```sh
 npx skills add backstabslash/moire -g
 ```
 
-It works with Claude Code, Codex, Cursor and other agents that read skills.
-
-### Keep what's right, throw out the rest
+## Keep what's right, throw out the rest
 
 - Stage a whole chapter once you've read it, or stage, unstage and discard files, hunks and single lines, with undo, from the keyboard or a right-click
 - Commit from the staged view
 - Copy selected lines as Markdown with path and line numbers, to paste back into the agent with your feedback
 - Blink a hunk between its old and new version in place, so a one-character change jumps out
 
-### And a fast diff viewer
+## And a fast diff viewer
 
 - Side-by-side or unified, with syntax highlighting: unstaged, staged, everything since the last commit, a single commit, or one branch against another or against your working tree
 - Updates by itself as files change
 - Changed tests sit right under their code, so you read them together
 - Search across every changed file; lockfiles, generated files and whitespace-only changes are folded away, or hide whitespace changes everywhere
-- Agents can attach screenshots to a chapter, shown right beside the code they prove
 - Changed lines show tabs, trailing spaces and invisible characters like a no-break space, which a plain diff hides
-- Changed images shown old and new; Markdown and SVG can be previewed rendered, with changed blocks marked
-- Keyboard-first, with keys you can remap, a command palette, and six light and dark themes that can follow your desktop
+- Changed images shown old and new; SVG can be previewed rendered
+- Markdown previews as Side by side, Changes or Read, with an outline, coloured code, Mermaid diagrams, GitHub alerts, task lists and footnotes
+- Keyboard-first, with keys you can remap and a command palette
 
 ## Install
 
@@ -79,8 +91,11 @@ A path can come first, as in `moire path/to/repo main..feature`. `moire` returns
 | `j` `k` | Next / previous hunk |
 | `g g` / `Shift+G` | First / last hunk |
 | `[` `]` | Previous / next file |
-| `,` `.` | Previous / next agent note |
+| `,` `.` | Previous / next step in the notes |
+| `<` `>` | Previous / next place inside a step |
+| `i` | Open or close the agent's brief |
 | `Shift+I` | Show or hide agent notes |
+| `Shift+C` | Stage the open chapter |
 | `1`–`5` | Unstaged, staged, all, commit, branch vs branch |
 | Click or drag line numbers | Select lines (click again to clear, Shift-click extends) |
 | `Shift+J` / `Shift+K` | Extend / shrink the selection |
@@ -102,10 +117,19 @@ A path can come first, as in `moire path/to/repo main..feature`. `moire` returns
 | `w` | Ignore whitespace (turns staging off until you show it again) |
 | `v` | Split or unified layout |
 | `m` | Preview a Markdown or SVG file, or go back to its diff |
+| `M` | Next Markdown view: Read, Changes, Side by side (opens on Side by side when the diff has the room) |
 | `t` | Light or dark theme |
 | `?` | All keyboard shortcuts |
 
 </details>
+
+## Make it yours
+
+Twelve light and dark themes can follow your desktop. To add your own, open the theme menu → Custom themes…, which creates `themes.json`. A theme starts from a built-in one (`light`, `pad`, `gypsum`, `blue-base`, `fathom`, `ditto`, `dark`, `p7`, `safelight`, `cyanotype`, `anodic` or `mezzotint`) and changes only what you name, and tints and surfaces follow from `plate`, `ink`, `a` and `b`. Changes apply when you save, and Moire warns if a theme is hard to read:
+
+```json
+{ "themes": [{ "name": "Harbour", "extends": "anodic", "colors": { "plate": "#1c2326", "a": "#e0a050", "b": "#70b8d0" } }] }
+```
 
 To change a key, open Help → Edit keyboard shortcuts…, which creates `keys.json` with every command and its default, for example `{"stage": "S"}`. Changes apply when you save.
 

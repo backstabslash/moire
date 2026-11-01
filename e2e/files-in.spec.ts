@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { git, initRepo, launch, shot, tmp } = harness();
+const { commitAll, git, initRepo, launch, shot, tmp } = harness();
 let repo: string;
 let outside: string;
 let app: ElectronApplication;
@@ -73,8 +73,7 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "src", "lib", "money", "round.ts"), "export const round = Math.round;\n");
   writeFileSync(join(repo, "docs", "guide.md"), "# Guide\n");
   writeFileSync(join(repo, "dist", "app.js"), "built\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
   writeFileSync(join(repo, "src", "app.ts"), "export const app = 2;\n");
 
   writeFileSync(join(outside, "format.ts"), "export function format(cents: number, code: string) {\n  return (cents / 100).toFixed(2) + ' ' + code;\n}\n");

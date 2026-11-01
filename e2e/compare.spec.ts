@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { git, initRepo, launch, launchAgain, tmp } = harness();
+const { commitAll, git, initRepo, launch, launchAgain, tmp } = harness();
 let repo: string;
 let bin: string;
 let app: ElectronApplication;
@@ -11,8 +11,7 @@ let page: Page;
 
 const commit = (file: string, message: string) => {
   writeFileSync(join(repo, file), `${message}\n`);
-  git("add", "-A");
-  git("commit", "-qm", message);
+  commitAll(message);
 };
 
 test.beforeAll(async () => {

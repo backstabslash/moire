@@ -9,6 +9,7 @@ import type {
   CompareMode,
   CopyPlan,
   CopyResult,
+  DiagramResult,
   DiffResult,
   EditorChoices,
   FileContents,
@@ -61,6 +62,9 @@ const api = {
   stepZoom: (delta: -1 | 0 | 1): Promise<void> => ipcRenderer.invoke("zoom:step", delta),
   keys: (): Promise<ResolvedKeys> => ipcRenderer.invoke("keys:get"),
   editKeys: (): Promise<void> => ipcRenderer.invoke("keys:edit"),
+  themes: (): Promise<string | null> => ipcRenderer.invoke("themes:get"),
+  drawDiagram: (source: string, theme: Record<string, string | boolean>): Promise<DiagramResult> => ipcRenderer.invoke("diagram:draw", source, theme),
+  editThemes: (): Promise<void> => ipcRenderer.invoke("themes:edit"),
   checkForUpdates: (): Promise<void> => ipcRenderer.invoke("app:check-updates"),
   reportIssue: (): Promise<void> => ipcRenderer.invoke("app:report-issue"),
   version: (): Promise<string> => ipcRenderer.invoke("app:version"),
@@ -78,6 +82,13 @@ const api = {
     ipcRenderer.on("keys:changed", handler);
     return () => {
       ipcRenderer.off("keys:changed", handler);
+    };
+  },
+  onThemesChanged: (listener: () => void): (() => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("themes:changed", handler);
+    return () => {
+      ipcRenderer.off("themes:changed", handler);
     };
   },
   onMenu: (listener: (id: CommandId, arg?: string) => void): (() => void) => {
@@ -102,6 +113,7 @@ const api = {
   compareMode: (root: string, args: string[]): Promise<CompareMode> => ipcRenderer.invoke("git:compare", root, args),
   upstream: (root: string): Promise<Upstream | null> => ipcRenderer.invoke("git:upstream", root),
   act: (root: string, req: StageRequest): Promise<string> => ipcRenderer.invoke("git:act", root, req),
+  actGroup: (root: string, reqs: StageRequest[], label: string): Promise<string> => ipcRenderer.invoke("git:act-group", root, reqs, label),
   actAll: (root: string, req: StageAllRequest): Promise<string> => ipcRenderer.invoke("git:act-all", root, req),
   undo: (root: string, only?: string): Promise<UndoResult | null> => ipcRenderer.invoke("git:undo", root, only),
   saveDiscarded: (root: string, id: string): Promise<string> => ipcRenderer.invoke("git:save-discarded", root, id),

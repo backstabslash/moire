@@ -1,11 +1,10 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { git, initRepo, launch } = harness();
+const { commitAll, git, initRepo, launch, resize } = harness();
 let repo: string;
-let app: ElectronApplication;
 let page: Page;
 
 const lines = (changed: number) => Array.from({ length: 30 }, (_, i) => (i === changed ? "changed" : `line ${i}`)).join("\n") + "\n";
@@ -28,14 +27,13 @@ test.beforeAll(async () => {
   repo = initRepo();
   writeFileSync(join(repo, "a.ts"), lines(-1));
   writeFileSync(join(repo, "notes.md"), lines(-1));
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
   writeFileSync(join(repo, "a.ts"), lines(3));
   git("add", "a.ts");
   writeFileSync(join(repo, "a.ts"), lines(20));
   writeFileSync(join(repo, "notes.md"), lines(5));
 
-  ({ app, page } = await launch(repo));
+  ({ page } = await launch(repo));
   await expect(page.locator(".file")).toHaveCount(2);
 });
 
@@ -68,8 +66,7 @@ test("a Markdown file's header matches a code file's", async () => {
 });
 
 test("the empty state keeps the frame", async () => {
-  git("add", "-A");
-  git("commit", "-qm", "all");
+  commitAll("all");
   await page.keyboard.press("r");
   await expect(page.locator(".empty-state h2")).toHaveText("Working tree matches HEAD.");
   await expectFrame();
@@ -77,7 +74,6 @@ test("the empty state keeps the frame", async () => {
 
 test("a narrow window shows unified for now, and split stays the setting", async () => {
   const html = page.locator("html");
-  const resize = (w: number, h: number) => app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setSize(w, h), [w, h]);
   writeFileSync(join(repo, "a.ts"), lines(7));
   await page.keyboard.press("1");
   await page.locator(".file", { hasText: "a.ts" }).click();

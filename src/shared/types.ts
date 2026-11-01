@@ -148,6 +148,8 @@ export interface LineRef {
   line: number;
 }
 
+export type DiagramResult = { svg: string } | { error: string };
+
 export interface StageRequest {
   mode: "unstaged" | "staged";
   action: StageAction;
@@ -203,10 +205,20 @@ export interface NoteRange {
   warn?: boolean;
 }
 
+export interface NoteSection {
+  title?: string;
+  body?: string;
+  before?: string;
+  after?: string;
+}
+
 export interface Chapter {
   title: string;
   text: string;
   warn?: boolean;
+  skim?: boolean;
+  carries?: boolean;
+  sections?: NoteSection[];
   ranges: NoteRange[];
   from?: ChapterSource;
   screenshots?: Screenshot[];
@@ -220,14 +232,19 @@ export interface Screenshot {
   missing?: boolean;
 }
 
-export interface ChapterSource {
-  short?: string;
-  subject: string;
+export interface NotesIntro {
   summary?: string;
+  asked?: string;
+  decisions?: string[];
+  sections?: NoteSection[];
 }
 
-export interface AgentNotes {
-  summary?: string;
+export interface ChapterSource extends NotesIntro {
+  short?: string;
+  subject: string;
+}
+
+export interface AgentNotes extends NotesIntro {
   chapters: Chapter[];
 }
 
@@ -238,5 +255,6 @@ export interface NotesFile {
   notes: AgentNotes | null;
   problem?: string;
   placed?: Placement[][];
+  standing?: number[][];
   commits?: { noted: number; total: number };
 }

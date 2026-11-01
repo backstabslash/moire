@@ -1,18 +1,15 @@
-import { chmodSync, mkdirSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, renameSync, symlinkSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines, writeIn } from "./harness";
 
-const { git, initRepo, launch, shot, shots } = harness();
+const { commitAll, initRepo, launch, shot, shots } = harness();
 let repo: string;
 let page: Page;
 
-const body = (tag: string) => Array.from({ length: 30 }, (_, i) => `export const ${tag}${i} = ${i};`).join("\n") + "\n";
-const numbered = (edits: Record<number, string> = {}) => Array.from({ length: 200 }, (_, i) => edits[i + 1] ?? `line ${i + 1}`).join("\n") + "\n";
-const write = (path: string, text: string) => {
-  mkdirSync(dirname(join(repo, path)), { recursive: true });
-  writeFileSync(join(repo, path), text);
-};
+const body = (tag: string) => lines(Array.from({ length: 30 }, (_, i) => `export const ${tag}${i} = ${i};`));
+const numbered = (edits: Record<number, string> = {}) => lines(Array.from({ length: 200 }, (_, i) => edits[i + 1] ?? `line ${i + 1}`));
+const write = (path: string, text: string) => writeIn(repo)(path, text);
 const open = (name: string) => page.locator(`.file[data-path$="${name}"]`);
 
 test.beforeAll(async () => {
@@ -27,8 +24,7 @@ test.beforeAll(async () => {
   write("src/main/index.ts", numbered());
   write("src/other/index.ts", "export const a = 1;\n");
   write("web/app.css", ".a {\n  color: red;\n}\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
 
   chmodSync(join(repo, "run.sh"), 0o755);
   unlinkSync(join(repo, "link"));

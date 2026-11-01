@@ -1,9 +1,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines } from "./harness";
 
-const { clipboard, git, initRepo, launch, open, shots } = harness();
+const { clipboard, commitAll, git, initRepo, launch, open, shots } = harness();
 let repo: string;
 let app: ElectronApplication;
 let page: Page;
@@ -12,17 +12,16 @@ const clearClipboard = () => app.evaluate(({ clipboard }) => clipboard.writeText
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 const body = Array.from({ length: 30 }, (_, i) => `export const v${i + 1} = ${i + 1};`);
 const edited = body.map((l, i) => (i === 4 || i === 15 ? l.replace("=", "= 10 *") : l));
-const long = Array.from({ length: 300 }, (_, i) => `export const w${i + 1} = ${i + 1};`).join("\n") + "\n";
+const long = lines(Array.from({ length: 300 }, (_, i) => `export const w${i + 1} = ${i + 1};`));
 const ln = (side: "a" | "b", n: number) => page.locator(`.ln.${side}[data-line]`, { hasText: new RegExp(`^${n}$`) });
 const cell = (side: "a" | "b", n: number) => page.locator(".row.split", { has: ln(side, n) }).locator(`.cell.${side}`);
 const picked = () => page.locator(".ln.b.sel");
 
 test.beforeAll(async () => {
   repo = initRepo();
-  writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
-  writeFileSync(join(repo, "a.ts"), edited.join("\n") + "\n");
+  writeFileSync(join(repo, "a.ts"), lines(body));
+  commitAll("init");
+  writeFileSync(join(repo, "a.ts"), lines(edited));
   writeFileSync(join(repo, "long.ts"), long);
 
   ({ app, page } = await launch(repo, { prefs: { theme: "light" } }));

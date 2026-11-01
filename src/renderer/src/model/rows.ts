@@ -12,6 +12,7 @@ const INDENTED = new Set([
   "python",
   "yaml",
   "haskell",
+  "scala",
   "fsharp",
   "nim",
   "coffee",
@@ -43,6 +44,10 @@ const WHITESPACE_SIGNIFICANT = new Set([
   "cobol",
   "fortran-fixed-form",
 ]);
+
+export type Spacing = "free" | "indented" | null;
+
+export const spacingOf = (lang: string): Spacing => (WHITESPACE_SIGNIFICANT.has(lang) ? null : INDENTED.has(lang) ? "indented" : "free");
 
 export type LineRow = Extract<Row, { t: "split" | "uni" }>;
 
@@ -148,7 +153,7 @@ export function buildRows(file: FileDiff, contents: FileContents | null, opts: B
   let newNext = 1;
 
   const lang = langFor(file.path, contents?.b ?? contents?.a);
-  const spacing = WHITESPACE_SIGNIFICANT.has(lang) ? null : INDENTED.has(lang) ? "indented" : "free";
+  const spacing = spacingOf(lang);
   const wsFolded = file.hunks.map((hunk, h) => !opts.showAll && !opts.expanded.has(`ws${h}`) && !!spacing && whitespaceOnly(hunk, spacing === "indented"));
   const emitGap = (key: string, oldFrom: number, newFrom: number, count: number, h: number) => {
     if (count <= 0) return;
@@ -337,15 +342,24 @@ function symlinkNote(file: FileDiff): string | null {
 
 function whitespaceOnly(hunk: Hunk, indented: boolean): boolean {
   if (hunk.lines.some((l) => l.kind === "add" && hasInvisible(l.text))) return false;
-  const squash = (kind: "add" | "del") => {
-    const texts = hunk.lines.filter((l) => l.kind === kind).map((l) => l.text);
+  // Bytes that aren't UTF-8 all decode to this, so two different lines can read the same.
+  if (hunk.lines.some((l) => l.kind !== "ctx" && l.text.includes(UTF8_REPLACEMENT_CHAR))) return false;
+  const squash = (block: DiffLine[], kind: "add" | "del") => {
+    const texts = block.filter((l) => l.kind === kind).map((l) => l.text);
     if (!indented) return dropSpacesExceptBetweenWordsAndInStrings(texts.join("\n"));
     return texts
       .filter((t) => t.trim())
       .map((t) => t.match(/^\s*/)![0] + dropSpacesExceptBetweenWordsAndInStrings(t))
       .join("\n");
   };
-  return hunk.lines.some((l) => l.kind !== "ctx") && squash("add") === squash("del");
+  // A line moved past unchanged code leaves the same text in the hunk, so each run of changes has to match alone.
+  const blocks: DiffLine[][] = [];
+  hunk.lines.forEach((l, i) => {
+    if (l.kind === "ctx") return;
+    if (hunk.lines[i - 1]?.kind === "ctx" || i === 0) blocks.push([]);
+    blocks[blocks.length - 1].push(l);
+  });
+  return blocks.length > 0 && blocks.every((b) => squash(b, "add") === squash(b, "del"));
 }
 
 function dropSpacesExceptBetweenWordsAndInStrings(text: string): string {

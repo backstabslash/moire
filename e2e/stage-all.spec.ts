@@ -1,21 +1,20 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines, numbered, staged } from "./harness";
 
-const { git, idle, initRepo, launch, shot, shots } = harness();
+const { commitAll, idle, initRepo, launch, shot, shots } = harness();
 let repo: string;
 let page: Page;
 
-const body = Array.from({ length: 30 }, (_, i) => `export const v${i} = ${i};`);
-const edited = body.map((l, i) => (i === 3 || i === 23 ? l.replace("=", "= 1 +") : l)).join("\n") + "\n";
+const { body } = numbered(30);
+const edited = lines(body.map((l, i) => (i === 3 || i === 23 ? l.replace("=", "= 1 +") : l)));
 
 test.beforeAll(async () => {
   repo = initRepo();
-  writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
+  writeFileSync(join(repo, "a.ts"), lines(body));
   writeFileSync(join(repo, "img.bin"), Buffer.from([0, 1, 2, 3]));
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
   writeFileSync(join(repo, "a.ts"), edited);
   writeFileSync(join(repo, "img.bin"), Buffer.from([0, 9, 9, 9]));
   writeFileSync(join(repo, "new.ts"), "export const fresh = true;\n");
@@ -75,17 +74,17 @@ test("Stage all stages every file as one step, and Unstage all puts them back", 
   await idle();
   await page.locator(".stage-progress").getByRole("button", { name: "Stage all" }).click();
   await expect(page.locator(".toast.show")).toContainText("Staged 2 files");
-  await expect.poll(() => git("diff", "--cached", "--name-only")).toBe("a.ts\nimg.bin\n");
+  await expect.poll(() => staged(repo)).toEqual(["a.ts", "img.bin"]);
   await page.keyboard.press("u");
-  await expect.poll(() => git("diff", "--cached", "--name-only")).toBe("");
+  await expect.poll(() => staged(repo)).toEqual([]);
   await idle();
   await page.keyboard.press("Shift+S");
-  await expect.poll(() => git("diff", "--cached", "--name-only")).toBe("a.ts\nimg.bin\n");
+  await expect.poll(() => staged(repo)).toEqual(["a.ts", "img.bin"]);
   await page.keyboard.press("2");
   await idle();
   await expect(page.locator(".commit-box").getByRole("button", { name: "Unstage all" }).locator("kbd")).toHaveText("shift s");
   await page.keyboard.press("Shift+S");
   await expect(page.locator(".toast.show")).toContainText("Unstaged 2 files");
-  await expect.poll(() => git("diff", "--cached", "--name-only")).toBe("");
+  await expect.poll(() => staged(repo)).toEqual([]);
   await page.keyboard.press("1");
 });

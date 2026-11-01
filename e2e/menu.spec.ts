@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { clipboard, git, initRepo, launch, shot } = harness();
+const { clipboard, commitAll, initRepo, launch, shot } = harness();
 let repo: string;
 let app: ElectronApplication;
 let page: Page;
@@ -15,8 +15,7 @@ test.beforeAll(async () => {
   repo = initRepo();
   mkdirSync(join(repo, "site"));
   writeFileSync(join(repo, "site", "old.html"), "<p>old</p>\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
   writeFileSync(join(repo, "site", "index.html"), "<p>hi</p>\n");
   writeFileSync(join(repo, "site", "build"), "#!/bin/sh\n");
   chmodSync(join(repo, "site", "build"), 0o755);

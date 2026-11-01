@@ -6,31 +6,42 @@ import { _electron as electron, type CDPSession, expect, type Locator, type Page
 import { lineOf, makeDemoRepo } from "./repo";
 
 const OUT = resolve(process.env.MOIRE_DEMO_OUT ?? "demo");
-const SIZE = { width: 1360, height: 860 };
-const SIDEBAR = 200;
+const SIZE = { width: 1200, height: 760 };
+const SIDEBAR = 205;
 const BAND = 38;
-const SCENES = ["Read why.", "Keep what's right.", "Throw out what isn't."];
-const INKS = ["var(--ink)", "var(--b-ink)", "var(--a-ink)"];
+const SCENES = ["Read why.", "Keep what's right.", "Throw out what isn't.", "See it your way."];
+const INKS = ["var(--ink)", "var(--b-ink)", "var(--a-ink)", "var(--ink)"];
+const THEMES: Record<string, string[]> = { light: ["Ledger", "Lightbox", "Gypsum"], dark: ["Phosphor", "Cyanotype", "Safelight"] };
 
-type Demo = { caption?: string; say?: (text: string) => void; scene?: (index: number) => void };
+type Box = { x: number; y: number; width: number; height: number };
+type Demo = {
+  caption?: string;
+  captionMs?: number;
+  say?: (text: string, ms?: number) => void;
+  scene?: (index: number) => void;
+  spot?: (box: Box | null) => void;
+};
 
 let page: Page;
-const REST = { x: 1200, y: 650 };
+const REST = { x: 1050, y: 600 };
+const QUIET = { x: 1065, y: 632 };
+const SIDE = { x: 100, y: 590 };
 let at = REST;
 
 const hold = (ms: number) => page.waitForTimeout(ms);
+const quietChrome = () => page.addStyleTag({ content: ".toast, .keys-list { visibility: hidden; }" });
 const ease = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 
-async function glide(to: Locator | { x: number; y: number }, ms = 600) {
+async function glide(to: Locator | { x: number; y: number }, ms = 420) {
   const box = "boundingBox" in to ? (await to.boundingBox())! : { ...to, width: 0, height: 0 };
   const from = at;
   at = { x: box.x + Math.min(box.width / 2, 40), y: box.y + box.height / 2 };
-  const steps = Math.round(ms / 16);
-  for (let i = 1; i <= steps; i++) {
-    const t = ease(i / steps);
-    await page.mouse.move(from.x + (at.x - from.x) * t, from.y + (at.y - from.y) * t);
+  const start = Date.now();
+  for (let t = 0; t < 1; t = Math.min(1, (Date.now() - start) / ms)) {
+    await page.mouse.move(from.x + (at.x - from.x) * ease(t), from.y + (at.y - from.y) * ease(t));
     await hold(16);
   }
+  await page.mouse.move(at.x, at.y);
 }
 
 async function click(to: Locator) {
@@ -42,20 +53,77 @@ async function click(to: Locator) {
 }
 
 const lineNumber = (line: number) => page.locator(".ln.b[data-line]", { hasText: new RegExp(`^${line}$`) });
+const row = (line: number) =>
+  page
+    .locator(".row")
+    .filter({ has: lineNumber(line) })
+    .first();
+const readTime = (text: string) => 1000 + text.trim().split(/\s+/).length * 280;
 
-async function say(text: string) {
-  await page.evaluate((t) => (window as unknown as Demo).say?.(t), text);
+async function say(text: string, ms?: number) {
+  await page.evaluate(([t, m]) => (window as unknown as Demo).say?.(t as string, m as number | undefined), [text, ms]);
+}
+
+async function spot(from: Locator, to: Locator) {
+  const [a, b] = [(await from.boundingBox())!, (await to.boundingBox())!];
+  await page.evaluate((box) => (window as unknown as Demo).spot?.(box), { x: a.x, y: a.y, width: a.width, height: b.y + b.height - a.y });
+}
+
+async function clearSpot() {
+  await page.evaluate(() => (window as unknown as Demo).spot?.(null));
+  await hold(350);
+}
+
+async function pickThemes(names: string[], each: (name: string) => Promise<void>) {
+  const hidden = await page.addStyleTag({ content: ".theme-pop { opacity: 0; pointer-events: none; }" });
+  await page.locator(".theme-btn").evaluate((el) => (el as HTMLElement).click());
+  for (const name of names) {
+    await page.locator(".theme-opt", { hasText: name }).evaluate((el) => (el as HTMLElement).click());
+    await each(name);
+  }
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await hidden.evaluate((el) => (el as HTMLElement).remove());
+}
+
+async function readStep() {
+  await hold(readTime((await page.locator(".caption-text").textContent())!));
 }
 
 async function scene(index: number) {
   await page.evaluate((i) => (window as unknown as Demo).scene?.(i), index);
 }
 
-async function press(key: string, caption?: string, after = 900) {
-  await page.evaluate((c) => ((window as unknown as Demo).caption = c), caption);
+async function press(key: string, caption?: string, after = caption ? readTime(caption) : 0) {
+  await page.evaluate(([c, ms]) => Object.assign(window, { caption: c, captionMs: ms }), [caption, caption && readTime(caption)] as const);
   await page.keyboard.press(key);
   await page.evaluate(() => delete (window as unknown as Demo).caption);
   await hold(after);
+}
+
+function windowControls(top: number) {
+  const controls = document.createElement("div");
+  Object.assign(controls.style, {
+    position: "fixed",
+    top: `${top}px`,
+    right: "0",
+    width: "140px",
+    height: "51px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "12px",
+    pointerEvents: "none",
+  });
+  for (const d of ["M7 10.5l5 5 5-5", "M12 6.5l5.5 5.5-5.5 5.5L6.5 12z", "M7.5 7.5l9 9M16.5 7.5l-9 9"]) {
+    const button = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    button.setAttribute("viewBox", "0 0 24 24");
+    button.setAttribute("width", "28");
+    button.setAttribute("height", "28");
+    button.innerHTML = `<circle cx="12" cy="12" r="12" fill="color-mix(in srgb, var(--ink) 10%, var(--frame))"/><path d="${d}" fill="none" stroke="var(--ink)" stroke-width="1.3" stroke-linejoin="round"/>`;
+    controls.append(button);
+  }
+  document.body.append(controls);
 }
 
 function overlay({ band, scenes, inks }: { band: number; scenes: string[]; inks: string[] }) {
@@ -87,6 +155,7 @@ function overlay({ band, scenes, inks }: { band: number; scenes: string[]; inks:
     background: "var(--frame)",
     borderBottom: "1px solid var(--rule)",
     pointerEvents: "none",
+    zIndex: "99998",
   });
   const story = document.createElement("div");
   Object.assign(story.style, { display: "flex", gap: "14px", font: "500 19px var(--ui)" });
@@ -105,63 +174,66 @@ function overlay({ band, scenes, inks }: { band: number; scenes: string[]; inks:
     });
   const caption = document.createElement("div");
   Object.assign(caption.style, {
+    position: "fixed",
+    left: "50%",
+    bottom: "48px",
+    translate: "-50% 0",
+    zIndex: "99998",
     display: "flex",
     alignItems: "center",
-    gap: "8px",
-    color: "var(--graphite)",
-    font: "400 16px var(--ui)",
+    gap: "10px",
+    padding: "9px 18px",
+    borderRadius: "6px",
+    background: "var(--ink)",
+    color: "var(--frame)",
+    font: "500 21px var(--ui)",
+    whiteSpace: "nowrap",
     opacity: "0",
+    pointerEvents: "none",
     transition: "opacity 0.18s ease-out",
   });
-  strip.append(story, caption);
-  const controls = document.createElement("div");
-  Object.assign(controls.style, {
+  const shade = document.createElement("div");
+  Object.assign(shade.style, {
     position: "fixed",
-    top: `${band}px`,
-    right: "0",
-    width: "140px",
-    height: "51px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "12px",
+    borderRadius: "6px",
+    boxShadow: "0 0 0 2000px color-mix(in srgb, var(--frame) 70%, transparent)",
+    opacity: "0",
+    zIndex: "99997",
     pointerEvents: "none",
+    transition: "opacity 0.3s",
   });
-  for (const d of ["M7 10.5l5 5 5-5", "M12 6.5l5.5 5.5-5.5 5.5L6.5 12z", "M7.5 7.5l9 9M16.5 7.5l-9 9"]) {
-    const button = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    button.setAttribute("viewBox", "0 0 24 24");
-    button.setAttribute("width", "28");
-    button.setAttribute("height", "28");
-    button.innerHTML = `<circle cx="12" cy="12" r="12" fill="color-mix(in srgb, var(--ink) 10%, var(--frame))"/><path d="${d}" fill="none" stroke="var(--ink)" stroke-width="1.3" stroke-linejoin="round"/>`;
-    controls.append(button);
-  }
-  document.body.append(strip, controls, svg);
+  (window as unknown as Demo).spot = (box) => {
+    shade.style.opacity = box ? "1" : "0";
+    if (box) Object.assign(shade.style, { left: `${box.x - 14}px`, top: `${box.y - 12}px`, width: `${box.width + 28}px`, height: `${box.height + 24}px` });
+  };
+  strip.append(story);
+  document.body.append(strip, caption, shade, svg);
   addEventListener("mousemove", (e) => (svg.style.translate = `${e.clientX - 4}px ${e.clientY - 3}px`), true);
   addEventListener("mousedown", () => (svg.style.scale = "0.85"), true);
   addEventListener("mouseup", () => (svg.style.scale = "1"), true);
   let timer = 0;
-  const show = (key: string | undefined, text: string) => {
+  const show = (key: string | undefined, text: string, ms = 1500) => {
     const cap = document.createElement("span");
     cap.textContent = key ?? "";
     Object.assign(cap.style, {
-      padding: "1px 7px",
+      padding: "1px 8px",
       borderRadius: "3px",
-      background: "color-mix(in srgb, var(--ink) 10%, transparent)",
-      color: "var(--ink)",
-      font: "400 14px/1.3 var(--code)",
+      background: "color-mix(in srgb, var(--frame) 22%, transparent)",
+      color: "var(--frame)",
+      font: "400 18px/1.3 var(--code)",
     });
     caption.replaceChildren(...(key ? [cap] : []), text);
     caption.style.opacity = "1";
     clearTimeout(timer);
-    timer = window.setTimeout(() => (caption.style.opacity = "0"), 1500);
+    timer = window.setTimeout(() => (caption.style.opacity = "0"), ms);
   };
-  (window as unknown as { say(text: string): void }).say = (text) => show(undefined, text);
+  (window as unknown as Demo).say = (text, ms) => show(undefined, text, ms);
   addEventListener(
     "keydown",
     (e) => {
-      const text = (window as unknown as { caption?: string }).caption;
+      const { caption: text, captionMs } = window as unknown as Demo;
       if (!text || ["Shift", "Control", "Meta", "Alt"].includes(e.key)) return;
-      show([e.ctrlKey && "ctrl", e.shiftKey && "shift", e.key.toLowerCase()].filter(Boolean).join(" "), text);
+      show([e.ctrlKey && "ctrl", e.shiftKey && "shift", e.key.toLowerCase()].filter(Boolean).join(" "), text, captionMs);
     },
     true,
   );
@@ -169,16 +241,22 @@ function overlay({ band, scenes, inks }: { band: number; scenes: string[]; inks:
 
 async function record(cdp: CDPSession, dir: string) {
   const frames: { file: string; t: number }[] = [];
+  let paused = false;
   cdp.on("Page.screencastFrame", (frame) => {
-    const file = join(dir, `${String(frames.length).padStart(5, "0")}.png`);
-    writeFileSync(file, Buffer.from(frame.data, "base64"));
-    frames.push({ file, t: frame.metadata.timestamp ?? Date.now() / 1000 });
+    if (!paused) {
+      const file = join(dir, `${String(frames.length).padStart(5, "0")}.png`);
+      writeFileSync(file, Buffer.from(frame.data, "base64"));
+      frames.push({ file, t: frame.metadata.timestamp ?? Date.now() / 1000 });
+    }
     void cdp.send("Page.screencastFrameAck", { sessionId: frame.sessionId }).catch(() => {});
   });
   await cdp.send("Page.startScreencast", { format: "png", everyNthFrame: 1 });
-  return async () => {
-    await cdp.send("Page.stopScreencast");
-    return frames;
+  return {
+    pause: (on: boolean) => (paused = on),
+    stop: async () => {
+      await cdp.send("Page.stopScreencast");
+      return frames;
+    },
   };
 }
 
@@ -189,62 +267,106 @@ function encode(frames: { file: string; t: number }[], dir: string, name: string
   mkdirSync(OUT, { recursive: true });
   if (mp4)
     execFileSync("ffmpeg", [...input, "-vf", "fps=30,format=yuv420p", "-c:v", "libx264", "-crf", "20", "-movflags", "+faststart", join(OUT, "demo.mp4")]);
-  const gif = "fps=15,split[a][b];[a]palettegen=max_colors=192:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle";
+  const gif = "fps=15,split[a][b];[a]palettegen=max_colors=256:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle";
   execFileSync("ffmpeg", [...input, "-vf", gif, join(OUT, `${name}.gif`)]);
 }
 
-async function demo(theme: string, name: string, mp4 = false) {
+async function launch(theme: string) {
   const work = mkdtempSync(join(tmpdir(), "moire-demo-"));
   const repo = join(work, "ratelimit");
-  const frames = join(work, "frames");
-  mkdirSync(frames);
   makeDemoRepo(repo);
-  const prefs = { theme, layout: "unified", scope: "changed", mode: "unstaged", file: "src/limiter.ts", sidebar: String(SIDEBAR), "notes-width": "300" };
+  const prefs = {
+    theme,
+    layout: "unified",
+    scope: "changed",
+    mode: "unstaged",
+    file: "src/limiter.ts",
+    sidebar: String(SIDEBAR),
+    "notes-width": "270",
+    markdownView: "changes",
+  };
   const app = await electron.launch({
     args: [resolve("."), `--user-data-dir=${join(work, "data")}`, repo],
     env: { ...process.env, MOIRE_HIDDEN: "1", MOIRE_PREFS: JSON.stringify(prefs) },
   });
+  page = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height), SIZE);
+  await expect(page.locator(".file.is-active .name")).toHaveText("limiter.ts");
+  await expect(page.locator(".brief")).toBeVisible();
+  await quietChrome();
+  return { app, work };
+}
+
+async function demo(theme: string, name: string, mp4 = false) {
+  const { app, work } = await launch(theme);
+  const frames = join(work, "frames");
+  mkdirSync(frames);
   at = REST;
   try {
-    page = await app.firstWindow();
-    await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height), SIZE);
-    await expect(page.locator(".file.is-active .name")).toHaveText("limiter.ts");
-    await expect(page.locator('.cell span[style*="color"]').first()).toBeVisible();
+    await page.evaluate(windowControls, BAND);
     await page.evaluate(overlay, { band: BAND, scenes: SCENES, inks: INKS });
     await scene(0);
     await page.mouse.move(at.x, at.y);
     await hold(400);
 
     const cdp = await page.context().newCDPSession(page);
-    const stop = await record(cdp, frames);
-    await hold(900);
+    const { pause, stop } = await record(cdp, frames);
+    await hold(500);
 
-    await press(".", "Next note", 1400);
-    await press(".", "Next note", 2300);
+    await say("The agent's brief", 4000);
+    await hold(readTime((await page.locator(".brief-lead").textContent())!));
+
+    await click(page.getByRole("button", { name: "Start the walkthrough" }));
+    await say("Start the walkthrough");
+    await glide(QUIET, 350);
+    await readStep();
+    await press(".", "Next step", 0);
+    await readStep();
 
     await scene(1);
     await click(page.getByRole("button", { name: "Stage this chapter" }));
     await say("Stage this chapter");
-    await glide({ x: 700, y: 560 }, 400);
-    await hold(800);
-
-    // The blink toast explains keys the caption already shows.
-    const quiet = await page.addStyleTag({ content: ".toast { visibility: hidden; }" });
-    await press("Shift+B", "Blink old and new", 1800);
-    await press("Escape", undefined, 200);
+    await glide(QUIET, 300);
+    await expect(page.locator(".file.is-active .name")).toHaveText("client.ts");
+    await lineNumber(lineOf("src/client.ts", "return first")).waitFor();
+    await spot(page.locator(".caption"), row(lineOf("src/client.ts", "return first")));
+    await press("Shift+B", "Blink old and new", 0);
+    await readStep();
+    await press("Escape");
+    await clearSpot();
+    await press("Shift+C", "Stage the chapter", 800);
 
     await scene(2);
-    await say("Not in any chapter");
-    await click(page.locator(".uncovered button", { hasText: "server.ts" }));
-    await hold(500);
-    await click(lineNumber(lineOf("src/server.ts", "DEBUG")));
-    await glide({ x: 740, y: 700 }, 350);
-    await press("x", "Discard the line", 0);
-    await quiet.evaluate((el) => (el as HTMLElement).remove());
-    await hold(1300);
+    await say("Not in any chapter", readTime("Not in any chapter"));
+    await click(page.locator(".uncovered button", { hasText: "limiter.ts" }));
+    const login = lineOf("src/limiter.ts", '"/login"');
+    await lineNumber(login).waitFor();
+    await hold(900);
+    await click(lineNumber(login));
+    await glide(QUIET, 300);
+    await spot(row(login - 1), row(login + 1));
+    await say("Nobody asked for this: login skips the limit", 2300);
+    await hold(2400);
+    await clearSpot();
+    await press("x", "Discard it, u undoes it", 1100);
 
+    await scene(3);
+    await click(page.locator(".stop-where", { hasText: "README.md" }));
+    await hold(200);
+    await press("Shift+I");
+    // The diagram shows its source until it renders, which only looks like a glitch.
+    pause(true);
+    await press("m", "Preview what changed", 0);
+    await page.locator(".md-diagram").first().waitFor({ timeout: 8000 });
+    pause(false);
+    await glide(SIDE, 300);
+    await hold(1500);
+    await say("Twelve themes, or your own", readTime("Twelve themes, or your own"));
+    await pickThemes(THEMES[theme], () => hold(900));
+    await press("Shift+C", "Stage what you read", 1000);
+    await press("Shift+S", "Stage the renames and tests", 300);
     await scene(SCENES.length);
-    await press("Shift+S", "Stage the rest", 2600);
+    await hold(2800);
     const recorded = await stop();
     encode(recorded, work, name, mp4);
   } finally {

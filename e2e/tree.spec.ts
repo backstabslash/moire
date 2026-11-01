@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { git, initRepo, launch, shots } = harness();
+const { commitAll, initRepo, launch, shots } = harness();
 let repo: string;
 let page: Page;
 
@@ -13,8 +13,7 @@ test.beforeAll(async () => {
   mkdirSync(join(repo, "src"));
   writeFileSync(join(repo, "src", "a.ts"), "export const a = 1;\n");
   writeFileSync(join(repo, "src", "util.ts"), "export function helper() {\n  return 42;\n}\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
   writeFileSync(join(repo, "src", "a.ts"), "export const a = 2;\n");
   writeFileSync(join(repo, "IDEAS.md"), "# Ideas\n\n- a file tree\n");
   mkdirSync(join(repo, "out"));

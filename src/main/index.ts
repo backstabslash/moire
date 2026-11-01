@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { app, BrowserWindow, nativeTheme, screen, shell } from "electron";
 import type { RepoInfo } from "../shared/types";
 import { DEFAULT_SIZE, restoredBounds } from "./bounds";
+import { closeDiagrams } from "./diagrams";
 import { setShellPath } from "./git";
 import { askToCompare, launchRepo, registerIpc, showRepo, windowShowing } from "./ipc";
 import { isLaunchRequest, type LaunchRequest, launchRequest, loginPath, mergePath } from "./launch";
@@ -135,7 +136,10 @@ function start(request: LaunchRequest) {
     createWindow(launchRepo(dropped ? { path: dropped, cwd: request.cwd } : request, true), dropped ? undefined : request.compare);
     startUpdates();
   });
-  app.on("window-all-closed", () => app.quit());
+  app.on("window-all-closed", () => {
+    closeDiagrams();
+    app.quit();
+  });
 }
 
 const request = launchRequest(process.argv, process.cwd(), app.isPackaged);

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { gitIn, harness } from "./harness";
+import { commitAllIn, harness } from "./harness";
 
 const { git, initRepo, launch, shot, tmp, userData } = harness();
 let dir: string;
@@ -24,8 +24,7 @@ test.beforeAll(async () => {
 
   other = initRepo();
   writeFileSync(join(other, "x.ts"), "x\n");
-  gitIn(other)("add", "-A");
-  gitIn(other)("commit", "-qm", "init");
+  commitAllIn(other)("init");
   writeFileSync(join(userData(), "state.json"), JSON.stringify({ lastRepo: repo, recent: [repo, other] }));
 
   ({ page } = await launch(repo));

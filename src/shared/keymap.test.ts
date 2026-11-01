@@ -106,3 +106,20 @@ describe("labels", () => {
     expect(accelerator("g g")).toBeNull();
   });
 });
+
+describe("defaults newer than a keys.json", () => {
+  it("give way to a key someone already chose", () => {
+    const { keys, problems } = resolveKeys(JSON.stringify({ notes: "i", refresh: "M", copyMarkdown: "C" }));
+    expect(problems).toEqual([]);
+    expect(keys.notes).toEqual(["i"]);
+    expect(keys.brief).toEqual([]);
+    expect(keys.previewView).toEqual([]);
+    expect(keys.stageChapter).toEqual([]);
+  });
+
+  it("give way to a sequence starting with their key", () => {
+    const { keys, problems } = resolveKeys(JSON.stringify({ notes: "i i" }));
+    expect(problems).toEqual([]);
+    expect(keys.brief).toEqual([]);
+  });
+});

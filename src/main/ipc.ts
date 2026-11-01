@@ -32,8 +32,10 @@ import { readNotes, readRangeNotes } from "./notes";
 import { type LaunchRequest, usableCwd } from "./launch";
 import { openWithDefault, revealFile } from "./open";
 import { allowPreviews } from "./preview";
-import { act, actAll, adoptLegacyUndo, commit, dropDiscarded, saveDiscarded, undo } from "./stage";
+import { act, actAll, actGroup, adoptLegacyUndo, commit, dropDiscarded, saveDiscarded, undo } from "./stage";
 import { loadState, saveState } from "./state";
+import { drawDiagram } from "./diagrams";
+import { editThemes, loadThemes } from "./themes";
 import { applyUpdate, checkForUpdates, updateNotice } from "./update";
 import { RepoWatcher } from "./watch";
 
@@ -171,6 +173,9 @@ export function registerIpc(): void {
   });
   ipcMain.handle("keys:get", () => loadKeys());
   ipcMain.handle("keys:edit", () => editKeys());
+  ipcMain.handle("themes:get", () => loadThemes());
+  ipcMain.handle("diagram:draw", (_e, source: string, theme: Record<string, string | boolean>) => drawDiagram(source, theme));
+  ipcMain.handle("themes:edit", () => editThemes());
   ipcMain.handle("app:check-updates", () => checkForUpdates(true));
   ipcMain.handle("update:get", () => (dev && process.env.MOIRE_UPDATE ? (JSON.parse(process.env.MOIRE_UPDATE) as UpdateNotice) : updateNotice()));
   ipcMain.handle("update:apply", (e) => applyUpdate(shown.get(e.sender.id)));
@@ -191,6 +196,10 @@ export function registerIpc(): void {
   ipcMain.handle(
     "git:act",
     gitOnly((root, req: StageRequest) => act(root, req)),
+  );
+  ipcMain.handle(
+    "git:act-group",
+    gitOnly((root, reqs: StageRequest[], label: string) => actGroup(root, reqs, label)),
   );
   ipcMain.handle(
     "git:act-all",

@@ -44,7 +44,9 @@ Subject is `area: imperative summary`, lowercase area from the source layout (`s
 - The renderer is sandboxed with no Node access. Add new capabilities to preload and `ipc.ts`.
 - Use `window.moire.copy` for the clipboard, not `navigator.clipboard`, which fails in an unfocused window.
 - Stage, unstage and discard write the index or file directly (`src/main/stage.ts`), not through `git apply`. Each action carries the file diff the user saw and is refused if it no longer matches.
+- Mermaid runs in its own offscreen page (`src/main/diagrams.ts`, `src/renderer/diagram.html`), never in the main renderer. A file under review can write a diagram that lays out for minutes, and only a separate process can be stopped.
 - Discard backups are unreferenced git objects, so `git gc` prunes them after about two weeks and undo stops working for older discards.
+- A theme is an entry in `src/renderer/src/model/themes.ts` plus a block and a `data-cvd="on"` block in `styles.css`. `themeRules.ts` holds the colour rules, enforced by `themes.test.ts`: readability, A/B separation for colour blindness, line tints clear of the plate, syntax quieter than the diff. Anything a block leaves out silently inherits Plate. Users add themes in `themes.json` in userData (`src/renderer/src/model/presets.ts`), checked only against the softer `hardToRead` floor.
 - pnpm blocks install scripts. If `node_modules/electron/dist/electron` is missing, run `node node_modules/electron/install.js`.
 - E2e spec files run in parallel, so they can't share anything outside their temp dirs. The harness gives each app its own clipboard, except `e2e/native-copy.spec.ts`, which needs the real one: any test using Chromium's own copy goes there.
 - `pkill -f`/`pgrep -f` with a pattern that also appears in your own command kills your shell. Kill by PID instead.

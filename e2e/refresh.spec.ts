@@ -1,22 +1,21 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines, numbered } from "./harness";
 
-const { git, initRepo, launch } = harness();
+const { commitAll, git, initRepo, launch } = harness();
 let repo: string;
 let page: Page;
 
-const body = Array.from({ length: 300 }, (_, i) => `export const v${i} = ${i};`);
-const write = (lines: string[]) => writeFileSync(join(repo, "a.ts"), lines.join("\n") + "\n");
+const { body, edit } = numbered(300);
+const write = (list: string[]) => writeFileSync(join(repo, "a.ts"), lines(list));
 
 test.beforeAll(async () => {
   repo = initRepo();
   write(body);
   writeFileSync(join(repo, "b.ts"), "export const b = 1;\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
-  write(body.map((l, i) => (i === 150 ? l.replace("= 150", "= 1500") : l)));
+  commitAll("init");
+  write(edit(150));
 
   ({ page } = await launch(repo));
   await expect(page.locator(".file")).toHaveCount(1);
@@ -39,7 +38,7 @@ test("edits made outside show up on their own, and the view stays on the same li
   await expect.poll(topLine).toMatch(/^export const v\d+ = \d+;$/);
   const before = await topLine();
 
-  write(["// header", "// more", ...body.map((l, i) => (i === 150 ? l.replace("= 150", "= 1500") : l))]);
+  write(["// header", "// more", ...edit(150)]);
   await expect(page.locator(".file .s-add")).toHaveText("+3");
   await expect(page.locator(".file.is-fresh")).toHaveCount(1);
   await expect.poll(topLine).toBe(before);
@@ -58,7 +57,7 @@ test("focus stays on its hunk when an edit adds a hunk above it", async () => {
   const focused = page.locator(".hunk-head.is-focus .hh-range");
   const before = await focused.textContent();
 
-  write(["// header", "// more", ...body.map((l, i) => (i === 150 ? l.replace("= 150", "= 1500") : i === 80 ? l.replace("= 80", "= 800") : l))]);
+  write(["// header", "// more", ...edit(80, 150)]);
   await expect(heads).toHaveCount(3);
   await expect(focused).toHaveText(before!);
 });

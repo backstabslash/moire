@@ -1,26 +1,25 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines, numbered } from "./harness";
 
-const { clipboard, git, idle, initRepo, launch, open, shot, shots, userData } = harness();
+const { clipboard, commitAll, git, idle, initRepo, launch, open, recordOpens, shot, shots, userData } = harness();
 let repo: string;
 let app: ElectronApplication;
 let page: Page;
 
 const clickMenu = (id: string) => app.evaluate(({ Menu }, id) => Menu.getApplicationMenu()?.getMenuItemById(id)?.click(), id);
 const hunks = (text: string) => text.split("\n").filter((l) => l.startsWith("@@")).length;
-const body = Array.from({ length: 60 }, (_, i) => `export const v${i} = ${i};`);
-const edited = body.map((l, i) => (i % 15 === 3 ? l.replace("=", "= 1 +") : l)).join("\n") + "\n";
+const { body } = numbered(60);
+const edited = lines(body.map((l, i) => (i % 15 === 3 ? l.replace("=", "= 1 +") : l)));
 
 test.beforeAll(async () => {
   repo = initRepo();
-  writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
-  writeFileSync(join(repo, "b.ts"), body.join("\n") + "\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  writeFileSync(join(repo, "a.ts"), lines(body));
+  writeFileSync(join(repo, "b.ts"), lines(body));
+  commitAll("init");
   writeFileSync(join(repo, "a.ts"), edited);
-  writeFileSync(join(repo, "b.ts"), body.slice(2).join("\n") + "\n");
+  writeFileSync(join(repo, "b.ts"), lines(body.slice(2)));
   writeFileSync(join(userData(), "keys.json"), JSON.stringify({ stage: "y", stge: "x" }));
 
   ({ app, page } = await launch(repo, { prefs: { theme: "light" } }));
@@ -39,6 +38,30 @@ test("keys.json remaps a key, every label follows, and mistakes are reported", a
   await page.keyboard.press("Control+z");
   await expect(page.locator(".toast.show")).toContainText("Undid: Staged 2 lines in a.ts");
   await expect.poll(() => git("diff", "--cached")).toBe("");
+});
+
+test("number keys switch views with the compare menu open, and close it", async () => {
+  await page
+    .locator(".toolbar")
+    .getByRole("button", { name: /Unstaged/ })
+    .first()
+    .click();
+  await expect(page.locator(".picker-pop")).toBeVisible();
+  await page.keyboard.press("2");
+  await expect(page.locator(".picker-pop")).toHaveCount(0);
+  await expect(
+    page
+      .locator(".toolbar")
+      .getByRole("button", { name: /^Staged/ })
+      .first(),
+  ).toBeVisible();
+  await page.keyboard.press("1");
+  await expect(
+    page
+      .locator(".toolbar")
+      .getByRole("button", { name: /^Unstaged/ })
+      .first(),
+  ).toBeVisible();
 });
 
 test("pressing stage while one runs queues it, so three presses stage three hunks", async () => {
@@ -68,6 +91,7 @@ test("? shows every key, remapped ones included, and closes with ? or Esc", asyn
   const focused = page.locator(".hunk-head.is-focus .hh-range");
   const before = await focused.textContent();
   await page.keyboard.press("j");
+  await idle();
   await expect(focused).toHaveText(before!);
   await page.keyboard.press("Escape");
   await expect(help).toBeHidden();
@@ -174,18 +198,11 @@ test("editing keys.json applies without a restart", async () => {
 test("Edit keyboard shortcuts writes the defaults when there's no file and opens it", async () => {
   const file = join(userData(), "keys.json");
   rmSync(file);
-  await app.evaluate(({ shell }) => {
-    const opened: string[] = [];
-    (globalThis as { opened?: string[] }).opened = opened;
-    shell.openPath = async (path) => {
-      opened.push(path);
-      return "";
-    };
-  });
+  const opened = await recordOpens();
   await page.keyboard.press("?");
   await page.getByRole("button", { name: "Edit keyboard shortcuts…" }).click();
   await expect.poll(() => existsSync(file)).toBe(true);
-  expect(await app.evaluate(() => (globalThis as { opened?: string[] }).opened)).toEqual([file]);
+  expect(await opened()).toEqual([file]);
   const written = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
   expect(written.stage).toBe("s");
   expect(written.search).toEqual(["/", "Mod+f"]);

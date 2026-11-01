@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { git, initRepo, launch, shot } = harness();
+const { commitAll, initRepo, launch, shot } = harness();
 let repo: string;
 let page: Page;
 
@@ -19,8 +19,7 @@ const distanceFromTop = async (head: ReturnType<Page["locator"]>) => {
 test.beforeAll(async () => {
   repo = initRepo();
   writeFileSync(join(repo, "a.ts"), source("old"));
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
   writeFileSync(join(repo, "a.ts"), source("new"));
   ({ page } = await launch(repo, { prefs: { layout: "split", theme: "light" } }));
   await expect(page.locator(".hunk-head").first()).toBeVisible();

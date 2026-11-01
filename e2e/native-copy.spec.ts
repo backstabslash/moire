@@ -1,10 +1,10 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines } from "./harness";
 
 // Chromium's own copy writes straight to the system clipboard, so every test relying on it lives here, where none can overlap.
-const { clipboard, git, initRepo, launch, open } = harness();
+const { clipboard, commitAll, initRepo, launch, open } = harness();
 let app: ElectronApplication;
 let page: Page;
 
@@ -15,12 +15,11 @@ const cell = (n: number) => page.locator(".row.split", { has: page.locator(".ln.
 test.beforeAll(async () => {
   const repo = initRepo();
   const write = (file: string, text: string) => writeFileSync(join(repo, file), text);
-  write("a.ts", body.join("\n") + "\n");
+  write("a.ts", lines(body));
   write("blanks.txt", "one\n\ntwo\nthree\n");
   write("colour.ts", "export const a = 1;\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
-  write("a.ts", edited.join("\n") + "\n");
+  commitAll("init");
+  write("a.ts", lines(edited));
   write("blanks.txt", "one\n\ntwo\nthree changed\n");
   write("colour.ts", 'export const a = 2;\nexport const frame = "#1f252c";\n');
 

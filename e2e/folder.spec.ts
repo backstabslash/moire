@@ -1,16 +1,13 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { gitIn, harness } from "./harness";
+import { gitIn, harness, writeIn } from "./harness";
 
 const { launch, shot, tmp, userData } = harness();
 let folder: string;
 let page: Page;
 
-const write = (path: string, text: string) => {
-  mkdirSync(join(folder, path, ".."), { recursive: true });
-  writeFileSync(join(folder, path), text);
-};
+const write = (path: string, text: string) => writeIn(folder)(path, text);
 
 test.beforeAll(async () => {
   folder = tmp("folder");

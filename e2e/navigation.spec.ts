@@ -1,21 +1,20 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines, numbered } from "./harness";
 
-const { git, initRepo, launch, shot } = harness();
+const { commitAll, initRepo, launch, shot } = harness();
 let repo: string;
 let page: Page;
 
 test.beforeAll(async () => {
   repo = initRepo();
-  const body = Array.from({ length: 40 }, (_, i) => `export const v${i} = ${i};`);
-  writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
-  writeFileSync(join(repo, "b.ts"), body.join("\n") + "\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
-  writeFileSync(join(repo, "a.ts"), body.map((l, i) => (i % 10 === 3 ? l.replace("=", "= 1 +") : l)).join("\n") + "\n");
-  writeFileSync(join(repo, "b.ts"), body.slice(5).join("\n") + "\n");
+  const { body } = numbered(40);
+  writeFileSync(join(repo, "a.ts"), lines(body));
+  writeFileSync(join(repo, "b.ts"), lines(body));
+  commitAll("init");
+  writeFileSync(join(repo, "a.ts"), lines(body.map((l, i) => (i % 10 === 3 ? l.replace("=", "= 1 +") : l))));
+  writeFileSync(join(repo, "b.ts"), lines(body.slice(5)));
   writeFileSync(join(repo, "new.ts"), "export const fresh = true;\n");
 
   ({ page } = await launch(repo));

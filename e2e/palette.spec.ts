@@ -1,17 +1,16 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, staged } from "./harness";
 
-const { git, idle, initRepo, launch, shot } = harness();
+const { commitAll, idle, initRepo, launch, shot } = harness();
 let repo: string;
 let page: Page;
 
 test.beforeAll(async () => {
   repo = initRepo();
   writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
   writeFileSync(join(repo, "a.ts"), "export const a = 2;\n");
   ({ page } = await launch(repo, { prefs: { layout: "split", theme: "light" } }));
   await expect(page.locator(".hunk-head").first()).toBeVisible();
@@ -42,7 +41,7 @@ test("keys don't reach the view behind the palette, and Escape closes it whereve
   await palette.getByRole("textbox").evaluate((el) => el.blur());
   await page.keyboard.press("s");
   await idle();
-  expect(git("diff", "--cached", "--name-only").trim()).toBe("");
+  expect(staged(repo)).toEqual([]);
   await expect(palette).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(palette).toHaveCount(0);

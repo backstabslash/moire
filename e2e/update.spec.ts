@@ -3,19 +3,18 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { harness } from "./harness";
 
-const { git, initRepo, launch, shots, tmp } = harness();
+const { commitAll, initRepo, launchFresh, shots } = harness();
 let repo: string;
 
 test.beforeAll(() => {
   repo = initRepo();
   writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
   writeFileSync(join(repo, "a.ts"), "export const a = 2;\n");
 });
 
 async function open(update: object) {
-  const launched = await launch(repo, { data: tmp("data"), prefs: { theme: "light" }, env: { MOIRE_UPDATE: JSON.stringify(update) } });
+  const launched = await launchFresh(repo, { prefs: { theme: "light" }, env: { MOIRE_UPDATE: JSON.stringify(update) } });
   await expect(launched.page.locator(".hunk-head")).toHaveCount(1);
   return launched;
 }

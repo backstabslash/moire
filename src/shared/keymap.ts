@@ -23,14 +23,17 @@ export const COMMANDS = {
   filterFiles: { keys: ["p", "Mod+p"], label: "Filter files", group: "Navigate", inTextFields: true },
   palette: { keys: ["Mod+Shift+p"], label: "Command palette", group: "Navigate", noRepo: true, inTextFields: true },
   allFiles: { keys: ["a"], label: "Changed or all files", group: "Navigate" },
-  nextNote: { keys: ["."], label: "Next agent note", group: "Navigate" },
-  prevNote: { keys: [","], label: "Previous agent note", group: "Navigate" },
+  nextNote: { keys: ["."], label: "Next step in the notes", group: "Navigate" },
+  prevNote: { keys: [","], label: "Previous step in the notes", group: "Navigate" },
+  nextPlace: { keys: [">"], label: "Next place in this step", group: "Navigate" },
+  prevPlace: { keys: ["<"], label: "Previous place in this step", group: "Navigate" },
   recentRepos: { keys: ["o"], label: "Recent repositories", group: "Navigate", noRepo: true },
   openRepo: { keys: ["Mod+o"], label: "Open repository…", group: "Navigate", noRepo: true, inTextFields: true },
 
   stage: { keys: ["s"], label: "Stage or unstage", group: "Review", noRepeat: true },
   discard: { keys: ["x"], label: "Discard", group: "Review", noRepeat: true },
   stageAll: { keys: ["S"], label: "Stage or unstage all files", group: "Review", noRepeat: true },
+  stageChapter: { keys: ["C"], label: "Stage this chapter", group: "Review", noRepeat: true },
   discardFile: { keys: [], label: "Discard file", group: "Review", noRepeat: true },
   undo: { keys: ["u", "Mod+z"], label: "Undo", group: "Review", noRepeat: true },
   extendDown: { keys: ["J"], label: "Extend selection down", group: "Review" },
@@ -40,7 +43,7 @@ export const COMMANDS = {
   openEditor: { keys: ["e"], label: "Open in editor", group: "Review" },
   chooseEditor: { keys: ["E"], label: "Choose editor…", group: "Review" },
   refresh: { keys: ["r"], label: "Refresh", group: "Review" },
-  cancel: { keys: ["Escape"], label: "Stop blink, clear selection", group: "Review" },
+  cancel: { keys: ["Escape"], label: "Stop blink, clear selection, hide the step", group: "Review" },
 
   copyMarkdown: { keys: ["c"], label: "Copy as Markdown", group: "Copy" },
   copyCode: { keys: ["Mod+c"], label: "Copy lines", group: "Copy" },
@@ -57,13 +60,16 @@ export const COMMANDS = {
   fullFile: { keys: ["f"], label: "Full file", group: "View" },
   ignoreWhitespace: { keys: ["w"], label: "Ignore whitespace", group: "View" },
   notes: { keys: ["I"], label: "Agent notes", group: "View" },
+  brief: { keys: ["i"], label: "Agent brief", group: "View" },
   preview: { keys: ["m"], label: "Preview or diff", group: "View" },
+  previewView: { keys: ["M"], label: "Next Markdown view", group: "View" },
   theme: { keys: ["t"], label: "Light or dark theme", group: "View" },
   zoomIn: { keys: ["Mod+="], label: "Zoom in", group: "View", noRepo: true, handledByMain: true },
   zoomOut: { keys: ["Mod+-"], label: "Zoom out", group: "View", noRepo: true, handledByMain: true },
   zoomReset: { keys: ["Mod+0"], label: "Actual size", group: "View", noRepo: true, handledByMain: true },
   help: { keys: ["?"], label: "Keyboard shortcuts", group: "View", noRepo: true },
   editKeys: { keys: [], label: "Edit keyboard shortcuts…", group: "View", noRepo: true },
+  editThemes: { keys: [], label: "Edit custom themes…", group: "View", noRepo: true },
 } satisfies Record<string, CommandDef>;
 
 export type CommandId = keyof typeof COMMANDS;
@@ -180,6 +186,8 @@ export interface ResolvedKeys {
 
 // Removed commands, still listed in any keys.json written while they existed.
 const RETIRED = new Set(["grouping"]);
+// Defaults added after people already had a keys.json, so a key someone chose beats them.
+const YIELDING = new Set<CommandId>(["brief", "stageChapter", "previewView", "nextPlace", "prevPlace"]);
 
 export function resolveKeys(text: string | null): ResolvedKeys {
   const keys = { ...DEFAULT_KEYS };
@@ -227,6 +235,11 @@ export function resolveKeys(text: string | null): ResolvedKeys {
   for (let found = clashes(keys); ; found = clashes(keys)) {
     const clash = found.find(({ ids }) => ids.some((id) => changed.has(id)));
     if (!clash) break;
+    const yielding = clash.ids.find((id) => YIELDING.has(id) && !changed.has(id));
+    if (yielding) {
+      keys[yielding] = keys[yielding].filter((key) => key !== clash.key && first(key) !== clash.key);
+      continue;
+    }
     const reverted = clash.ids.filter((id) => changed.delete(id));
     for (const id of reverted) keys[id] = [...DEFAULT_KEYS[id]];
     problems.push(

@@ -1,16 +1,13 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, writeIn } from "./harness";
 
-const { git, initRepo, launch, open, shot, shots } = harness();
+const { commitAll, git, initRepo, launch, open, shot, shots } = harness();
 let repo: string;
 let page: Page;
 
-const write = (path: string, text: string) => {
-  mkdirSync(dirname(join(repo, path)), { recursive: true });
-  writeFileSync(join(repo, path), text);
-};
+const write = (path: string, text: string) => writeIn(repo)(path, text);
 const lines = (name: string, n: number, from = 0) => Array.from({ length: n }, (_, i) => `export const ${name}${i} = ${i + from};`).join("\n") + "\n";
 const shown = () => page.locator(".files .file").evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.path!));
 const row = (name: string) => page.locator(`.file[data-path$="${name}"]`);
@@ -40,8 +37,7 @@ test.beforeAll(async () => {
   write("src/other/index.ts", "export const a = 1;\n");
   write("zz/logo.bin", "\x00\x00\x01");
   write("zz/shift.txt", numbered.join("\n") + "\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
   for (const path of LISTED) write(path, lines("v", 32, 1));
   write("src/other/index.ts", "export const a = 2;\nexport const b = 3;\n");
   write("zz/logo.bin", "\x00\x00\x02");

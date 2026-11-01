@@ -1,13 +1,13 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines, numbered } from "./harness";
 
-const { git, idle, initRepo, launch, open } = harness();
+const { commitAll, git, idle, initRepo, launch, open } = harness();
 let repo: string;
 let page: Page;
 
-const body = Array.from({ length: 200 }, (_, i) => `export const v${i} = ${i};`);
+const { body } = numbered(200);
 const inserted = Array.from({ length: 80 }, (_, i) => `export const extra${i} = ${i};`);
 const short = body.slice(0, 100);
 const edit = (at: number[]) => body.map((l, i) => (at.includes(i) ? l.replace("=", "= 1 +") : l));
@@ -15,19 +15,18 @@ const focusedRange = () => page.locator(".hunk-head.is-focus .hh-range");
 
 test.beforeAll(async () => {
   repo = initRepo();
-  writeFileSync(join(repo, "a.ts"), body.join("\n") + "\n");
-  writeFileSync(join(repo, "b.ts"), body.join("\n") + "\n");
-  writeFileSync(join(repo, "c.ts"), body.join("\n") + "\n");
-  writeFileSync(join(repo, "f.ts"), short.join("\n") + "\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  writeFileSync(join(repo, "a.ts"), lines(body));
+  writeFileSync(join(repo, "b.ts"), lines(body));
+  writeFileSync(join(repo, "c.ts"), lines(body));
+  writeFileSync(join(repo, "f.ts"), lines(short));
+  commitAll("init");
   const a = edit([5, 150]);
-  writeFileSync(join(repo, "a.ts"), [...a.slice(0, 60), ...inserted, ...a.slice(60)].join("\n") + "\n");
+  writeFileSync(join(repo, "a.ts"), lines([...a.slice(0, 60), ...inserted, ...a.slice(60)]));
   const b = edit([150]);
-  writeFileSync(join(repo, "b.ts"), [...b.slice(0, 10), ...inserted, ...b.slice(10)].join("\n") + "\n");
-  writeFileSync(join(repo, "c.ts"), body.flatMap((l, i) => (i % 80 === 20 ? ["// same", l] : [l])).join("\n") + "\n");
+  writeFileSync(join(repo, "b.ts"), lines([...b.slice(0, 10), ...inserted, ...b.slice(10)]));
+  writeFileSync(join(repo, "c.ts"), lines(body.flatMap((l, i) => (i % 80 === 20 ? ["// same", l] : [l]))));
   const f = [...short.slice(0, 10), ...inserted.slice(0, 30), ...short.slice(10)];
-  writeFileSync(join(repo, "f.ts"), f.map((l) => (/v(49|79) /.test(l) ? l.replace("=", "= 1 +") : l)).join("\n") + "\n");
+  writeFileSync(join(repo, "f.ts"), lines(f.map((l) => (/v(49|79) /.test(l) ? l.replace("=", "= 1 +") : l))));
 
   ({ page } = await launch(repo));
   await expect(page.locator(".hunk-head").first()).toBeVisible();
@@ -200,7 +199,7 @@ test("opening a file while an undo runs stays on that file", async () => {
 
 test("coming back to the end of a file with wrapped lines lands at the end", async () => {
   const wrapped = Array.from({ length: 400 }, (_, i) => (i % 3 ? `line ${i}` : `line ${i} ${"wrapped ".repeat(75)}`));
-  writeFileSync(join(repo, "long.txt"), wrapped.join("\n") + "\n");
+  writeFileSync(join(repo, "long.txt"), lines(wrapped));
   await page.locator(".file", { hasText: "long.txt" }).click();
   await expect(page.locator(".file.is-active .name")).toHaveText("long.txt");
   const scroller = page.locator(".diff-scroller");

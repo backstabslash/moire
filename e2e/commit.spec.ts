@@ -1,22 +1,21 @@
 import { chmodSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { harness, lines, numbered } from "./harness";
 
-const { clipboard, git, idle, initRepo, launch, shot, shots } = harness();
+const { clipboard, commitAll, git, idle, initRepo, launch, shot, shots } = harness();
 let repo: string;
 let page: Page;
 
-const body = Array.from({ length: 60 }, (_, i) => `export const v${i} = ${i};`);
-const write = (lines: string[]) => writeFileSync(join(repo, "a.ts"), lines.join("\n") + "\n");
+const { body } = numbered(60);
+const write = (list: string[]) => writeFileSync(join(repo, "a.ts"), lines(list));
 
 test.beforeAll(async () => {
   repo = initRepo();
   git("config", "user.name", "Ada Lovelace");
   write(body);
   writeFileSync(join(repo, "b.ts"), "export const b = 1;\n");
-  git("add", "-A");
-  git("commit", "-qm", "init");
+  commitAll("init");
   git("tag", "v1");
   git("commit", "-q", "--allow-empty", "-m", "agent work", "-m", "Co-authored-by: Claude <noreply@anthropic.com>");
   write(body.map((l, i) => (i === 30 ? l.replace("= 30", "= 300") : l)));
