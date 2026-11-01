@@ -125,12 +125,13 @@ function uncoveredLines(files: FileDiff[], notes: AgentNotes, placed?: Placement
   return files.map((file) => {
     const placed = byPath.get(file.path) ?? [];
     const { lines, isBlank } = scan(file);
-    return { path: file.path, left: lines.filter((c, i) => !isBlank[i] && !placed.some((p) => covers(p, c))) };
+    // A binary, chmod-only or oversized file has no lines to count, but still hasn't been explained.
+    return { path: file.path, left: lines.filter((c, i) => !isBlank[i] && !placed.some((p) => covers(p, c))), lineless: !file.hunks.length && !placed.length };
   });
 }
 
 export function uncovered(files: FileDiff[], notes: AgentNotes, placed?: Placement[][]): { path: string; count: number }[] {
-  return uncoveredLines(files, notes, placed).flatMap(({ path, left }) => (left.length ? [{ path, count: left.length }] : []));
+  return uncoveredLines(files, notes, placed).flatMap(({ path, left, lineless }) => (left.length || lineless ? [{ path, count: left.length }] : []));
 }
 
 export const firstUncovered = (file: FileDiff, notes: AgentNotes, placed?: Placement[][]) => uncoveredLines([file], notes, placed)[0].left[0]?.newLine ?? null;

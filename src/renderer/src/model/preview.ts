@@ -1,4 +1,4 @@
-import type { FileDiff, SideInfo } from "../../../shared/types";
+import type { FileContents, FileDiff, SideInfo } from "../../../shared/types";
 
 export type PreviewKind = "image" | "markdown";
 export const PREVIEW_VIEWS = ["read", "changes", "sides"] as const;
@@ -26,6 +26,9 @@ export function previewOf(file: FileDiff): { kind: PreviewKind; forced: boolean 
   if (MARKDOWN.has(ext) && !file.binary && !file.tooLarge) return { kind: "markdown", forced: false };
   return null;
 }
+
+// A small change to a big file reads as a normal diff, but neither side's text ever arrives, so there's no page to render.
+export const markdownTooBig = (file: FileDiff, contents: FileContents | null) => !!contents?.hidden && !contents.binary && previewOf(file)?.kind === "markdown";
 
 export const hasTwoVersions = (file: Pick<FileDiff, "status">, old: string | null) =>
   old !== null && file.status !== "added" && file.status !== "untracked" && file.status !== "deleted" && file.status !== "unchanged";

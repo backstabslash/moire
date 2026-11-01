@@ -111,6 +111,14 @@ describe("chapters and coverage", () => {
     ]);
   });
 
+  it("lists a file with no lines to show until a chapter names it", () => {
+    const binary: FileDiff = { ...file, path: "logo.png", binary: true, hunks: [] };
+    const chmod: FileDiff = { ...file, path: "run.sh", oldMode: "100644", newMode: "100755", hunks: [] };
+    const notes = { chapters: [{ title: "T", text: "", ranges: [{ path: "run.sh" }] }] };
+    expect(uncovered([binary, chmod], notes)).toEqual([{ path: "logo.png", count: 0 }]);
+    expect(uncovered([chmod], notes, [["lost"]])).toEqual([{ path: "run.sh", count: 0 }]);
+  });
+
   it("counts changed lines no chapter covers", () => {
     const other: FileDiff = { ...file, path: "b.ts" };
     const notes = { chapters: [{ title: "T", text: "", ranges: [{ path: "a.ts", lines: [10, 12] as [number, number] }, { path: "c.ts" }] }] };

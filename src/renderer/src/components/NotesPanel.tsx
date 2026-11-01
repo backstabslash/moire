@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentNotes, NoteRange, NotesFile } from "../../../shared/types";
-import { firstStopLeft, leadOf, noteSpans, shortNames, type Skim, type Stop } from "../model/notes";
+import { firstStopLeft, leadOf, looseTip, noteSpans, shortNames, type Skim, type Stop } from "../model/notes";
 import { FileGlyph } from "./FileGlyph";
 import { Key, StepKey } from "./Key";
 import { Lined } from "./Mark";
@@ -191,16 +191,12 @@ export function NotesPanel({
         </ol>
         {uncovered.length > 0 && (
           <div className="uncovered">
-            <b>Lines not in any chapter</b>
+            <b>Not in any chapter</b>
             {uncovered.map(({ path, count }) => (
-              <button
-                key={path}
-                data-tip={`${path}\nGoes to the first of ${count} changed ${count === 1 ? "line" : "lines"}`}
-                onClick={() => onUncovered(path)}
-              >
+              <button key={path} data-tip={looseTip(path, count)} onClick={() => onUncovered(path)}>
                 <FileGlyph path={path} />
                 <span>{looseNames.get(path)}</span>
-                <i>{count}</i>
+                {count > 0 && <i>{count}</i>}
               </button>
             ))}
           </div>

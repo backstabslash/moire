@@ -13,7 +13,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -22,6 +21,8 @@ import { promisify } from "node:util";
 import { createGunzip } from "node:zlib";
 
 const run = promisify(execFile);
+// Electron's fs.promises.rm takes an .asar for a folder and stops with ENOTEMPTY, leaving the app's own old versions behind.
+const removeTree = (path: string) => run("rm", ["-rf", "--", path]);
 
 export interface Asset {
   name: string;
@@ -203,15 +204,14 @@ async function patchCopy(get: Get, from: string, asar: Asset, manifest: Asset, v
 }
 
 async function placeLinux(root: string, version: string, built: string, running: string) {
-  await rm(join(root, version), { recursive: true, force: true });
+  await removeTree(join(root, version));
   renameSync(built, join(root, version));
   const next = join(root, ".current");
   rmSync(next, { force: true });
   symlinkSync(version, next);
   renameSync(next, join(root, "current"));
   for (const old of readdirSync(root, { withFileTypes: true })) {
-    if (old.isDirectory() && !old.name.startsWith(".") && old.name !== version && old.name !== running)
-      await rm(join(root, old.name), { recursive: true, force: true });
+    if (old.isDirectory() && !old.name.startsWith(".") && old.name !== version && old.name !== running) await removeTree(join(root, old.name));
   }
 }
 
@@ -248,7 +248,7 @@ export async function updateNpx({ release, platform, arch, root, runningApp, fet
   const parent = mac ? dirname(root) : root;
   const prefix = mac ? ".moire-tmp-" : ".tmp-";
   mkdirSync(parent, { recursive: true });
-  for (const name of readdirSync(parent)) if (name.startsWith(prefix)) await rm(join(parent, name), { recursive: true, force: true });
+  for (const name of readdirSync(parent)) if (name.startsWith(prefix)) await removeTree(join(parent, name));
   const tmp = mkdtempSync(join(parent, prefix));
   try {
     let built: string | undefined;
@@ -261,7 +261,7 @@ export async function updateNpx({ release, platform, arch, root, runningApp, fet
     built ??= await unpackFull(get, full, join(tmp, "full"), mac);
     if (!mac) {
       await placeLinux(root, version, built, basename(runningApp));
-      await rm(tmp, { recursive: true, force: true });
+      await removeTree(tmp);
       return undefined;
     }
     // The build isn't signed, and Apple silicon refuses to run code without at least an ad-hoc signature.
@@ -275,7 +275,7 @@ export async function updateNpx({ release, platform, arch, root, runningApp, fet
       }
     };
   } catch (e) {
-    await rm(tmp, { recursive: true, force: true });
+    await removeTree(tmp);
     throw e;
   }
 }

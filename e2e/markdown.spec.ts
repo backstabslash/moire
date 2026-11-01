@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { harness, writeNotes } from "./harness";
 
-const { clipboard, commitAll, git, idle, initRepo, launch, open, resize, shot } = harness();
+const { clipboard, commitAll, git, idle, initRepo, launch, open, resize, shot, shots } = harness();
 let repo: string;
 let page: Page;
 
@@ -331,6 +331,22 @@ test("a file too big to render shows its text", async () => {
   await expect(page.locator(".md pre")).toContainText("- a line");
   await expect(page.getByRole("group", { name: "Markdown view" })).toHaveCount(0);
   writeFileSync(join(repo, "plan.md"), `${rollout(false)}\nthe last line\n`);
+  await expect(page.getByRole("group", { name: "Markdown view" })).toBeVisible();
+});
+
+test("a file too big to read falls back to its diff and says so", async () => {
+  writeFileSync(join(repo, "plan.md"), "- a line\n".repeat(300_000));
+  commitAll("big plan");
+  writeFileSync(join(repo, "plan.md"), `${"- a line\n".repeat(300_000)}- the new tail\n`);
+  await page.keyboard.press("r");
+  await expect(page.locator(".encoding")).toContainText("over 2 MB");
+  await expect(page.locator(".md")).toHaveCount(0);
+  await expect(page.getByText("- the new tail")).toBeVisible();
+  await shots("markdown-too-big");
+  writeFileSync(join(repo, "plan.md"), `${rollout(false)}\nthe last line\n`);
+  commitAll("small plan");
+  writeFileSync(join(repo, "plan.md"), `${rollout(true)}\nthe last line\n`);
+  await page.keyboard.press("r");
   await expect(page.getByRole("group", { name: "Markdown view" })).toBeVisible();
 });
 

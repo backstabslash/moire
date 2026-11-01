@@ -81,7 +81,7 @@ The file covers everything uncommitted, not just your last task. If it exists, r
 - `note` starts a step, and carries over the ranges after it until the next `note`. Before the first `note`, moire shows the chapter's `text`. `.` moves by step and `>` by place inside a step. Ranges without a `note` that start within about a screen below the last place in one file share it, and anything else adds a place, so put the lines that matter first and keep a step to one or two files.
 - `warn` marks what the reviewer must check themselves, and moire lists these in the brief. Use it once or twice per change, or it stops meaning anything. A `warn` on lines nobody changed keeps its chapter open until it's committed, since staging can't finish it.
 - `skim` folds a chapter that needs only a quick look, like tests, docs, generated files or mechanical renames, and `.` passes over it. Don't set it on code you'd want read. A `warn` overrides it, and moire spots whitespace-only chapters by itself.
-- Cover every changed line, in one chapter only. moire lists lines in no chapter, but not overlaps.
+- Cover every changed line, in one chapter only. moire lists lines in no chapter, and files with no lines to show, such as binaries and chmods, but not overlaps.
 - Outside sections, backticks are the only formatting, and `asked` shows as written.
 
 ## If a change needs more than chapters

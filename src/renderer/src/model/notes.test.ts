@@ -145,6 +145,25 @@ describe("walking the steps", () => {
     expect(stepCount(list)).toBe(2);
   });
 
+  it("stops on a warned place inside the step, going forward only", () => {
+    const ranges = [
+      { path: "a.ts", note: "One." },
+      { path: "b.ts" },
+      { path: "c.ts", warn: true },
+      { path: "d.ts" },
+      { path: "e.ts", lines: [1, 1] as [number, number] },
+      { path: "e.ts", lines: [3, 3] as [number, number], warn: true },
+      { path: "f.ts", note: "Two." },
+    ];
+    const list = stopsOf({ chapters: [{ title: "A", text: "", carries: true, ranges }] });
+    const none = () => false;
+    expect(nextStep(list, 0, 1, none)).toBe(2);
+    expect(nextStep(list, 2, 1, none)).toBe(4);
+    expect(nextStep(list, 4, 1, none)).toBe(6);
+    expect(nextStep(list, 6, -1, none)).toBe(0);
+    expect(nextStep(list, 0, 1, (_, i) => i === 2)).toBe(4);
+  });
+
   it("carries a note over the ranges after it, and captions with the chapter when there is none", () => {
     expect(stepNote(notes.chapters[0], 1)).toBe("One.");
     expect(captionOf(notes, stops, 1)).toEqual({

@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { diffHunk } from "../../../main/test-repo";
 import type { FileDiff } from "../../../shared/types";
-import { blobUrl, previewOf, readOnly, resolveRelative } from "./preview";
+import { blobUrl, markdownTooBig, previewOf, readOnly, resolveRelative } from "./preview";
 
 function file(path: string, extra: Partial<FileDiff> = {}): FileDiff {
   return { path, status: "modified", binary: false, additions: 0, deletions: 0, hunks: [], ...extra };
 }
+
+describe("markdownTooBig", () => {
+  it("is only about Markdown whose text was held back for size", () => {
+    expect(markdownTooBig(file("plan.md"), { a: null, b: null, hidden: true })).toBe(true);
+    expect(markdownTooBig(file("plan.md"), { a: null, b: null, hidden: true, binary: true })).toBe(false);
+    expect(markdownTooBig(file("plan.md"), { a: "a", b: "b", hidden: false })).toBe(false);
+    expect(markdownTooBig(file("plan.md"), null)).toBe(false);
+    expect(markdownTooBig(file("a.ts"), { a: null, b: null, hidden: true })).toBe(false);
+  });
+});
 
 describe("previewOf", () => {
   it("always previews binary images and offers it for SVG and Markdown", () => {

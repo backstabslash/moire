@@ -8,6 +8,7 @@ import { type Blink, DiffView, type DiffViewHandle, type Preview, type Spot } fr
 import { NoChanges, NoRepo } from "./components/EmptyState";
 import { EncodingNotice } from "./components/EncodingNotice";
 import { InvisibleNotice } from "./components/InvisibleNotice";
+import { PreviewLimitNotice } from "./components/PreviewLimitNotice";
 import { FileMenu, type MenuAction, type MenuAt } from "./components/FileMenu";
 import { HoverTip } from "./components/HoverTip";
 import { ClashBar, ClashView, DropFoot, DropSlots, DropStyle, ghostTree } from "./components/FilesIn";
@@ -30,7 +31,7 @@ import type { TokLines } from "./highlight/types";
 import { fileKey as fileKeyOf, fuzzyMatch, hashString, orderFiles, remember } from "./model/files";
 import { hiddenLines } from "./model/invisible";
 import { langFor } from "./model/lang";
-import { hasTwoVersions, PREVIEW_CHOICES, PREVIEW_VIEWS, previewOf, type PreviewChoice, readOnly, resolveView } from "./model/preview";
+import { hasTwoVersions, markdownTooBig, PREVIEW_CHOICES, PREVIEW_VIEWS, previewOf, type PreviewChoice, readOnly, resolveView } from "./model/preview";
 import { buildRows, followHunk, hunkChanges, type Layout, type LineRow, notUtf8, type Row, type Scope, splitLines, type Stub, withStubs } from "./model/rows";
 import {
   bordersDeletion,
@@ -684,7 +685,8 @@ export function App() {
     focused.current = file && hunk ? { view: shownRef.current, path: file.path, hunk, index: focusHunk } : null;
   }, [file, focusHunk]);
 
-  const previewable = useMemo(() => (file ? previewOf(file) : null), [file]);
+  const tooBigToPreview = !!file && markdownTooBig(file, fileContents);
+  const previewable = useMemo(() => (file && !tooBigToPreview ? previewOf(file) : null), [file, tooBigToPreview]);
   const undecoded = useMemo(() => !!file && notUtf8(file, fileContents), [file, fileContents]);
   const diffVersion = diff?.version ?? "";
   const preview: Preview | null =
@@ -1768,7 +1770,10 @@ export function App() {
     layout: () => (preview ? notify("A preview has no layouts") : chooseLayout(shownLayout === "split" ? "unified" : "split")),
     fullFile: () => (preview ? notify("A preview always shows the whole page") : setScope(scope === "full" ? "changed" : "full")),
     ignoreWhitespace: () => chooseWhitespace(!ignoreWhitespace),
-    preview: () => (previewable && !previewable.forced ? togglePreview() : notify("Only Markdown and SVG files switch between preview and diff")),
+    preview: () =>
+      previewable && !previewable.forced
+        ? togglePreview()
+        : notify(tooBigToPreview ? "This file is over 2 MB, too big to preview" : "Only Markdown and SVG files switch between preview and diff"),
     previewView: () => {
       if (preview?.kind !== "markdown") return notify("Turn on the Markdown preview first");
       if (!hasTwoVersions(file!, preview.old)) return notify("This file has only one version, so there's nothing to compare");
@@ -2178,6 +2183,7 @@ export function App() {
                     />
                   )}
                   {!preview && undecoded && <EncodingNotice staging={!!actions && file.status !== "unchanged"} />}
+                  {tooBigToPreview && previewPref === "on" && <PreviewLimitNotice />}
                   {invisibles.length > 0 && !quietNotices.has(invisibleKey) && (
                     <InvisibleNotice lines={invisibles} onClose={() => setQuietNotices((cur) => new Set(cur).add(invisibleKey))} />
                   )}

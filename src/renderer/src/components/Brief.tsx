@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import type { AgentNotes, CompareMode, FileDiff, NotesFile } from "../../../shared/types";
-import { checksOf, shortNames, type Skim, type Stop, stepCount } from "../model/notes";
+import { checksOf, looseTip, shortNames, type Skim, type Stop, stepCount } from "../model/notes";
 import { FileGlyph } from "./FileGlyph";
 import { Key } from "./Key";
 import { NoteSections } from "./NoteSections";
@@ -46,10 +46,10 @@ function clearCopy(view: Props["view"], allDone: boolean, chapters: number) {
   return { title: "Nothing here is left to review.", text: "None of these chapters have changes in this view." };
 }
 
-function leftAfterWalk(view: Props["view"], chapters: number, loose: number) {
+function leftAfterWalk(view: Props["view"], chapters: number, loose: string) {
   const left = [
     ...(chapters ? [`${plural(chapters, "chapter")} ${view === "unstaged" ? "still unstaged" : "in this view"}`] : []),
-    ...(loose ? [`${plural(loose, "line")} in no chapter`] : []),
+    ...(loose ? [`${loose} in no chapter`] : []),
   ];
   return `${left.join(" and ")}.`;
 }
@@ -86,6 +86,8 @@ export function Brief({
   const toSkim = sum(open.filter((c) => skims[c]));
   const lineless = open.filter((c) => !size(c)).length;
   const loose = uncovered.reduce((n, f) => n + f.count, 0);
+  const looseFiles = uncovered.filter((f) => !f.count).length;
+  const looseText = [...(loose ? [plural(loose, "line")] : []), ...(looseFiles ? [plural(looseFiles, "file")] : [])].join(" and ");
   const warned = (c: number) => notes.chapters[c].warn || notes.chapters[c].ranges.some((r) => r.warn);
   const flagged = open.filter(warned).length;
   const walked = stepCount(stops.filter((s) => !skims[s.chapter])) || stepCount(stops);
@@ -93,10 +95,10 @@ export function Brief({
     ...(toRead ? [{ key: "is-read", text: `${lines(toRead)} to read` }] : []),
     ...(toSkim ? [{ key: "is-skim", text: `${count(toSkim)} to skim` }] : []),
     ...(lineless ? [{ key: "is-lineless", text: `${plural(lineless, "chapter")} with no lines to show` }] : []),
-    ...(loose ? [{ key: "is-uncovered", text: `${count(loose)} in no chapter` }] : []),
+    ...(uncovered.length ? [{ key: "is-uncovered", text: `${looseFiles ? looseText : count(loose)} in no chapter` }] : []),
     ...(flagged ? [{ key: "is-warn", text: `${plural(flagged, "chapter")} to check` }] : []),
   ];
-  const clear = open.length || loose ? null : clearCopy(view, doneChapters.size === notes.chapters.length, notes.chapters.length);
+  const clear = open.length || uncovered.length ? null : clearCopy(view, doneChapters.size === notes.chapters.length, notes.chapters.length);
   const facts = [
     plural(files.length, "file"),
     `+${count(files.reduce((n, f) => n + f.additions, 0))} −${count(files.reduce((n, f) => n + f.deletions, 0))}`,
@@ -134,7 +136,7 @@ export function Brief({
               <div className="brief-clear brief-end">
                 <div>
                   <b>End of the walkthrough.</b>
-                  <span>{leftAfterWalk(view, open.length, loose)}</span>
+                  <span>{leftAfterWalk(view, open.length, looseText)}</span>
                 </div>
                 <button onClick={onBack}>
                   Back to the last step
@@ -156,7 +158,9 @@ export function Brief({
                   <span>{c + 1}</span>
                 </button>
               ))}
-              {loose > 0 && <span className="strip-part is-uncovered" style={{ flexGrow: loose }} data-tip={`Not in any chapter\n${lines(loose)}`} />}
+              {uncovered.length > 0 && (
+                <span className="strip-part is-uncovered" style={{ flexGrow: Math.max(loose, 1) }} data-tip={`Not in any chapter\n${looseText}`} />
+              )}
             </div>
             <ul className="brief-tally">
               {tally.map(({ key, text }) => (
@@ -266,14 +270,14 @@ export function Brief({
           )}
           {uncovered.length > 0 && (
             <div className="brief-loose">
-              <h3>Lines not in any chapter</h3>
+              <h3>Not in any chapter</h3>
               <ul>
                 {uncovered.map(({ path, count }) => (
                   <li key={path}>
-                    <button data-tip={`${path}\nGoes to the first of ${count} changed ${count === 1 ? "line" : "lines"}`} onClick={() => onUncovered(path)}>
+                    <button data-tip={looseTip(path, count)} onClick={() => onUncovered(path)}>
                       <FileGlyph path={path} />
                       <span>{looseNames.get(path)}</span>
-                      <i>{count}</i>
+                      {count > 0 && <i>{count}</i>}
                     </button>
                   </li>
                 ))}

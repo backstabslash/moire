@@ -8,6 +8,7 @@ export interface Stop {
   range: number;
   step: number;
   joined: boolean;
+  warn: boolean;
 }
 
 // Only ranges this close share a stop: far ones would go unseen.
@@ -30,7 +31,7 @@ export function stopsOf(notes: AgentNotes): Stop[] {
       const joined = range > 0 && !r.note && sharesStop(lead, r);
       if (range > 0 && (r.note || (!narrated && !joined))) step++;
       if (!joined) lead = r;
-      return { chapter, range, step, joined };
+      return { chapter, range, step, joined, warn: !!r.warn };
     });
   });
 }
@@ -64,9 +65,15 @@ export function nextStop(stops: Stop[], from: number | null, delta: 1 | -1, pass
 
 const sameStep = (a: Stop, b: Stop) => a.chapter === b.chapter && a.step === b.step;
 
+const placeWarns = (stops: Stop[], lead: number) => {
+  let last = lead + 1;
+  while (stops[last]?.joined) last++;
+  return stops.slice(lead, last).some((s) => s.warn);
+};
+
 export function nextStep(stops: Stop[], from: number | null, delta: 1 | -1, passes: (stop: Stop, index: number) => boolean): number | null {
   const at = from === null ? null : stops[from];
-  const found = nextStop(stops, from, delta, (s, i) => passes(s, i) || (at !== null && sameStep(s, at)));
+  const found = nextStop(stops, from, delta, (s, i) => passes(s, i) || (at !== null && sameStep(s, at) && !(delta > 0 && placeWarns(stops, i))));
   if (found === null || delta > 0) return found;
   let first = found;
   for (let i = found - 1; i >= 0 && sameStep(stops[i], stops[found]); i--) if (!stops[i].joined && !passes(stops[i], i)) first = i;
@@ -228,6 +235,9 @@ export function hunkAt(hunks: Hunk[], { start, end }: Placed): { hunk: number; i
   const at = hunks.findIndex((h) => first(h) + Math.max(h.newLines, 1) > start);
   return at < 0 ? { hunk: hunks.length - 1, inside: false, below: true } : { hunk: at, inside: first(hunks[at]) <= end, below: false };
 }
+
+export const looseTip = (path: string, count: number) =>
+  count ? `${path}\nGoes to the first of ${count} changed ${count === 1 ? "line" : "lines"}` : `${path}\nNo lines to show`;
 
 // The shortest ending of each path that tells it from the others, so register.ts in ten folders reads apart.
 export function shortNames(paths: string[]): Map<string, string> {

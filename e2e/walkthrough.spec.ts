@@ -1,3 +1,5 @@
+import { chmodSync } from "node:fs";
+import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { fileChapters, gitIn, harness, lines, numbered, staged, writeNotes } from "./harness";
 
@@ -355,6 +357,54 @@ test("staging the last chapter leaves its other steps, and one Undo takes back a
   await page.keyboard.press("u");
   await expect.poll(() => staged(edge)).toEqual([]);
   await expect(page.locator(".brief")).toBeVisible();
+});
+
+test("a file with no lines to show stops the brief saying nothing's left, and opens from its list", async () => {
+  const edge = editedRepo(
+    { "a.ts": ["a();\n", "b();\n"], "run.sh": ["echo\n", "echo\n"] },
+    { summary: "Changes a call.", chapters: [{ title: "Only chapter", text: "Why.", ranges: ["a.ts"] }] },
+  );
+  chmodSync(join(edge, "run.sh"), 0o755);
+  ({ page } = await launchFresh(edge));
+  await expect(page.locator(".chapter-head")).toHaveCount(1);
+  await page.keyboard.press("i");
+  await expect(page.locator(".brief-tally li")).toHaveText(["2 lines to read", "1 file in no chapter"]);
+  await shots("brief-lineless");
+  await page.keyboard.press(".");
+  await page.keyboard.press("Shift+C");
+  await expect(page.locator(".brief-end")).toContainText("End of the walkthrough.1 file in no chapter.");
+  await page.locator(".brief-loose button", { hasText: "run.sh" }).click();
+  await expect(page.locator(".brief")).toHaveCount(0);
+  await expect(page.locator('.files .file[aria-current="true"]')).toHaveAttribute("data-path", "run.sh");
+});
+
+test("next stops on a warned place inside a step", async () => {
+  const { body } = numbered(400);
+  const spots = [20, 100, 200, 300];
+  const edge = editedRepo(
+    { "a.ts": [lines(body), lines(body.map((l, i) => (spots.includes(i) ? `${l} // changed` : l)))] },
+    {
+      chapters: [
+        {
+          title: "Spread out",
+          ranges: spots.map((n, i) => ({
+            path: "a.ts",
+            lines: [n + 1, n + 1],
+            ...(i ? {} : { note: "One short sentence." }),
+            ...(i === 2 ? { warn: true } : {}),
+          })),
+        },
+      ],
+      format: 2,
+    },
+  );
+  ({ page } = await launchFresh(edge));
+  await expect(page.locator(".chapter-head")).toHaveCount(1);
+  await page.keyboard.press(".");
+  await expect(page.locator(".caption-place")).toContainText("place 1 of 4");
+  await page.keyboard.press(".");
+  await expect(page.locator(".caption-place")).toContainText("place 3 of 4");
+  await expect(page.locator(".caption .note-warn")).toHaveText("Check this");
 });
 
 test("a chapter ending just above a deletion stays open with its warning, and a reindent inside a string opened above its hunk isn't whitespace", async () => {

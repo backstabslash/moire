@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { uncovered } from "../shared/chapters";
@@ -634,6 +634,27 @@ describe("readRangeNotes", () => {
     const { notes, placed } = await readRangeNotes(r.root, mode);
     return uncovered((await diff(r.root, mode)).files, notes ?? { chapters: [] }, placed);
   };
+
+  it("reports binary, chmod-only and oversized files, but not one hidden as whitespace", async () => {
+    const r = makeRepo();
+    r.write("logo.bin", Buffer.from([0, 1, 2]));
+    r.write("run.sh", "echo\n");
+    r.write("big.txt", "x\n");
+    r.write("spaces.ts", "a();\n");
+    r.commit("base");
+    r.write("logo.bin", Buffer.from([0, 1, 3]));
+    chmodSync(join(r.root, "run.sh"), 0o755);
+    r.write("big.txt", "x".repeat(2 * 1024 * 1024 + 10));
+    r.write("spaces.ts", "  a();\n");
+    const paths = async (ignoreWhitespace: boolean) => {
+      const { files } = await diff(r.root, { kind: "unstaged" }, [], ignoreWhitespace);
+      return uncovered(files, { chapters: [] })
+        .map((u) => u.path)
+        .sort();
+    };
+    expect(await paths(false)).toEqual(["big.txt", "logo.bin", "run.sh", "spaces.ts"]);
+    expect(await paths(true)).toEqual(["big.txt", "logo.bin", "run.sh"]);
+  });
 
   it.each([
     ["in the middle of a file", numbered(30).replace("line 10\n", "")],
