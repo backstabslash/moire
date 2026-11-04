@@ -29,7 +29,7 @@ import { clipboardFiles, dragOut, pickFiles } from "./filesin";
 import { editKeys, loadKeys } from "./keys";
 import { buildMenu, reportIssue } from "./menu";
 import { readNotes, readRangeNotes } from "./notes";
-import { type LaunchRequest, usableCwd } from "./launch";
+import { type LaunchRequest, usableCwd, windowsStartDirs } from "./launch";
 import { openWithDefault, revealFile } from "./open";
 import { allowPreviews } from "./preview";
 import { act, actAll, actGroup, adoptLegacyUndo, commit, dropDiscarded, saveDiscarded, undo } from "./stage";
@@ -58,7 +58,8 @@ export async function launchRepo({ path, compare, cwd }: LaunchRequest, fallback
   if (missing) throw new Error(missing);
   if (path) return openRepo(path);
   if (compare) return openRepo((!app.isPackaged && process.env.MOIRE_REPO) || cwd);
-  const candidates = [app.isPackaged ? usableCwd(cwd) : process.env.MOIRE_REPO, fallback ? loadState().lastRepo : undefined];
+  const windowsDirs = process.platform === "win32" ? windowsStartDirs(app.getPath("exe"), process.env) : [];
+  const candidates = [app.isPackaged ? usableCwd(cwd, undefined, windowsDirs) : process.env.MOIRE_REPO, fallback ? loadState().lastRepo : undefined];
   let folder: string | null = null;
   for (const candidate of candidates) {
     if (!candidate) continue;

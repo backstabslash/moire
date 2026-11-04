@@ -4,7 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clashDiff, copyIn, fileUris, planCopy } from "./copyin";
 import { undo } from "./stage";
-import { makeRepo, tempDir } from "./test-repo";
+import { makeRepo, tempDir, WIN } from "./test-repo";
 
 const hook = vi.hoisted(() => ({ beforeCopy: null as ((dest: string) => void) | null }));
 vi.mock("node:fs/promises", async (original) => {
@@ -52,7 +52,7 @@ describe("copying files in", () => {
     expect(plan.ignored).toBe(false);
     expect(await copyIn(r.root, plan, {})).toEqual({ text: "Copied 2 files into src/.", copied: 2 });
     expect(r.read("src/b.ts")).toBe("export const b = 2;\n");
-    expect(lstatSync(join(r.root, "src/run.sh")).mode & 0o111).toBeTruthy();
+    if (!WIN) expect(lstatSync(join(r.root, "src/run.sh")).mode & 0o111).toBeTruthy();
     expect(readFileSync(src("b.ts"), "utf8")).toBe("export const b = 2;\n");
 
     expect(await undo(r.root)).toMatchObject({ label: "Copied 2 files into src/" });
@@ -60,7 +60,7 @@ describe("copying files in", () => {
     expect(existsSync(join(r.root, "src/run.sh"))).toBe(false);
   });
 
-  it("copies a folder recursively, keeps symlinks as links and skips nested .git folders", async () => {
+  it.skipIf(WIN)("copies a folder recursively, keeps symlinks as links and skips nested .git folders", async () => {
     const r = setup();
     const src = outside({ "kit/one.txt": "1\n", "kit/deep/two.txt": "2\n", "kit/.git/HEAD": "ref\n", "kit/deep/.git/config": "x\n" });
     symlinkSync("one.txt", src("kit/link"));
@@ -147,7 +147,7 @@ describe("copying files in", () => {
 });
 
 describe("copying safely", () => {
-  it("refuses an item that would land inside another, so nothing is written through a symlink", async () => {
+  it.skipIf(WIN)("refuses an item that would land inside another, so nothing is written through a symlink", async () => {
     const r = setup();
     const away = outside({});
     const src = outside({ "s2/x/f": "f\n" });
@@ -157,7 +157,7 @@ describe("copying safely", () => {
     await expect(planCopy(r.root, [src("s2/x"), src("s1/x")], "")).rejects.toThrow("Two of the items are named x");
   });
 
-  it("won't write through a folder that became a symlink mid-copy, and rolls back", async () => {
+  it.skipIf(WIN)("won't write through a folder that became a symlink mid-copy, and rolls back", async () => {
     const r = setup();
     const away = outside({});
     const src = outside({ "a.txt": "a\n", "kit/f.txt": "f\n" });
@@ -183,7 +183,7 @@ describe("copying safely", () => {
     await expect(clashDiff(r.root, src("kit/x"), ".Git/config")).rejects.toThrow("Can't copy into .Git/config");
   });
 
-  it("stops when a file appears mid-copy, leaving it alone and undoing the rest", async () => {
+  it.skipIf(WIN)("stops when a file appears mid-copy, leaving it alone and undoing the rest", async () => {
     const r = setup();
     const src = outside({ "a.txt": "a\n", "b.txt": "b\n" });
     symlinkSync("a.txt", src("link"));
@@ -218,7 +218,7 @@ describe("copying safely", () => {
     expect(existsSync(join(r.root, "src/b.ts"))).toBe(false);
   });
 
-  it("says which files it couldn't put back, and keeps their backups for undo", async () => {
+  it.skipIf(WIN)("says which files it couldn't put back, and keeps their backups for undo", async () => {
     const r = setup();
     const src = outside({ "a.ts": "replacement\n", "b.ts": "b\n" });
     const plan = await planCopy(r.root, [src("a.ts"), src("b.ts")], "src/");
@@ -256,7 +256,7 @@ describe("clashDiff", () => {
 });
 
 describe("fileUris", () => {
-  it("reads uri lists and GNOME's copied files", () => {
+  it.skipIf(WIN)("reads uri lists and GNOME's copied files", () => {
     expect(fileUris("file:///tmp/a%20b.txt\r\n# comment\r\nfile:///tmp/c\r\n")).toEqual(["/tmp/a b.txt", "/tmp/c"]);
     expect(fileUris("cut\nfile:///home/x/f.png")).toEqual(["/home/x/f.png"]);
     expect(fileUris("https://example.com\nplain text")).toEqual([]);

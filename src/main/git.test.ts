@@ -28,7 +28,7 @@ import {
   upstream,
   worktrees,
 } from "./git";
-import { makeRepo, seed, tempDir } from "./test-repo";
+import { makeRepo, seed, tempDir, WIN } from "./test-repo";
 
 const paths = (files: FileDiff[]) => files.map((f) => `${f.status}:${f.path}`);
 const byPath = (files: FileDiff[], path: string) => files.find((f) => f.path === path)!;
@@ -276,7 +276,7 @@ describe("unborn HEAD", () => {
   r.write("blob.bin", Buffer.from([1, 0, 2]));
 
   it("reports repo info without a head", async () => {
-    expect(await repoInfo(join(r.root))).toEqual({ root: r.root, name: r.root.split("/").pop(), branch: "main", head: null });
+    expect(await repoInfo(join(r.root))).toEqual({ root: r.root, name: basename(r.root), branch: "main", head: null });
     expect(await commits(r.root, 10)).toEqual([]);
     expect((await branches(r.root)).branches).toEqual([]);
   });
@@ -371,7 +371,7 @@ describe("branches mode", () => {
     expect((await repoInfo(r.root)).state).toBe("merging");
     unlinkSync(join(r.root, ".git", "MERGE_HEAD"));
     const outside = tempDir("moire-norepo-");
-    await expect(repoInfo(join(outside, "gone"))).rejects.toThrow(`${outside}/gone doesn't exist`);
+    await expect(repoInfo(join(outside, "gone"))).rejects.toThrow(`${join(outside, "gone")} doesn't exist`);
   });
 });
 
@@ -578,7 +578,7 @@ describe("size limit", () => {
 });
 
 describe("file modes", () => {
-  it("reports executable bits and symlinks, tracked and untracked", async () => {
+  it.skipIf(WIN)("reports executable bits and symlinks, tracked and untracked", async () => {
     const r = makeRepo();
     r.write("run.sh", "echo\n");
     r.write("plain.txt", "a\n");
@@ -773,6 +773,7 @@ describe("file tree", () => {
     expect(await readBlob(r.root, side, "etc/hosts", 1024)).toEqual(Buffer.from("inside\n"));
     expect(await readBlob(r.root, side, `../${basename(outside)}/secret`, 1024)).toBeNull();
     expect(await readBlob(r.root, side, `src/../../${basename(outside)}/secret`, 1024)).toBeNull();
+    expect(await readBlob(r.root, side, `src\\..\\..\\${basename(outside)}\\secret`, 1024)).toBeNull();
     expect(await readBlob(r.root, side, "/etc/hosts", 1024)).toBeNull();
     expect(await readBlob(r.root, side, "", 1024)).toBeNull();
   });

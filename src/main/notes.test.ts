@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { uncovered } from "../shared/chapters";
 import { diff } from "./git";
 import { notesPath, parseNotes, readNotes, readRangeNotes, screenshotPath } from "./notes";
-import { makeRepo, seed } from "./test-repo";
+import { makeRepo, seed, WIN } from "./test-repo";
 
 describe("parseNotes", () => {
   it("keeps chapters in order and normalizes their ranges", () => {
@@ -123,7 +123,7 @@ describe("readNotes", () => {
     const path = await notesPath(r.root);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify({ chapters: [{ title: "Hi", ranges: ["a.ts"] }] }));
-    expect(path).toBe(`${r.root}/.git/moire/notes.json`);
+    expect(path).toBe(join(r.root, ".git", "moire", "notes.json"));
     expect((await readNotes(r.root)).notes?.chapters).toHaveLength(1);
   });
 
@@ -149,7 +149,7 @@ describe("readNotes", () => {
     r.git("checkout", "c.ts");
     expect(await working()).toEqual(["B", "C"]);
     const file = await readNotes(r.root, "HEAD");
-    expect(file.path).toBe(`${r.root}/.git/moire/commits/${r.git("rev-parse", "HEAD")}.json`);
+    expect(file.path).toBe(join(r.root, ".git", "moire", "commits", `${r.git("rev-parse", "HEAD")}.json`));
     expect(file.notes).toEqual({ summary: "S", chapters: [{ title: "A", text: "", ranges: [{ path: "a.ts", lines: [1, 1] }] }] });
 
     r.git("commit", "-qam", "b");
@@ -507,8 +507,12 @@ describe("readNotes", () => {
   it("places ranges in the work tree", async () => {
     const { r, write } = await setup(["a.ts"]);
     r.write("a.ts", "new\none\nadded\n");
-    write({ chapters: [{ title: "A", ranges: [{ path: "a.ts", lines: [2, 2], code: "added" }, "a.ts", { path: "../x", lines: [1, 1] }] }] });
-    expect((await readNotes(r.root)).placed).toEqual([[{ start: 3, end: 3 }, "all", { start: 1, end: 1 }]]);
+    write({
+      chapters: [
+        { title: "A", ranges: [{ path: "a.ts", lines: [2, 2], code: "added" }, "a.ts", { path: "../x", lines: [1, 1] }, { path: "..\\x", lines: [1, 1] }] },
+      ],
+    });
+    expect((await readNotes(r.root)).placed).toEqual([[{ start: 3, end: 3 }, "all", { start: 1, end: 1 }, { start: 1, end: 1 }]]);
   });
 });
 
@@ -635,7 +639,7 @@ describe("readRangeNotes", () => {
     return uncovered((await diff(r.root, mode)).files, notes ?? { chapters: [] }, placed);
   };
 
-  it("reports binary, chmod-only and oversized files, but not one hidden as whitespace", async () => {
+  it.skipIf(WIN)("reports binary, chmod-only and oversized files, but not one hidden as whitespace", async () => {
     const r = makeRepo();
     r.write("logo.bin", Buffer.from([0, 1, 2]));
     r.write("run.sh", "echo\n");

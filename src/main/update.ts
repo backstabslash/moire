@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { app, BrowserWindow, dialog, type MessageBoxOptions, net, Notification, shell } from "electron";
 import { AppImageUpdater } from "electron-updater";
 import type { UpdateNotice } from "../shared/types";
@@ -28,7 +28,7 @@ function message(text: string, buttons = ["OK"]): Promise<number> {
 }
 
 function installedByNpx(): boolean {
-  return real(app.getPath("exe")).startsWith(real(npxRoot(process.platform, process.env, homedir())) + "/");
+  return real(app.getPath("exe")).startsWith(real(npxRoot(process.platform, process.env, homedir())) + sep);
 }
 
 function packageType(): string | undefined {
@@ -114,14 +114,22 @@ async function downloadNpx(release: Release, version: string) {
       platform: process.platform,
       arch: process.arch,
       root,
-      runningApp: mac ? root : dirname(app.getPath("exe")),
+      runningApp: mac ? root : dirname(real(app.getPath("exe"))),
       fetch: net.fetch,
       onSmallFailed: (e) => log(`small update to ${version} failed, downloading all of it: ${e.message}`),
     });
     if (moveIn) staged = { version, moveIn };
   }
-  const exe = mac ? join(root, "Contents", "MacOS", "moire") : join(root, "current", "moire");
+  const exe = mac ? join(root, "Contents", "MacOS", "moire") : join(root, "current", process.platform === "win32" ? "moire.exe" : "moire");
   announce({ version }, (repo) => relaunch(exe, repo));
+}
+
+// A taskbar pin of the running window copies the shortcut with this window's ID, so it opens through current too.
+function pointShortcut(target: string) {
+  const link = join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "Moire.lnk");
+  // Electron's default ID; without it on a shortcut, the first notification adds a second, lowercase "moire" entry.
+  const appUserModelId = "electron.app.moire";
+  if (existsSync(link) && !shell.writeShortcutLink(link, "update", { target, appUserModelId })) log(`couldn't point ${link} at ${target}`);
 }
 
 function appImageUpdater(): AppImageUpdater {
@@ -204,6 +212,7 @@ export function startUpdates() {
   if (!app.isPackaged) return;
   app.on("will-quit", moveStagedIn);
   if (process.platform === "darwin" && installedByNpx()) refreshMacShim(npxRoot(process.platform, process.env, homedir()), homedir());
+  if (process.platform === "win32" && installedByNpx()) pointShortcut(join(npxRoot(process.platform, process.env, homedir()), "current", "moire.exe"));
   checkForUpdates();
   setInterval(() => checkForUpdates(), CHECK_EVERY);
 }

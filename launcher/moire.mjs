@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { resolve, sep } from "node:path";
 import {
   allowNoSandbox,
   install,
@@ -14,10 +14,11 @@ import {
   sandboxBlocked,
   uninstall,
   usage,
+  windowsPaths,
 } from "./install.mjs";
 
 const opts = parseArgs(process.argv.slice(2));
-const tilde = (/** @type {string} */ path) => (path.startsWith(homedir() + "/") ? `~${path.slice(homedir().length)}` : path);
+const tilde = (/** @type {string} */ path) => (path.startsWith(homedir() + sep) ? `~${path.slice(homedir().length)}` : path);
 
 if (opts.unknown) {
   console.error(`Unknown option ${opts.unknown}\n${usage}`);
@@ -38,8 +39,8 @@ if (opts.help) {
   );
   process.exit(0);
 }
-if (process.platform !== "linux" && process.platform !== "darwin") {
-  console.error("moire runs on Linux and macOS.");
+if (process.platform !== "linux" && process.platform !== "darwin" && process.platform !== "win32") {
+  console.error("moire runs on Linux, macOS and Windows.");
   process.exit(1);
 }
 if (opts.version) {
@@ -49,7 +50,14 @@ if (opts.version) {
   process.exit(0);
 }
 if (opts.uninstall) {
-  const { removed, data } = uninstall();
+  let result;
+  try {
+    result = uninstall();
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(1);
+  }
+  const { removed, data } = result;
   if (!removed.length) console.log("moire isn't installed in your home folder, so there's nothing to remove.");
   else console.log(`Removed ${removed.map(tilde).join(", ")}.\nYour settings stay in ${tilde(data)}; delete that folder to remove them too.`);
   process.exit(0);
@@ -77,6 +85,12 @@ try {
     await install(release);
     if (process.platform === "linux") {
       console.error(`Installed moire ${latest}. It's in your app menu, and ~/.local/bin/moire opens it from a terminal.`);
+    } else if (process.platform === "win32") {
+      const { bin } = windowsPaths(process.env, homedir());
+      const onPath = (process.env.PATH ?? "").toLowerCase().split(";").includes(bin.toLowerCase());
+      console.error(
+        `Installed moire ${latest}. It's in your Start menu${onPath ? ", and `moire` opens it from a terminal." : `; add ${bin} to your PATH to open it with \`moire\`.`}`,
+      );
     } else {
       console.error(`Installed moire ${latest} in ~/Applications, and ~/.local/bin/moire opens it from a terminal.`);
     }

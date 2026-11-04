@@ -117,7 +117,7 @@ function detach(): boolean {
 function start(request: LaunchRequest) {
   process.on("uncaughtExceptionMonitor", (e, origin) => log(`${origin}: ${e.stack ?? e.message}`));
   app.on("render-process-gone", (_e, _contents, { reason }) => reason !== "clean-exit" && log(`window crashed: ${reason}`));
-  if (app.isPackaged) resolveShellPath();
+  if (app.isPackaged && process.platform !== "win32") resolveShellPath();
   registerIpc();
   registerZoomIpc();
   registerPreviewScheme();

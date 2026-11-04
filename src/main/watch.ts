@@ -35,9 +35,10 @@ export class RepoWatcher {
   async start(): Promise<void> {
     const [gitDir, commonDir] = await Promise.all([git(this.root, ["rev-parse", "--absolute-git-dir"]), git(this.root, ["rev-parse", "--git-common-dir"])]);
     const common = resolve(this.root, commonDir.trim());
-    this.gitDirs = new Set([gitDir.trim(), common, join(common, "refs"), join(common, "refs", "heads")]);
+    const own = resolve(gitDir.trim());
+    this.gitDirs = new Set([own, common, join(common, "refs"), join(common, "refs", "heads")]);
     this.remotes = join(common, "refs", "remotes");
-    this.notes = join(gitDir.trim(), "moire");
+    this.notes = join(own, "moire");
     await this.sync();
     if (RECURSIVE || this.folder) return;
     const empty = await git(this.root, ["ls-files", "--others", "--exclude-standard", "--directory", "-z"]);

@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, win32 } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -31,7 +31,7 @@ export const usage = "usage: npx @backstabslash/moire [path] [main..feature | HE
 export function parseArgs(args, exists = existsSync) {
   const words = args.filter((a) => !a.startsWith("-"));
   const pr = words[0] === "pr" && /^\d+$/.test(words[1] ?? "");
-  const hasPath = words.length > 0 && !pr && (/^\.{0,2}\/|^\.{1,2}$/.test(words[0]) || exists(words[0]));
+  const hasPath = words.length > 0 && !pr && (/^\.{0,2}[\\/]|^[A-Za-z]:[\\/]|^\.{1,2}$/.test(words[0]) || exists(words[0]));
   const known = ["--help", "-h", "--version", "-v", "--uninstall", "--no-sandbox"];
   return {
     help: args.includes("--help") || args.includes("-h"),
@@ -83,6 +83,7 @@ export function assetName(platform, arch, version) {
   const suffix = arch === "x64" ? "" : `-${arch}`;
   if (platform === "linux") return `moire-${version}${suffix}.tar.gz`;
   if (platform === "darwin") return `moire-${version}${suffix}-mac.zip`;
+  if (platform === "win32") return `moire-${version}${suffix}-win.zip`;
   return undefined;
 }
 
@@ -92,17 +93,37 @@ export function linuxPaths(env, home) {
   return { root: join(data, "moire"), desktop: join(data, "applications", "moire.desktop"), bin: join(home, ".local", "bin", "moire") };
 }
 
+/** @param {NodeJS.ProcessEnv} env @param {string} home */
+export function windowsPaths(env, home) {
+  const roaming = env.APPDATA || win32.join(home, "AppData", "Roaming");
+  const local = env.LOCALAPPDATA || win32.join(home, "AppData", "Local");
+  // On every user's PATH by default, so the command works even in terminals that were already open.
+  const bin = win32.join(local, "Microsoft", "WindowsApps");
+  return {
+    root: win32.join(local, "moire"),
+    shortcut: win32.join(roaming, "Microsoft", "Windows", "Start Menu", "Programs", "Moire.lnk"),
+    data: win32.join(roaming, "moire"),
+    bin,
+    // cmd and PowerShell run moire.cmd; Git Bash only finds the extensionless one.
+    bins: [win32.join(bin, "moire.cmd"), win32.join(bin, "moire")],
+  };
+}
+
 const macApp = () => join(homedir(), "Applications", "moire.app");
 
-/** @param {string} platform @param {NodeJS.ProcessEnv} env @param {string} home */
+/** @param {string} platform @param {NodeJS.ProcessEnv} env @param {string} home @returns {{ remove: string[], bins: string[], owner: string, data: string }} */
 export function installedPaths(platform, env, home) {
-  const bin = join(home, ".local", "bin", "moire");
+  if (platform === "win32") {
+    const { root, shortcut, data, bins } = windowsPaths(env, home);
+    return { remove: [root, shortcut], bins, owner: root, data };
+  }
+  const bins = [join(home, ".local", "bin", "moire")];
   if (platform === "darwin") {
     const app = join(home, "Applications", "moire.app");
-    return { remove: [app, join(home, "Applications", ".moire-previous.app")], bin, owner: app, data: join(home, "Library", "Application Support", "moire") };
+    return { remove: [app, join(home, "Applications", ".moire-previous.app")], bins, owner: app, data: join(home, "Library", "Application Support", "moire") };
   }
   const { root, desktop } = linuxPaths(env, home);
-  return { remove: [root, desktop], bin, owner: root, data: join(env.XDG_CONFIG_HOME || join(home, ".config"), "moire") };
+  return { remove: [root, desktop], bins, owner: root, data: join(env.XDG_CONFIG_HOME || join(home, ".config"), "moire") };
 }
 
 /** @param {string} path */
@@ -129,6 +150,12 @@ export function binScript(root, noSandbox) {
   return `#!/bin/sh\nexec ${quote(join(root, "current", "moire"))}${noSandbox ? " --no-sandbox" : ""} "$@"\n`;
 }
 
+/** @param {string} root */
+export function windowsShims(root) {
+  const exe = win32.join(root, "current", "moire.exe");
+  return [`@echo off\r\nstart "" "${exe.replaceAll("%", "%%")}" %*\r\n`, `#!/bin/sh\n${quote(exe.replaceAll("\\", "/"))} "$@" >/dev/null 2>&1 &\n`];
+}
+
 /** @param {string} app */
 export function macShim(app) {
   return [
@@ -143,9 +170,13 @@ export function macShim(app) {
   ].join("\n");
 }
 
+// The Git Bash shim names the install folder with forward slashes.
+/** @param {string} bin @param {string} owner */
+const ownedBy = (bin, owner) => [owner, owner.replaceAll("\\", "/")].some((o) => readFileSync(bin, "utf8").includes(o));
+
 /** @param {string} bin @param {string} owner @param {string} script */
 function writeBin(bin, owner, script) {
-  if (existsSync(bin) && !readFileSync(bin, "utf8").includes(owner)) return;
+  if (existsSync(bin) && !ownedBy(bin, owner)) return;
   mkdirSync(dirname(bin), { recursive: true });
   writeFileSync(bin, script, { mode: 0o755 });
 }
@@ -179,7 +210,8 @@ export function installedVersion() {
     if (process.platform === "darwin") {
       return /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(readFileSync(join(macApp(), "Contents", "Info.plist"), "utf8"))?.[1];
     }
-    return readlinkSync(join(linuxPaths(process.env, homedir()).root, "current"));
+    const { root } = process.platform === "win32" ? windowsPaths(process.env, homedir()) : linuxPaths(process.env, homedir());
+    return basename(readlinkSync(join(root, "current")));
   } catch {
     return undefined;
   }
@@ -230,7 +262,60 @@ export async function install(release) {
   if (!asset) throw new Error(`moire ${version} has no build for ${process.platform} ${process.arch}`);
   const label = `Downloading moire ${version} (${Math.round(asset.size / 1e6)} MB)`;
   if (process.platform === "darwin") await installMac(asset, label);
+  else if (process.platform === "win32") await installWindows(asset, version, label);
   else await installLinux(asset, version, label);
+}
+
+/** @param {string} text */
+const psQuote = (text) => `'${text.replaceAll("'", "''")}'`;
+
+/** @param {string} link @param {string} target */
+export function shortcutScript(link, target) {
+  return `$s = (New-Object -ComObject WScript.Shell).CreateShortcut(${psQuote(link)}); $s.TargetPath = ${psQuote(target)}; $s.Save()`;
+}
+
+/** @param {Asset} asset @param {string} version @param {string} label */
+async function installWindows(asset, version, label) {
+  const { root, shortcut, bins } = windowsPaths(process.env, homedir());
+  const previous = installedVersion();
+  mkdirSync(root, { recursive: true });
+  clearUnfinished(root, ".tmp-");
+  const tmp = mkdtempSync(join(root, ".tmp-"));
+  try {
+    const zip = join(tmp, asset.name);
+    await download(asset, zip, label);
+    const app = join(tmp, "app");
+    mkdirSync(app);
+    // Windows' own tar reads zips; one from Git for Windows earlier on PATH can't.
+    execFileSync(join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-xf", zip, "-C", app], { windowsHide: true });
+    rmSync(join(root, version), { recursive: true, force: true });
+    renameSync(app, join(root, version));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+  // A junction, since symlinks need Developer Mode. Shortcuts and taskbar pins open moire through it, so updates don't break them.
+  const next = join(root, ".current");
+  rmSync(next, { force: true });
+  symlinkSync(join(root, version), next, "junction");
+  rmSync(join(root, "current"), { force: true });
+  renameSync(next, join(root, "current"));
+  for (const old of readdirSync(root, { withFileTypes: true })) {
+    const name = old.name;
+    if (!old.isDirectory() || name.startsWith(".") || name === version || name === previous) continue;
+    // Windows deletes all but the files in use, so a copy that's still open is moved first, which Windows refuses.
+    const doomed = join(root, `.tmp-old-${name}`);
+    try {
+      renameSync(join(root, name), doomed);
+    } catch {
+      continue;
+    }
+    rmSync(doomed, { recursive: true, force: true });
+  }
+  mkdirSync(dirname(shortcut), { recursive: true });
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", shortcutScript(shortcut, join(root, "current", "moire.exe"))], {
+    windowsHide: true,
+  });
+  windowsShims(root).forEach((script, i) => writeBin(bins[i], root, script));
 }
 
 /** @param {Asset} asset @param {string} label */
@@ -289,16 +374,28 @@ async function installLinux(asset, version, label) {
 }
 
 export function uninstall() {
-  const { remove, bin, owner, data } = installedPaths(process.platform, process.env, homedir());
+  const { remove, bins, owner, data } = installedPaths(process.platform, process.env, homedir());
   const removed = remove.filter((p) => existsSync(p));
-  if (existsSync(bin) && readFileSync(bin, "utf8").includes(owner)) removed.push(bin);
-  for (const p of removed) rmSync(p, { recursive: true, force: true });
+  for (const bin of bins) if (existsSync(bin) && ownedBy(bin, owner)) removed.push(bin);
+  let doomed = owner;
+  if (process.platform === "win32" && existsSync(owner)) {
+    // Windows refuses to move a folder with a file in use, so a running moire is found before anything is deleted.
+    doomed = `${owner}.removing`;
+    rmSync(doomed, { recursive: true, force: true });
+    try {
+      renameSync(owner, doomed);
+    } catch {
+      throw new Error("moire is still running. Close it, then try again.");
+    }
+  }
+  for (const p of removed) rmSync(p === owner ? doomed : p, { recursive: true, force: true });
   return { removed, data };
 }
 
 /** @param {string} platform @param {string} home @param {NodeJS.ProcessEnv} env @param {boolean} noSandbox @param {string} repo @param {string[]} [compare] */
 export function launchCommand(platform, home, env, noSandbox, repo, compare = []) {
   if (platform === "darwin") return { cmd: "open", args: ["-na", join(home, "Applications", "moire.app"), "--args", repo, ...compare] };
+  if (platform === "win32") return { cmd: win32.join(windowsPaths(env, home).root, "current", "moire.exe"), args: [repo, ...compare] };
   return { cmd: join(linuxPaths(env, home).root, "current", "moire"), args: [...(noSandbox ? ["--no-sandbox"] : []), repo, ...compare] };
 }
 

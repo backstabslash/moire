@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { FileDiff, LineRef, StageRequest } from "../shared/types";
 import { diff, UNTRACKED_READ_LIMIT } from "./git";
 import { act, actAll, actGroup, adoptLegacyUndo, commit, dropDiscarded, saveDiscarded, serial, setWorktree, undo } from "./stage";
-import { dirs, type Files, makeRepo, type Repo, seed } from "./test-repo";
+import { dirs, type Files, makeRepo, type Repo, seed, WIN } from "./test-repo";
 
 function setup(committed?: Files, edits?: Files) {
   const r = committed ? seed(committed, edits) : makeRepo();
@@ -76,7 +76,7 @@ describe("staging piece by piece", () => {
 });
 
 describe("staging special files", () => {
-  it("stages part of an untracked file and keeps its exec bit", async () => {
+  it.skipIf(WIN)("stages part of an untracked file and keeps its exec bit", async () => {
     const r = setup({ "keep.txt": "keep\n" });
     writeFileSync(join(r.root, "new.sh"), "one\ntwo\nthree", { mode: 0o755 });
     const f = (await r.file("unstaged", "new.sh"))!;
@@ -276,7 +276,7 @@ describe("undo", () => {
     expect(r.git("diff", "--cached", "--name-only").trim()).toBe("first.txt");
     expect(await undo(r.root)).toMatchObject({ label: "Staged first.txt" });
     expect(r.git("diff", "--cached", "--name-only").trim()).toBe("");
-  }, 60_000);
+  }, 180_000);
 
   it("undoes a given entry only while it's the newest", async () => {
     const r = setup({ "a.txt": "a\n", "b.txt": "a\n" }, { "a.txt": "b\n", "b.txt": "b\n" });
@@ -304,7 +304,7 @@ describe("undo", () => {
     expect(await undo(r.root)).toBeNull();
   });
 
-  it("undoes staging a file with a tab in its name", async () => {
+  it.skipIf(WIN)("undoes staging a file with a tab in its name", async () => {
     const r = setup({ "a\tb.txt": "a\n" }, { "a\tb.txt": "b\n" });
     await r.run("unstaged", "stage", (await r.file("unstaged", "a\tb.txt"))!, null);
     expect(await undo(r.root)).toMatchObject({ label: "Staged a\tb.txt" });
@@ -664,7 +664,7 @@ describe("merge conflicts", () => {
 });
 
 describe("links and type changes", () => {
-  it("won't stage or discard part of a file that became a symlink", async () => {
+  it.skipIf(WIN)("won't stage or discard part of a file that became a symlink", async () => {
     const r = setup({ "a.txt": "a\nb\n" });
     rmSync(join(r.root, "a.txt"));
     symlinkSync("b.txt", join(r.root, "a.txt"));
@@ -676,7 +676,7 @@ describe("links and type changes", () => {
     expect(readlinkSync(join(r.root, "a.txt"))).toBe("b.txt");
   });
 
-  it("won't stage or discard part of a symlink's new target", async () => {
+  it.skipIf(WIN)("won't stage or discard part of a symlink's new target", async () => {
     const r = setup();
     symlinkSync("one", join(r.root, "link"));
     r.commit("init");
@@ -692,18 +692,47 @@ describe("links and type changes", () => {
 });
 
 describe("files git converts", () => {
-  it("refuses to discard single lines of a file with converted line endings, but discards it whole", async () => {
+  it("discards single lines of a file git stores with LF and checks out with CRLF, keeping its CRLF", async () => {
     const r = setup();
     r.git("config", "core.autocrlf", "true");
     r.write("a.txt", "one\r\ntwo\r\nthree\r\n");
     r.commit("init");
     r.write("a.txt", "one\r\n2\r\nthree\r\nfour\r\n");
     const f = (await r.file("unstaged", "a.txt"))!;
-    await expect(r.run("unstaged", "discard", f, [allLines(f)[0]])).rejects.toThrow(
-      "git converts a.txt (line endings or a filter), so it can only be discarded whole",
-    );
-    expect(await r.run("unstaged", "discard", f, null)).toBe("Discarded a.txt");
-    expect(r.git("status", "--porcelain")).toBe("");
+    const four = allLines(f).find((l) => f.hunks[l.hunk].lines[l.line].text === "four")!;
+    expect(await r.run("unstaged", "discard", f, [four])).toBe("Discarded 1 line in a.txt");
+    expect(readFileSync(join(r.root, "a.txt"), "utf8")).toBe("one\r\n2\r\nthree\r\n");
+    expect(await undo(r.root)).toMatchObject({ label: "Discarded 1 line in a.txt" });
+    expect(readFileSync(join(r.root, "a.txt"), "utf8")).toBe("one\r\n2\r\nthree\r\nfour\r\n");
+  });
+
+  it("refuses single lines of a file with mixed endings, or committed with CRLF before autocrlf, but discards it whole", async () => {
+    for (const autocrlfFirst of [true, false]) {
+      const r = setup();
+      if (autocrlfFirst) r.git("config", "core.autocrlf", "true");
+      r.write("a.txt", "one\r\ntwo\r\nthree\r\n");
+      r.commit("init");
+      r.git("config", "core.autocrlf", "true");
+      r.write("a.txt", autocrlfFirst ? "one\r\n2\nthree\r\nfour\r\n" : "one\r\n2\r\nthree\r\nfour\r\n");
+      const f = (await r.file("unstaged", "a.txt"))!;
+      await expect(r.run("unstaged", "discard", f, [allLines(f)[0]])).rejects.toThrow(
+        "git converts a.txt (line endings or a filter), so it can only be discarded whole",
+      );
+      expect(await r.run("unstaged", "discard", f, null)).toBe("Discarded a.txt");
+      expect(r.git("status", "--porcelain")).toBe("");
+    }
+  });
+
+  it("stages part of a new CRLF file with LF, as git add would", async () => {
+    const r = setup({ "keep.txt": "keep\n" });
+    r.git("config", "core.autocrlf", "true");
+    r.write("new.txt", "one\r\ntwo\r\nthree\r\n");
+    const f = (await r.file("unstaged", "new.txt"))!;
+    await r.run("unstaged", "stage", f, allLines(f).slice(0, 2));
+    expect(r.git("cat-file", "blob", ":new.txt")).toBe("one\ntwo");
+    const rest = (await r.file("unstaged", "new.txt"))!;
+    await r.run("unstaged", "stage", rest, allLines(rest));
+    expect(indexBlob(r, "new.txt")).toBe(worktreeBlob(r, "new.txt"));
   });
 
   it("still discards single lines when git converts nothing", async () => {
@@ -758,7 +787,7 @@ describe("serial", () => {
 });
 
 describe("setWorktree", () => {
-  it("streams a blob into place with its mode, writes symlinks, and removes files", async () => {
+  it.skipIf(WIN)("streams a blob into place with its mode, writes symlinks, and removes files", async () => {
     const r = setup();
     const big = Buffer.alloc(8 * 1024 * 1024, "x");
     const sha = execFileSync("git", ["-C", r.root, "hash-object", "-w", "--stdin"], { input: big, encoding: "utf8" }).trim();

@@ -42,7 +42,7 @@ const tryGit = (root: string, args: string[]) => git(root, args).catch(() => nul
 const commitOf = async (root: string, rev: string) => (await tryGit(root, ["rev-parse", "-q", "--verify", `${rev}^{commit}`]))?.trim() ?? null;
 const readText = (path: string) => readFile(path, "utf8").catch(() => null);
 const lines = (out: string) => out.split("\n").filter(Boolean);
-const inRepo = (path: string) => !isAbsolute(path) && !path.split("/").includes("..");
+const inRepo = (path: string) => !isAbsolute(path) && !path.split(/[\\/]/).includes("..");
 const revList = async (root: string, args: string[]) => lines(await git(root, ["rev-list", "--reverse", `-n${LIMIT}`, ...args, "--"]));
 
 async function writeJson(path: string, data: unknown) {

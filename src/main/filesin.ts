@@ -28,7 +28,7 @@ let icon: NativeImage | null = null;
 
 // On Linux and Windows this returns once the drop lands or is cancelled; on macOS it returns at once.
 export function dragOut(sender: WebContents, root: string, path: string): void {
-  if (!path || isAbsolute(path) || path.split("/").includes("..") || !existsSync(join(root, path))) return;
+  if (!path || isAbsolute(path) || path.split(/[\\/]/).includes("..") || !existsSync(join(root, path))) return;
   icon ??= nativeImage
     .createFromPath(app.isPackaged ? join(process.resourcesPath, "icon.png") : join(__dirname, "../../build/icons/512x512.png"))
     .resize({ width: 32, height: 32 });

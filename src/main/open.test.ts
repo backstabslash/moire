@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openRefusal } from "./open";
-import { tempDir } from "./test-repo";
+import { tempDir, WIN } from "./test-repo";
 
 const folder = () => tempDir("moire-open-");
 
@@ -15,11 +15,13 @@ describe("openRefusal", () => {
 
   it("refuses files the desktop would run", () => {
     const dir = folder();
-    writeFileSync(join(dir, "Launch.DESKTOP"), "[Desktop Entry]\n");
     writeFileSync(join(dir, "build"), "#!/bin/sh\n");
     chmodSync(join(dir, "build"), 0o755);
     mkdirSync(join(dir, "Tool.app"));
-    expect(openRefusal(join(dir, "Launch.DESKTOP"))).toMatch(/could run as a program/);
+    for (const name of ["Launch.DESKTOP", "help.chm", "console.msc", "setup.pyz", "office.rdp"]) {
+      writeFileSync(join(dir, name), "x");
+      expect(openRefusal(join(dir, name))).toMatch(/could run as a program/);
+    }
     expect(openRefusal(join(dir, "Tool.app"))).toMatch(/could run as a program/);
     if (process.platform !== "win32") expect(openRefusal(join(dir, "build"))).toMatch(/is executable/);
   });
@@ -42,7 +44,7 @@ describe("openRefusal", () => {
     expect(openRefusal(join(dir, "payload.dat"))).toMatch(/could run as a program/);
   });
 
-  it("follows symlinks to what they point at", () => {
+  it.skipIf(WIN)("follows symlinks to what they point at", () => {
     const dir = folder();
     writeFileSync(join(dir, "run.sh"), "#!/bin/sh\n");
     symlinkSync(join(dir, "run.sh"), join(dir, "notes.html"));

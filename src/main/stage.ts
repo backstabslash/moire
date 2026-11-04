@@ -248,16 +248,17 @@ async function actLines(root: string, action: StageAction, file: FileDiff, selec
   if (entry?.mode === "160000") throw new Error(`${name} is a submodule and can only be ${VERB[action].toLowerCase()} whole`);
   if (action === "discard") {
     const full = join(root, file.path);
-    if (entry && (await git(root, ["hash-object", "--", full])).trim() !== entry.sha) {
-      throw new Error(`git converts ${name} (line endings or a filter), so it can only be discarded whole`);
-    }
     const base = entry ? await readFile(full) : Buffer.alloc(0);
-    await writeFile(full, splice(utf8(base, name), file.hunks, selected, "a"));
+    const crlf = !!entry && (await crlfOnlyOrThrow(root, full, base, entry.sha, file, name));
+    const text = splice(utf8(crlf ? Buffer.from(base.toString("latin1").replaceAll("\r\n", "\n"), "latin1") : base, name), file.hunks, selected, "a");
+    await writeFile(full, crlf ? text.replaceAll("\n", "\r\n") : text);
     return;
   }
   const base = entry ? await gitBuffer(root, ["cat-file", "blob", entry.sha]) : Buffer.alloc(0);
   const text = splice(utf8(base, name), file.hunks, selected, action === "stage" ? "b" : "a");
-  const sha = (await gitInput(root, ["hash-object", "-w", "--no-filters", "--stdin"], text)).trim();
+  // A new file's lines come straight from disk, so git converts them as git add would.
+  const filters = !entry && action === "stage" ? [`--path=${file.path}`] : ["--no-filters"];
+  const sha = (await gitInput(root, ["hash-object", "-w", ...filters, "--stdin"], text)).trim();
   const mode = entry?.mode ?? ((await worktreeEntry(root, file.path, false))?.mode === "100755" ? "100755" : "100644");
   await setIndex(root, file.path, { mode, sha });
 }
@@ -412,6 +413,20 @@ function headSha(root: string): Promise<string | null> {
     (out) => out.trim(),
     () => null,
   );
+}
+
+// A diff line ending in \r means the index already holds CRLF, so git didn't convert.
+async function crlfOnlyOrThrow(root: string, full: string, raw: Buffer, rawSha: string, file: FileDiff, name: string): Promise<boolean> {
+  const cleaned = (await git(root, ["hash-object", "--", full])).trim();
+  if (cleaned === rawSha) return false;
+  const text = raw.toString("latin1");
+  const lf = text.replaceAll("\r\n", "\n");
+  const everyLineCrlf = lf.split("\n").length === text.split("\r\n").length;
+  const diffHasCr = file.hunks.some((h) => h.lines.some((l) => l.text.endsWith("\r")));
+  if (everyLineCrlf && !diffHasCr && (await gitInput(root, ["hash-object", "--no-filters", "--stdin"], Buffer.from(lf, "latin1"))).trim() === cleaned) {
+    return true;
+  }
+  throw new Error(`git converts ${name} (line endings or a filter), so it can only be discarded whole`);
 }
 
 function utf8(buf: Buffer, name: string): string {

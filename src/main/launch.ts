@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 export interface LaunchRequest {
   path?: string;
@@ -13,7 +13,7 @@ export interface LaunchRequest {
 export function launchRequest(argv: string[], cwd: string, packaged: boolean, exists = existsSync): LaunchRequest {
   const args = argv.slice(packaged ? 1 : 2).filter((a) => !a.startsWith("-"));
   const pr = args[0] === "pr" && /^\d+$/.test(args[1] ?? "");
-  const hasPath = !!args.length && !pr && (/^\.{0,2}\/|^\.{1,2}$/.test(args[0]) || exists(resolve(cwd, args[0])));
+  const hasPath = !!args.length && !pr && (/^\.{0,2}[\\/]|^[A-Za-z]:[\\/]|^\.{1,2}$/.test(args[0]) || exists(resolve(cwd, args[0])));
   const compare = args.slice(hasPath ? 1 : 0);
   return { ...(hasPath && { path: resolve(cwd, args[0]) }), ...(compare.length && { compare }), cwd };
 }
@@ -33,9 +33,15 @@ export function real(path: string): string {
   }
 }
 
-// Desktop launchers start apps in the home folder, which may be a dotfiles repo.
-export function usableCwd(cwd: string, home = homedir()): string | undefined {
-  return cwd === "/" || cwd === home || cwd === real(home) ? undefined : cwd;
+// Desktop launchers start apps in the home folder, which may be a dotfiles repo. Windows starts them in a drive root, System32 or the app's own folder.
+export function usableCwd(cwd: string, home = homedir(), windowsDirs: string[] = []): string | undefined {
+  const lower = cwd.toLowerCase();
+  const inWindowsDir = windowsDirs.some((d) => lower === d.toLowerCase() || lower.startsWith(d.toLowerCase().replace(/\\$/, "") + "\\"));
+  return inWindowsDir || cwd === "/" || /^[a-z]:\\?$/i.test(cwd) || cwd === home || cwd === real(home) ? undefined : cwd;
+}
+
+export function windowsStartDirs(exe: string, env: NodeJS.ProcessEnv): string[] {
+  return [dirname(exe), dirname(real(exe)), env.SystemRoot || "C:\\Windows"];
 }
 
 export function tildify(path: string, home = homedir()): string {

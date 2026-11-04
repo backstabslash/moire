@@ -13,7 +13,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, win32 } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream } from "node:stream/web";
@@ -22,7 +22,11 @@ import { createGunzip } from "node:zlib";
 
 const run = promisify(execFile);
 // Electron's fs.promises.rm takes an .asar for a folder and stops with ENOTEMPTY, leaving the app's own old versions behind.
-const removeTree = (path: string) => run("rm", ["-rf", "--", path]);
+const removeTree = async (path: string) => {
+  if (process.platform !== "win32") return void (await run("rm", ["-rf", "--", path]));
+  if (!existsSync(path)) return;
+  await run("cmd.exe", ["/d", "/s", "/c", `rmdir /s /q "${path}"`], { windowsVerbatimArguments: true, windowsHide: true });
+};
 
 export interface Asset {
   name: string;
@@ -92,6 +96,7 @@ export function whyManual(kind: InstallKind): string {
 }
 
 export function npxRoot(platform: string, env: NodeJS.ProcessEnv, home: string): string {
+  if (platform === "win32") return win32.join(env.LOCALAPPDATA || win32.join(home, "AppData", "Local"), "moire");
   const data = env.XDG_DATA_HOME || join(home, ".local", "share");
   return platform === "darwin" ? join(home, "Applications", "moire.app") : join(data, "moire");
 }
@@ -101,7 +106,7 @@ export function installedVersion(platform: string, root: string): string | undef
     if (platform === "darwin") {
       return /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(readFileSync(join(root, "Contents", "Info.plist"), "utf8"))?.[1];
     }
-    return readlinkSync(join(root, "current"));
+    return basename(readlinkSync(join(root, "current")));
   } catch {
     return undefined;
   }
@@ -110,9 +115,10 @@ export function installedVersion(platform: string, root: string): string | undef
 export function pickAssets(release: Release, platform: string, arch: string): { full?: Asset; asar?: Asset; manifest?: Asset } {
   const version = release.tag_name.replace(/^v/, "");
   const suffix = arch === "x64" ? "" : `-${arch}`;
+  const find = (name: string) => release.assets.find((a) => a.name === name);
+  if (platform === "win32") return { full: find(`moire-${version}${suffix}-win.zip`) };
   const full = platform === "darwin" ? `moire-${version}${suffix}-mac.zip` : `moire-${version}${suffix}.tar.gz`;
   const small = `moire-${version}-${platform === "darwin" ? "mac" : "linux"}-${arch}.asar`;
-  const find = (name: string) => release.assets.find((a) => a.name === name);
   return { full: find(full), asar: find(`${small}.gz`), manifest: find(`${small}.json`) };
 }
 
@@ -174,6 +180,13 @@ async function unpackFull(get: Get, asset: Asset, dir: string, mac: boolean): Pr
   mkdirSync(dir);
   const file = join(dir, asset.name);
   await download(get, asset, file);
+  if (asset.name.endsWith("-win.zip")) {
+    const app = join(dir, "moire");
+    mkdirSync(app);
+    // Windows' own tar reads zips; one from Git for Windows earlier on PATH can't.
+    await run(join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-xf", file, "-C", app], { windowsHide: true });
+    return app;
+  }
   if (mac) {
     await run("ditto", ["-x", "-k", file, dir]);
     return join(dir, "moire.app");
@@ -203,16 +216,33 @@ async function patchCopy(get: Get, from: string, asar: Asset, manifest: Asset, v
   return to;
 }
 
-async function placeLinux(root: string, version: string, built: string, running: string) {
+async function placeVersion(root: string, version: string, built: string, running: string, windows: boolean) {
   await removeTree(join(root, version));
   renameSync(built, join(root, version));
   const next = join(root, ".current");
   rmSync(next, { force: true });
-  symlinkSync(version, next);
+  // Symlinks need Developer Mode on Windows, a junction doesn't, but it can't replace current by renaming over it.
+  if (windows) {
+    symlinkSync(join(root, version), next, "junction");
+    rmSync(join(root, "current"), { force: true });
+  } else symlinkSync(version, next);
   renameSync(next, join(root, "current"));
   for (const old of readdirSync(root, { withFileTypes: true })) {
-    if (old.isDirectory() && !old.name.startsWith(".") && old.name !== version && old.name !== running) await removeTree(join(root, old.name));
+    if (!old.isDirectory() || old.name.startsWith(".") || old.name === version || old.name === running) continue;
+    if (windows) await removeUnlessRunning(join(root, old.name));
+    else await removeTree(join(root, old.name));
   }
+}
+
+// Windows deletes all but the files in use, so a copy that's still open is moved first, which Windows refuses.
+async function removeUnlessRunning(dir: string) {
+  const doomed = join(dirname(dir), `.old-${basename(dir)}`);
+  try {
+    renameSync(dir, doomed);
+  } catch {
+    return;
+  }
+  await removeTree(doomed);
 }
 
 function swapMac(app: string, built: string) {
@@ -260,7 +290,7 @@ export async function updateNpx({ release, platform, arch, root, runningApp, fet
     }
     built ??= await unpackFull(get, full, join(tmp, "full"), mac);
     if (!mac) {
-      await placeLinux(root, version, built, basename(runningApp));
+      await placeVersion(root, version, built, basename(runningApp), platform === "win32");
       await removeTree(tmp);
       return undefined;
     }

@@ -8,7 +8,7 @@
   <a href="https://github.com/backstabslash/moire/actions/workflows/ci.yml"><img src="https://github.com/backstabslash/moire/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/backstabslash/moire/releases/latest"><img src="https://img.shields.io/github/v/release/backstabslash/moire?color=blue" alt="Latest Release"></a>
   <a href="https://www.npmjs.com/package/@backstabslash/moire"><img src="https://img.shields.io/npm/v/@backstabslash/moire?label=npx&color=blue" alt="npm"></a>
-  <a href="#install"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-555" alt="Platforms"></a>
+  <a href="#install"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-555" alt="Platforms"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
@@ -63,12 +63,13 @@ npx skills add backstabslash/moire -g
 npx @backstabslash/moire
 ```
 
-installs the latest release, then opens the repo in the current directory. After that Moire updates itself in the background and offers a restart when a new version is ready. On Linux it adds Moire to your app menu and a `moire` command to `~/.local/bin`; on macOS it installs to `~/Applications`. Moire needs `git` 2.26 or newer on your PATH.
+installs the latest release, then opens the repo in the current directory. After that Moire updates itself in the background and offers a restart when a new version is ready. On Linux it adds Moire to your app menu and a `moire` command to `~/.local/bin`; on macOS it installs to `~/Applications`; on Windows it installs to `%LOCALAPPDATA%\moire`, adds Moire to the Start menu and a `moire` command to `%LOCALAPPDATA%\Microsoft\WindowsApps`. Moire needs `git` 2.26 or newer on your PATH.
 
 Or download from [Releases](https://github.com/backstabslash/moire/releases):
 
 - **Linux** (x64): AppImage, `.deb` or `.rpm`. The AppImage updates itself; the `.deb` and `.rpm` also install a `moire` command, and Moire links to each new release for you to install.
 - **macOS**: `.dmg` for Apple silicon or Intel. Builds aren't notarized yet, so the first time macOS blocks the app. Open System Settings → Privacy & Security and click Open Anyway.
+- **Windows** (x64): `.zip`. Unpack it anywhere and run `moire.exe`; Moire links to each new release for you to download. Builds aren't signed yet, so Windows may warn the first time. Click More info → Run anyway.
 
 ## Use
 
@@ -81,7 +82,7 @@ moire HEAD~3..        # the last three commits, stopping at HEAD
 moire pr 123          # a pull request against its base, fetched with gh
 ```
 
-A path can come first, as in `moire path/to/repo main..feature`. `moire` returns right away and opens a new window if Moire is already running. The npx install adds the command on macOS too; with the `.dmg` alone, use `open -na moire --args "$PWD"`. Inside the app, `o` lists recent repos and the repo's other worktrees.
+A path can come first, as in `moire path/to/repo main..feature`. `moire` returns right away and opens a new window if Moire is already running. The npx install adds the command on macOS too; with the `.dmg` alone, use `open -na moire --args "$PWD"`. On Windows the command comes with the npx install; with the `.zip` alone, run `moire.exe` from its folder with the same arguments. Inside the app, `o` lists recent repos and the repo's other worktrees.
 
 <details>
 <summary>Keyboard shortcuts</summary>

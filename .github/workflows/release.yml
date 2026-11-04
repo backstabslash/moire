@@ -44,7 +44,7 @@ jobs:
       # electron-builder in parallel jobs would each create a draft release for the tag
       max-parallel: 1
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -61,7 +61,9 @@ jobs:
       - run: pnpm dist --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Windows updates download the whole zip.
       - name: Upload app.asar for small updates
+        if: runner.os != 'Windows'
         run: |
           node build/asar-assets.mjs dist dist/asar
           gh release upload "$TAG" dist/asar/* --clobber

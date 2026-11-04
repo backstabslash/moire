@@ -3,7 +3,7 @@ import { extname, join } from "node:path";
 import { shell } from "electron";
 
 const RUNNABLE = new Set(
-  "app appimage bat cmd com command cpl desktop exe fileloc hta inetloc jar jnlp js jse lnk mpkg msi pif pkg ps1 py pyw reg run scr sh terminal tool url vbe vbs webloc workflow ws wsf"
+  "app appimage appinstaller application appref-ms appx appxbundle bat chm cmd com command cpl deskthemepack desktop diagcab exe fileloc gadget hlp hta img inetloc inf ins iso isp jar jnlp js jse library-ms lnk mpkg msc msh msi msix msixbundle msp mst pif pkg pl ps1 ps1xml psc1 psd1 psm1 py pyc pyo pyw pyz pyzw rb rbw rdp reg run scf scr sct search-ms searchconnector-ms settingcontent-ms sh shb terminal theme themepack tool url vbe vbs vhd vhdx webloc workflow ws wsb wsc wsf wsh xbap xll"
     .split(" ")
     .map((ext) => `.${ext}`),
 );

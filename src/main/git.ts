@@ -69,7 +69,7 @@ function gitArgs(root: string, args: string[]): string[] {
 }
 
 export async function git(root: string, args: string[]): Promise<string> {
-  const { stdout } = await exec("git", gitArgs(root, args), { maxBuffer: MAX_BUFFER, env });
+  const { stdout } = await exec("git", gitArgs(root, args), { windowsHide: true, maxBuffer: MAX_BUFFER, env });
   return stdout;
 }
 
@@ -78,9 +78,10 @@ export async function gitFetch(root: string, args: string[], config: string[] = 
   await shellPath;
   const fetch = (flags: string[]) =>
     exec("git", gitArgs(root, [...config, "fetch", "--no-tags", "--no-recurse-submodules", "--refmap=", ...flags, ...args]), {
+      windowsHide: true,
       maxBuffer: MAX_BUFFER,
-      // An empty GIT_ASKPASS also stops git falling back to SSH_ASKPASS, a desktop dialog the fetch would wait on.
-      env: { ...env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "" },
+      // Empty GIT_ASKPASS skips SSH_ASKPASS and GCM_INTERACTIVE skips GCM's window, dialogs the fetch would wait on.
+      env: { ...env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", GCM_INTERACTIVE: "never" },
     });
   // --no-write-fetch-head needs git 2.29; moire runs on 2.26.
   await fetch(["--no-write-fetch-head"]).catch((e: { stderr?: string }) => {
@@ -92,17 +93,17 @@ export async function gitFetch(root: string, args: string[], config: string[] = 
 export async function gh(root: string, args: string[]): Promise<string> {
   // Apps started from Finder or `open` have only the system folders on PATH until the login shell answers.
   await shellPath;
-  const { stdout } = await exec("gh", args, { cwd: root, maxBuffer: MAX_BUFFER, env: { ...env, GH_PROMPT_DISABLED: "1" } });
+  const { stdout } = await exec("gh", args, { windowsHide: true, cwd: root, maxBuffer: MAX_BUFFER, env: { ...env, GH_PROMPT_DISABLED: "1" } });
   return stdout;
 }
 
 export async function gitBuffer(root: string, args: string[]): Promise<Buffer> {
-  const { stdout } = await exec("git", gitArgs(root, args), { maxBuffer: MAX_BUFFER, env, encoding: "buffer" });
+  const { stdout } = await exec("git", gitArgs(root, args), { windowsHide: true, maxBuffer: MAX_BUFFER, env, encoding: "buffer" });
   return stdout;
 }
 
 export async function gitToFile(root: string, args: string[], path: string, mode: number): Promise<void> {
-  const child = spawn("git", gitArgs(root, args), { env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn("git", gitArgs(root, args), { windowsHide: true, env, stdio: ["ignore", "pipe", "pipe"] });
   let stderr = "";
   child.stderr.on("data", (c: Buffer) => (stderr += c.toString()));
   const exited = new Promise<void>((resolve, reject) => {
@@ -125,7 +126,9 @@ function feed(child: ChildProcess, input: string | Buffer) {
 
 export function gitInput(root: string, args: string[], input: string | Buffer): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = execFile("git", gitArgs(root, args), { maxBuffer: MAX_BUFFER, env }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+    const child = execFile("git", gitArgs(root, args), { windowsHide: true, maxBuffer: MAX_BUFFER, env }, (err, stdout) =>
+      err ? reject(err) : resolve(stdout),
+    );
     feed(child, input);
   });
 }
@@ -174,7 +177,7 @@ export function oldGit(version: string): string | null {
 let missing: Promise<string | null> | undefined;
 
 export function gitMissing(): Promise<string | null> {
-  const version = () => exec("git", ["--version"], { env }).then(({ stdout }) => oldGit(stdout));
+  const version = () => exec("git", ["--version"], { windowsHide: true, env }).then(({ stdout }) => oldGit(stdout));
   missing ??= version().catch(() => shellPath.then(version).catch((e: unknown) => missingGit(e, process.platform)));
   return missing;
 }
@@ -208,11 +211,16 @@ async function repoError(path: string): Promise<string> {
 export async function repoInfo(path: string): Promise<RepoInfo> {
   const dir = real(resolvePath(path));
   const wasFolder = folders.has(dir);
-  let root = wasFolder ? await realToplevel(dir) : await fixedGit(path, ["rev-parse", "--show-toplevel"]);
+  // Git for Windows prints C:/x where Node uses C:\x.
+  const toplevel = async () => {
+    const top = await fixedGit(path, ["rev-parse", "--show-toplevel"]);
+    return top && resolvePath(top);
+  };
+  let root = wasFolder ? await realToplevel(dir) : await toplevel();
   if (root && !wasFolder && !existsSync(join(root, ".git"))) {
     forget(path);
     forget(root);
-    root = await fixedGit(path, ["rev-parse", "--show-toplevel"]);
+    root = await toplevel();
   }
   if (!root) {
     if (wasFolder || (await notARepo(dir))) return openFolder(dir);
@@ -234,8 +242,8 @@ export async function repoInfo(path: string): Promise<RepoInfo> {
 
 // Plain git, since a known folder's own commands go to the borrowed repository.
 function realToplevel(dir: string): Promise<string | null> {
-  return exec("git", ["-C", dir, "rev-parse", "--show-toplevel"], { env }).then(
-    ({ stdout }) => stdout.trim(),
+  return exec("git", ["-C", dir, "rev-parse", "--show-toplevel"], { windowsHide: true, env }).then(
+    ({ stdout }) => resolvePath(stdout.trim()),
     () => null,
   );
 }
@@ -248,7 +256,7 @@ async function notARepo(dir: string): Promise<boolean> {
     ))
   )
     return false;
-  return exec("git", ["-C", dir, "rev-parse", "--show-toplevel"], { env: { ...env, LC_ALL: "C" } }).then(
+  return exec("git", ["-C", dir, "rev-parse", "--show-toplevel"], { windowsHide: true, env: { ...env, LC_ALL: "C" } }).then(
     () => false,
     (e: unknown) => /not a git repository/i.test(gitError(e)),
   );
@@ -258,7 +266,7 @@ const folderInfo = (root: string): RepoInfo => ({ root, name: basename(root), br
 
 async function openFolder(dir: string): Promise<RepoInfo> {
   scratchDir ||= join(mkdtempSync(join(tmpdir(), "moire-folder-")), "scratch.git");
-  scratch ??= exec("git", ["init", "-q", "--bare", "--template=", scratchDir], { env }).then(() => {});
+  scratch ??= exec("git", ["init", "-q", "--bare", "--template=", scratchDir], { windowsHide: true, env }).then(() => {});
   await scratch.catch((e: unknown) => {
     scratch = null;
     throw e;
@@ -296,7 +304,8 @@ export async function worktrees(root: string): Promise<Worktree[]> {
   const found: { path: string; branch: string | null }[] = [];
   for (const block of out.split("\0\0")) {
     const fields = block.split("\0").filter(Boolean);
-    const path = fields.find((f) => f.startsWith("worktree "))?.slice(9);
+    const listed = fields.find((f) => f.startsWith("worktree "))?.slice(9);
+    const path = listed && resolvePath(listed);
     if (!path || fields.some((f) => f === "bare" || f.startsWith("prunable"))) continue;
     const branch =
       fields
@@ -516,7 +525,7 @@ async function pairRenames(root: string, base: string | null, files: FileDiff[],
   const index = join(tmpdir(), `moire-index-${randomUUID()}`);
   const scratch = (args: string[], input = "") =>
     new Promise<string>((resolve, reject) => {
-      const opts = { maxBuffer: MAX_BUFFER, env: { ...env, GIT_INDEX_FILE: index, GIT_LITERAL_PATHSPECS: "1" } };
+      const opts = { windowsHide: true, maxBuffer: MAX_BUFFER, env: { ...env, GIT_INDEX_FILE: index, GIT_LITERAL_PATHSPECS: "1" } };
       const child = execFile("git", gitArgs(root, args), opts, (err, stdout) => (err ? reject(err) : resolve(stdout)));
       feed(child, input);
     });
@@ -767,7 +776,7 @@ async function readSide(root: string, side: SideInfo, path: string, limit = SIZE
 }
 
 export async function readBlob(root: string, side: SideInfo, path: string, limit: number): Promise<Buffer | null> {
-  if (!path || isAbsolute(path) || path.split("/").includes("..")) return null;
+  if (!path || isAbsolute(path) || path.split(/[\\/]/).includes("..")) return null;
   const buf = await readSide(root, side, path, limit);
   const pointer = buf && lfsPointer(buf);
   if (pointer && pointer.size <= limit) {
@@ -874,7 +883,7 @@ export async function manyContents(root: string, mode: CompareMode, files: FileR
 function readBlobs(root: string, specs: string[]): Promise<(Buffer | null)[]> {
   if (!specs.length) return Promise.resolve([]);
   return new Promise((resolve, reject) => {
-    const child = spawn("git", gitArgs(root, ["cat-file", "--batch"]), { env });
+    const child = spawn("git", gitArgs(root, ["cat-file", "--batch"]), { windowsHide: true, env });
     const chunks: Buffer[] = [];
     child.stdout.on("data", (c: Buffer) => chunks.push(c));
     child.on("error", reject);
@@ -973,7 +982,7 @@ export async function ignoredPaths(root: string, paths: string[]): Promise<Set<s
 }
 
 export async function listDir(root: string, dir: string): Promise<string[]> {
-  if (!dir.endsWith("/") || isAbsolute(dir) || dir.split("/").includes("..")) return [];
+  if (!dir.endsWith("/") || isAbsolute(dir) || dir.split(/[\\/]/).includes("..")) return [];
   const entries = await readdir(join(root, dir), { withFileTypes: true });
   return entries.filter((e) => !isGitDir(e.name)).map((e) => `${dir}${e.name}${e.isDirectory() ? "/" : ""}`);
 }

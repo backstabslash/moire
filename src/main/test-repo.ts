@@ -5,11 +5,15 @@ import { dirname, join } from "node:path";
 import { afterAll } from "vitest";
 import type { DiffLine, FileDiff, Hunk } from "../shared/types";
 
+// Exec bits, symlinks, tabs in names and sh scripts don't work on Windows.
+export const WIN = process.platform === "win32";
+
 export const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
 export function tempDir(prefix: string) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  // The native call also expands Windows short names like RUNNER~1, which git never prints.
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
   dirs.push(dir);
   return dir;
 }

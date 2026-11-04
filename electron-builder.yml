@@ -25,6 +25,10 @@ linux:
     entry:
       Name: Moire
       StartupWMClass: moire
+win:
+  target: [zip]
+  executableName: moire
+  icon: build/icons/256x256.png
 mac:
   target:
     - target: dmg

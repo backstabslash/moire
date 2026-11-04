@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { compareMode, parseComparison, remoteFor } from "./compare";
 import { diff } from "./git";
-import { makeRepo, type Repo, seed, tempDir } from "./test-repo";
+import { makeRepo, type Repo, seed, tempDir, WIN } from "./test-repo";
 
 describe("parseComparison", () => {
   it("reads ranges and single revisions, defaulting to HEAD", () => {
@@ -105,7 +105,7 @@ describe("pull requests", () => {
     return dir;
   }
 
-  it("fetches the PR and its base from the remote, without touching branches", async () => {
+  it.skipIf(WIN)("fetches the PR and its base from the remote, without touching branches", async () => {
     const server = seed({ "a.txt": "base\n" });
     server.git("checkout", "-q", "-b", "topic");
     server.write("a.txt", "topic\n");
@@ -133,7 +133,7 @@ describe("pull requests", () => {
     expect((await diff(r.root, mode)).files.map((f) => f.path)).toEqual(["a.txt"]);
   });
 
-  it("opens a PR that bumps a submodule to a commit its remote doesn't have", async () => {
+  it.skipIf(WIN)("opens a PR that bumps a submodule to a commit its remote doesn't have", async () => {
     const sub = seed({ "s.txt": "1\n" });
     const server = makeRepo();
     server.git("-c", "protocol.file.allow=always", "submodule", "--quiet", "add", sub.root, "vendor");
@@ -154,7 +154,7 @@ describe("pull requests", () => {
     expect(await filesOfPr(prRepo(server.root, {}, r))).toEqual(["vendor"]);
   });
 
-  it("shows a PR merged with a merge commit as it was before the merge, even with its base branch deleted", async () => {
+  it.skipIf(WIN)("shows a PR merged with a merge commit as it was before the merge, even with its base branch deleted", async () => {
     const server = seed({ "a.txt": "base\n" });
     server.git("checkout", "-q", "-b", "topic");
     server.write("b.txt", "topic\n");
@@ -172,7 +172,7 @@ describe("pull requests", () => {
     expect(await filesOfPr(prRepo(server.root, { state: "MERGED", mergeCommit: { oid } }))).toEqual(["b.txt"]);
   });
 
-  it("shows every commit of a PR fast-forwarded onto its base", async () => {
+  it.skipIf(WIN)("shows every commit of a PR fast-forwarded onto its base", async () => {
     const server = seed({ "a.txt": "base\n" });
     server.git("checkout", "-q", "-b", "topic");
     server.write("b.txt", "first\n");
@@ -187,7 +187,7 @@ describe("pull requests", () => {
     expect(await filesOfPr(prRepo(server.root, view))).toEqual(["b.txt", "c.txt"]);
   });
 
-  it("signs in with gh only for a remote it couldn't match", async () => {
+  it.skipIf(WIN)("signs in with gh only for a remote it couldn't match", async () => {
     const asked: (string | undefined)[] = [];
     const http = createServer((req, res) => {
       asked.push(req.headers.authorization);
@@ -231,14 +231,14 @@ echo '{"baseRefName":"main","state":"OPEN","mergeCommit":null,"url":"${url}"}'`;
     expect(existsSync(asked)).toBe(false);
   });
 
-  it("passes on gh's own error", async () => {
+  it.skipIf(WIN)("passes on gh's own error", async () => {
     const r = seed({ "a.txt": "1\n" });
     fakeGh(`echo 'no pull requests found' >&2; exit 1`);
     const fresh = await withFakeGh();
     await expect(fresh.compareMode(r.root, ["pr", "7"])).rejects.toThrow("no pull requests found");
   });
 
-  it("waits for the login shell's PATH before looking for gh", async () => {
+  it.skipIf(WIN)("waits for the login shell's PATH before looking for gh", async () => {
     const r = seed({ "a.txt": "1\n" });
     fakeGh(`echo 'no pull requests found' >&2; exit 1`);
     const dir = onlyGit();
@@ -247,7 +247,7 @@ echo '{"baseRefName":"main","state":"OPEN","mergeCommit":null,"url":"${url}"}'`;
     await expect(fresh.compareMode(r.root, ["pr", "7"])).rejects.toThrow("no pull requests found");
   });
 
-  it("says so when gh isn't installed", async () => {
+  it.skipIf(WIN)("says so when gh isn't installed", async () => {
     const r = seed({ "a.txt": "1\n" });
     onlyGit();
     const fresh = await import("./compare");
