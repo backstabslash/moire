@@ -390,7 +390,7 @@ function dropSpacesExceptBetweenWordsAndInStrings(text: string): string {
 
 export function splitLines(text: string | null): string[] | null {
   if (text === null) return null;
-  const lines = text.split("\n");
+  const lines = text.split(/\r?\n/);
   if (lines[lines.length - 1] === "") lines.pop();
   return lines;
 }

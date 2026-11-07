@@ -62,7 +62,12 @@ interface CodeProps {
 
 export function Code({ text, tokens, words, mark, hits, current, styles, changed }: CodeProps) {
   if (!text) return "​";
-  let pieces: Piece[] = tokens && tokensMatch(tokens, text) ? tokens.map(([t, color, fontStyle]) => ({ text: t, color, fontStyle })) : [{ text, fontStyle: 0 }];
+  // Diff lines from CRLF files keep their CR, which the highlighter strips.
+  const cr = text.endsWith("\r") ? "\r" : "";
+  let pieces: Piece[] = [{ text, fontStyle: 0 }];
+  if (tokens && tokensMatch(tokens, text)) pieces = tokens.map(([t, color, fontStyle]) => ({ text: t, color, fontStyle }));
+  else if (tokens && cr && tokensMatch(tokens, text.slice(0, -1)))
+    pieces = [...tokens.map(([t, color, fontStyle]): Piece => ({ text: t, color, fontStyle })), { text: cr, fontStyle: 0 }];
   if (text.length > NARROWEST_PANE_CHARS) pieces = splitAtWrapPoints(pieces, text);
   pieces = withSwatches(pieces, swatches(text, !!styles));
   if (changed) pieces = withMarks(pieces, text.trimEnd().length);
