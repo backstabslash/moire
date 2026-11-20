@@ -41,7 +41,8 @@ export type MenuAction =
   | "copy-markdown"
   | "stage-here"
   | "discard-here"
-  | "editor-line";
+  | "editor-line"
+  | "pin";
 
 interface Props {
   at: MenuAt;
@@ -49,11 +50,12 @@ interface Props {
   copyHere: boolean;
   actions: "unstaged" | "staged" | null;
   changed: boolean;
+  pinned: boolean;
   onPick(action: MenuAction): void;
   onClose(): void;
 }
 
-export function FileMenu({ at, onDisk, copyHere, actions, changed, onPick, onClose }: Props) {
+export function FileMenu({ at, onDisk, copyHere, actions, changed, pinned, onPick, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: at.x, top: at.y });
   const isDir = at.path.endsWith("/");
@@ -120,7 +122,8 @@ export function FileMenu({ at, onDisk, copyHere, actions, changed, onPick, onClo
           {changed && actions === "unstaged" && item("stage-file", "stage", "Stage file")}
           {changed && actions === "staged" && item("unstage-file", "unstage", "Unstage file")}
           {changed && actions === "unstaged" && item("discard-file", "discard", "Discard file")}
-          {changed && actions && <div className="sep" />}
+          {!isDir && item("pin", "pin", pinned ? "Unpin" : "Pin", true, "pin")}
+          {!isDir && <div className="sep" />}
         </>
       )}
       {item("copy", "copy", "Copy relative path")}

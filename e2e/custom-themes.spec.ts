@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
-import { harness } from "./harness";
+import { appearance, harness } from "./harness";
 
 const { commitAll, html, initRepo, launch, pick, recordOpens, shot, tmp, variable } = harness();
 let repo: string;
@@ -15,7 +15,7 @@ const mine = { name: "Harbour", extends: "anodic", colors: { plate: "#1c2326", a
 const theme = (name: RegExp) => page.getByRole("menuitemradio", { name });
 
 const open = async () => {
-  ({ app, page } = await launch(repo, { data, prefs: { theme: "light" } }));
+  ({ app, page } = await launch(repo, { data, prefs: { appearance: appearance("light") } }));
   await expect(page.locator(".hunk-head")).toHaveCount(1);
 };
 
@@ -166,7 +166,7 @@ test("following the desktop, a typo that flips a theme's tone stands in the buil
   const paper = { name: "Paper", extends: "anodic", colors: { plate: "#f5f5f0", ink: "#202020" } };
   data = tmp("data");
   save(paper);
-  ({ app, page } = await launch(repo, { data, prefs: { theme: "dark", "theme-follow": "on" } }));
+  ({ app, page } = await launch(repo, { data, prefs: { appearance: appearance("system") } }));
   await page.emulateMedia({ colorScheme: "dark" });
   await pick(/Phosphor/);
   await page.emulateMedia({ colorScheme: "light" });

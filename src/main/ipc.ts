@@ -99,16 +99,27 @@ export function showRepo(contents: WebContents, repo: Promise<RepoInfo | null>, 
   });
 }
 
-export function windowShowing(root: string): BrowserWindow | null {
+export function windowShowing(root: string, except?: number): BrowserWindow | null {
   for (const [id, r] of shown) {
-    const contents = r === root ? webContents.fromId(id) : undefined;
+    const contents = r === root && id !== except ? webContents.fromId(id) : undefined;
     if (contents) return BrowserWindow.fromWebContents(contents);
   }
   return null;
 }
 
-async function openIn(id: number, path: string): Promise<RepoInfo> {
+export function bringForward(win: BrowserWindow) {
+  if (win.isMinimized()) win.restore();
+  win.focus();
+  if (process.platform === "darwin") app.focus({ steal: true });
+}
+
+async function openIn(id: number, path: string): Promise<RepoInfo | null> {
   const info = await openRepo(path);
+  const other = windowShowing(info.root, id);
+  if (other) {
+    bringForward(other);
+    return null;
+  }
   shown.set(id, info.root);
   return info;
 }

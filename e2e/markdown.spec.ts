@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness, writeNotes } from "./harness";
+import { appearance, harness, writeNotes } from "./harness";
 
 const { clipboard, commitAll, git, idle, initRepo, launch, open, resize, shot, shots } = harness();
 let repo: string;
@@ -66,7 +66,7 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "plan.md"), rollout(true));
   commitAll("init");
   writeFileSync(join(repo, "plan.md"), rollout(false));
-  ({ page } = await launch(repo, { prefs: { theme: "dark", preview: "on" } }));
+  ({ page } = await launch(repo, { prefs: { appearance: appearance("dark"), preview: "on" } }));
   await open("plan.md");
   await expect(page.locator(".md h1").first()).toHaveText("Rate limiter rollout");
 });

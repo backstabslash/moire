@@ -38,6 +38,17 @@ test("a shows every file, with ignored ones, and opens an unchanged file whole",
   await expect(page.locator(".toast.show")).toContainText("IDEAS.md has no changes here");
 });
 
+test("an ignored file says it isn't staged, even in preview", async () => {
+  await page.keyboard.press("m");
+  await expect(page.locator(".md-page h1")).toHaveText("Ideas");
+  await page.keyboard.press("2");
+  await expect(page.locator(".note")).toHaveText("Not in the index.");
+  await expect(page.locator(".md-page")).toHaveCount(0);
+  await page.keyboard.press("1");
+  await expect(page.locator(".md-page h1")).toHaveText("Ideas");
+  await page.keyboard.press("m");
+});
+
 test("an ignored folder is read when opened", async () => {
   const nav = page.getByRole("navigation", { name: "All files" });
   await nav.locator(".tree-dir", { hasText: "out" }).click();

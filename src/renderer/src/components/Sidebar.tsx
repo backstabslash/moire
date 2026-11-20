@@ -54,6 +54,7 @@ interface Props {
   onView(view: FilesView): void;
   files: FileDiff[];
   changed: FileDiff[];
+  pins: string[];
   tree: Listing | null;
   refreshTick: number;
   active: string | null;
@@ -93,6 +94,7 @@ export function Sidebar({
   onView,
   files,
   changed,
+  pins,
   tree,
   refreshTick,
   active,
@@ -173,6 +175,7 @@ export function Sidebar({
     });
 
   const activeRef = useRef<HTMLButtonElement>(null);
+  const pinRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [active, view]);
@@ -217,6 +220,7 @@ export function Sidebar({
   }, []);
 
   const list: ListState = { active, hitCounts, fresh, activeRef, onSelect, menu, onMenu };
+  const pinList: ListState = { ...list, activeRef: pinRef };
   const total = view === "changed" ? changed.length : allPaths.length;
   const count = filter && (view === "changed" || tree) ? `${listed.length} of ${total}` : "";
 
@@ -267,6 +271,12 @@ export function Sidebar({
           }
         }}
       />
+      {pins.length > 0 && (
+        <nav className="pins" aria-label="Pinned files">
+          <div className="pins-head">Pinned</div>
+          {pins.map((path) => fileRow(pinList, path, byPath.get(path), { ignored: ignored.has(path), where: path.slice(0, path.lastIndexOf("/") + 1) }))}
+        </nav>
+      )}
       <nav ref={navRef} className="files" aria-label={view === "changed" ? "Changed files" : "All files"}>
         {view === "all" && !filter
           ? tree && <FileTree listing={tree} changed={changed} list={list} folders={folders} onFolders={setFolders} />

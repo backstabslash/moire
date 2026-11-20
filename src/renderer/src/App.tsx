@@ -68,13 +68,14 @@ import { copyCode, copyMarkdown, copySide } from "./model/copy";
 import { strokeOf, sameKey } from "./model/keyboard";
 import { type Col, carryKeys, changedRefs, hunkChange, hunkOfKey, hunkRefs, isPicked, lineKey } from "./model/selection";
 import { type Hit, hitKeys, hitRow } from "./model/search";
-import { idsOf, isThemeId, type ThemeId, toneOf } from "./model/themes";
+import { type ThemeId, toneOf } from "./model/themes";
+import { flipTone, followSystem, pickTheme, readAppearance, themeShown } from "./model/appearance";
 import { useDiff } from "./useDiff";
 import { isIgnored, useFilesIn } from "./useFilesIn";
 import { useSearch } from "./useSearch";
 import { type SelectHow, useSelection } from "./useSelection";
 import { usePresets } from "./usePresets";
-import { firstTime, savedStop, saveStop, useStored, useStoredNumber, useStoredText } from "./useStored";
+import { firstTime, savedStop, saveStop, usePins, useShared, useStored, useStoredNumber, useStoredText } from "./useStored";
 import { useTree } from "./useTree";
 
 type SimpleMode = "unstaged" | "staged" | "all";
@@ -153,6 +154,8 @@ interface Shown {
 }
 
 const darkDesktop = matchMedia("(prefers-color-scheme: dark)");
+const readSavedAppearance = (saved: string | null) =>
+  readAppearance(saved, (key) => localStorage.getItem(`moire.${key}`), darkDesktop.matches ? "dark" : "light");
 
 function useSystemTone() {
   return useSyncExternalStore(
@@ -238,25 +241,10 @@ export function App() {
   const [previewPref, setPreviewPref] = useStored<"on" | "off">("preview", "off", ["on", "off"]);
   const [previewView, setPreviewView] = useStored<PreviewChoice>("markdownView", "auto", PREVIEW_CHOICES);
   const { themes, problems: themeProblems, warnings: themeWarnings } = usePresets();
-  const [savedTheme, setTheme] = useStored<ThemeId>("theme", darkDesktop.matches ? "dark" : "light", isThemeId);
-  const [savedLight, setLightTheme] = useStored<ThemeId>("theme-light", "light", isThemeId);
-  const [savedDark, setDarkTheme] = useStored<ThemeId>("theme-dark", "dark", isThemeId);
-  // A custom theme goes missing whenever its entry is mid-edit, so only what's shown falls back and the saved choice waits for it.
-  const lightTheme = idsOf(themes, "light").includes(savedLight) ? savedLight : "light";
-  const darkTheme = idsOf(themes, "dark").includes(savedDark) ? savedDark : "dark";
-  const lastTone = savedTheme === savedDark ? "dark" : savedTheme === savedLight ? "light" : darkDesktop.matches ? "dark" : "light";
-  // New installs follow the desktop; anyone who already has a saved theme keeps it until they opt in.
-  const [followSystem, setFollowSystem] = useStored<"on" | "off">("theme-follow", localStorage.getItem("moire.theme") ? "off" : "on", ["on", "off"]);
+  const [appearance, setAppearance] = useShared("appearance", readSavedAppearance);
   const systemTone = useSystemTone();
-  // An edit can flip a custom theme's tone. Like a missing theme, it may be mid-edit, so its slot waits for it.
-  const followed = followSystem === "on" && toneOf(savedTheme, themes) !== systemTone;
-  const theme = idsOf(themes).includes(savedTheme) && !followed ? savedTheme : (followed ? systemTone : lastTone) === "dark" ? darkTheme : lightTheme;
-  const pickTheme = (id: ThemeId) => {
-    setTheme(id);
-    (toneOf(id, themes) === "dark" ? setDarkTheme : setLightTheme)(id);
-    if (toneOf(id, themes) !== systemTone) setFollowSystem("off");
-  };
-  const [cvd, setCvd] = useStored<"on" | "off">("cvd", "off", ["on", "off"]);
+  const theme = themeShown(appearance, systemTone, themes);
+  const chooseTheme = (id: ThemeId) => setAppearance((a) => pickTheme(a, id, systemTone, themes));
   const [codeFont, setCodeFont] = useStoredText("code-font");
   const [codeSize, setCodeSize] = useStoredNumber("code-size", CODE_SIZE.initial, CODE_SIZE.min, CODE_SIZE.max);
   const [hints, setHints] = useStored<"on" | "off">("hints", "off", ["on", "off"]);
@@ -307,6 +295,10 @@ export function App() {
   const filesView: FilesView = folder || stayInAll ? "all" : storedView;
   const browsing = useRef(filesView === "all");
   browsing.current = filesView === "all";
+  const [pins, setPinned] = usePins(repo ? (repo.commonDir ?? repo.root) : null);
+  const pinsRef = useRef(pins);
+  pinsRef.current = pins;
+  const browsable = filesView === "all" || (!!active && pins.includes(active));
   const arrive = useRef<{
     to: CompareMode["kind"];
     path: string;
@@ -357,7 +349,7 @@ export function App() {
       setActive((cur) => {
         const kept = [land?.path ?? null, cur, wanted].find(has);
         if (kept) return kept;
-        if (cur && browsing.current && (!sameView || !shownFiles.current.includes(cur))) return cur;
+        if (cur && (browsing.current || pinsRef.current.includes(cur)) && (!sameView || !shownFiles.current.includes(cur))) return cur;
         if (!sameView) return ordered[0]?.path ?? null;
         const prev = shownFiles.current;
         return prev.slice(prev.indexOf(cur!) + 1).find(has) ?? ordered.at(-1)?.path ?? null;
@@ -367,7 +359,9 @@ export function App() {
       if (browsing.current) return;
       const ordered = visible(m, result.files);
       const land = arrive.current?.to === m.kind ? arrive.current.path : null;
-      setActive((cur) => [land, cur].find((p) => ordered.some((f) => f.path === p)) ?? ordered[0]?.path ?? null);
+      setActive(
+        (cur) => [land, cur].find((p) => ordered.some((f) => f.path === p)) ?? (cur && pinsRef.current.includes(cur) ? cur : (ordered[0]?.path ?? null)),
+      );
     },
     error: (e) => setError(message(e)),
   });
@@ -453,11 +447,6 @@ export function App() {
     };
   }, [repo, refreshTick, notesFor]);
 
-  useLayoutEffect(() => {
-    if (followSystem !== "on") return;
-    setTheme(systemTone === "dark" ? savedDark : savedLight);
-  }, [followSystem, systemTone, savedDark, savedLight, setTheme]);
-
   useEffect(() => {
     document.title = repo ? `${repo.name} - Moire` : "Moire";
   }, [repo]);
@@ -466,11 +455,10 @@ export function App() {
     const root = document.documentElement;
     root.dataset.theme = theme;
     root.dataset.tone = toneOf(theme, themes);
-    if (theme === savedTheme && theme !== savedLight && theme !== savedDark) (toneOf(theme, themes) === "dark" ? setDarkTheme : setLightTheme)(theme);
-    root.dataset.cvd = cvd;
+    root.dataset.cvd = appearance.cvd ? "on" : "off";
     const css = getComputedStyle(root);
     void window.moire.setTheme(css.getPropertyValue("--frame").trim(), css.getPropertyValue("--graphite").trim());
-  }, [theme, savedTheme, savedLight, savedDark, themes, cvd, setDarkTheme, setLightTheme]);
+  }, [theme, themes, appearance.cvd]);
 
   useEffect(() => {
     document.documentElement.dataset.layout = shownLayout;
@@ -561,7 +549,7 @@ export function App() {
 
   const inDiff = !!changedFile;
   useEffect(() => {
-    if (!repo || !active || !diff || inDiff || filesView !== "all") return;
+    if (!repo || !active || !diff || inDiff || !browsable) return;
     let stale = false;
     const key = `${modeKey}:${active}`;
     window.moire.fileContents(repo.root, mode, { path: active, status: "unchanged" }).then(
@@ -579,7 +567,7 @@ export function App() {
     return () => {
       stale = true;
     };
-  }, [repo, active, modeKey, refreshTick, !!diff, inDiff, filesView]);
+  }, [repo, active, modeKey, refreshTick, !!diff, inDiff, browsable]);
 
   const wantContents = wantKey
     ? contents?.key === wantKey
@@ -617,7 +605,7 @@ export function App() {
     return () => abort.abort();
   }, [wantKey, wantContents]);
 
-  const browsePending = !want && !!active && !!diff && !inDiff && filesView === "all";
+  const browsePending = !want && !!active && !!diff && !inDiff && browsable;
   const wantReady = want ? want.binary || !!want.tooLarge || (!!wantContents && (wantContents.hidden || !!wantTokens)) : !browsePending;
   const [late, setLate] = useState<string | null>(null);
   useEffect(() => {
@@ -686,7 +674,7 @@ export function App() {
   }, [file, focusHunk]);
 
   const tooBigToPreview = !!file && markdownTooBig(file, fileContents);
-  const previewable = useMemo(() => (file && !tooBigToPreview ? previewOf(file) : null), [file, tooBigToPreview]);
+  const previewable = useMemo(() => (file && !tooBigToPreview && !fileContents?.missing ? previewOf(file) : null), [file, tooBigToPreview, fileContents]);
   const undecoded = useMemo(() => !!file && notUtf8(file, fileContents), [file, fileContents]);
   const diffVersion = diff?.version ?? "";
   const preview: Preview | null =
@@ -762,7 +750,8 @@ export function App() {
       if (folder) return;
       setStayInAll(false);
       setFilesView(view);
-      if (view === "changed" && !files.some((f) => f.path === activeRef.current)) setActive(listed[0]?.path ?? null);
+      const kept = activeRef.current && (pinsRef.current.includes(activeRef.current) || files.some((f) => f.path === activeRef.current));
+      if (view === "changed" && !kept) setActive(listed[0]?.path ?? null);
     },
     [folder, files, listed, setFilesView],
   );
@@ -1638,6 +1627,7 @@ export function App() {
       "stage-here": () => actOnLines(actions === "staged" ? "unstage" : "stage"),
       "discard-here": () => actOnLines("discard"),
       "editor-line": () => openAt(repo.root, path, menu.line?.no ?? line),
+      pin: async () => setPinned(path, !pins.includes(path)),
     };
     run[action]().catch(fail);
   };
@@ -1709,6 +1699,7 @@ export function App() {
     firstHunk: () => jumpHunk(0),
     lastHunk: () => jumpHunk(-1),
     nextFile: () => selectFile(1),
+    pin: () => (active ? setPinned(active, !pins.includes(active)) : notify("Open a file to pin it")),
     prevFile: () => selectFile(-1),
     search: openSearch,
     nextHit: () => search.step(1),
@@ -1781,7 +1772,7 @@ export function App() {
       const shown = resolveView(previewView, viewRef.current?.roomy?.() ?? true);
       setPreviewView(PREVIEW_VIEWS[(PREVIEW_VIEWS.indexOf(shown) + 1) % PREVIEW_VIEWS.length]);
     },
-    theme: () => pickTheme(toneOf(theme, themes) === "dark" ? lightTheme : darkTheme),
+    theme: () => setAppearance((a) => flipTone(a, systemTone)),
     palette: () => setPalette((open) => !open),
     zoomIn: () => void window.moire.stepZoom(1),
     zoomOut: () => void window.moire.stepZoom(-1),
@@ -1949,8 +1940,8 @@ export function App() {
       themeWarnings={themeWarnings}
       themeMenu={themeMenu}
       onThemeMenu={setThemeMenu}
-      cvd={cvd === "on"}
-      followSystem={followSystem === "on"}
+      cvd={appearance.cvd}
+      followSystem={appearance.mode === "system"}
       picker={picker}
       lastPicked={lastPicked}
       onPicker={setPicker}
@@ -1963,9 +1954,9 @@ export function App() {
         setBriefShown(false);
         setScope(next);
       }}
-      onTheme={pickTheme}
-      onCvd={(on) => setCvd(on ? "on" : "off")}
-      onFollowSystem={(on) => setFollowSystem(on ? "on" : "off")}
+      onTheme={chooseTheme}
+      onCvd={(on) => setAppearance((a) => ({ ...a, cvd: on }))}
+      onFollowSystem={(on) => setAppearance((a) => followSystem(a, on, systemTone))}
       codeFont={codeFont}
       codeSize={codeSize}
       onCodeFont={setCodeFont}
@@ -2025,6 +2016,7 @@ export function App() {
             onView={showFiles}
             files={listed}
             changed={files}
+            pins={pins}
             tree={sideTree}
             refreshTick={refreshTick}
             active={active}
@@ -2253,6 +2245,7 @@ export function App() {
           copyHere={writable}
           actions={actions}
           changed={files.some((f) => f.path === menu.path)}
+          pinned={pins.includes(menu.path)}
           onPick={pickMenu}
           onClose={closeMenu}
         />

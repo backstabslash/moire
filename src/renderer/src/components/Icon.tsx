@@ -91,6 +91,7 @@ const ICONS = {
     region: <path d="M1.8 6.4h10.4v4.8a1.5 1.5 0 0 1-1.5 1.5H3.3a1.5 1.5 0 0 1-1.5-1.5Z" />,
   },
   editor: { base: <path d={PENCIL} />, region: <path d={PENCIL} /> },
+  pin: { base: <path d="M4.6 1.8h4.8M5.6 1.8v3.4L3.6 7.8h6.8L8.4 5.2V1.8M7 7.8v4.4" />, region: <path d="M5.6 1.8h2.8v3.4l2 2.6H3.6l2-2.6Z" /> },
   open: {
     base: <path d="M6 2.5H3.7a1.2 1.2 0 0 0-1.2 1.2v6.6a1.2 1.2 0 0 0 1.2 1.2h6.6a1.2 1.2 0 0 0 1.2-1.2V8M8 2.5h3.5V6M11.5 2.5 6.8 7.2" />,
     region: <path d="M2.5 7h5v4.5H3.7a1.2 1.2 0 0 1-1.2-1.2Z" />,

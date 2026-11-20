@@ -17,6 +17,7 @@ export const COMMANDS = {
   lastHunk: { keys: ["G"], label: "Last hunk", group: "Navigate" },
   nextFile: { keys: ["]"], label: "Next file", group: "Navigate" },
   prevFile: { keys: ["["], label: "Previous file", group: "Navigate" },
+  pin: { keys: [], label: "Pin or unpin the file", group: "Navigate" },
   search: { keys: ["/", "Mod+f"], label: "Search", group: "Navigate", inTextFields: true },
   nextHit: { keys: ["n"], label: "Next result", group: "Navigate" },
   prevHit: { keys: ["N"], label: "Previous result", group: "Navigate" },

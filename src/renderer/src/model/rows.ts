@@ -295,6 +295,7 @@ function within(ranges: [number, number][], n: number): boolean {
 function wholeFile(contents: FileContents | null): Row[] {
   if (!contents) return [];
   if (contents.hidden) return [{ t: "note", key: "note", text: "Binary file or over 2 MB, contents not shown." }];
+  if (contents.missing) return [{ t: "note", key: "note", text: `Not in ${contents.missing}.` }];
   const lines = splitLines(contents.b);
   if (!lines) return [{ t: "note", key: "note", text: "Can't read this file." }];
   if (!lines.length) return [{ t: "note", key: "note", text: "Empty file." }];

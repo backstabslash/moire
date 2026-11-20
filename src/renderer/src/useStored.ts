@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export function useStored<T extends string>(key: string, fallback: T, allowed: readonly T[] | ((value: T) => boolean)) {
   const [value, setValue] = useState<T>(() => {
@@ -45,4 +45,53 @@ export function useStoredNumber(key: string, fallback: number, min: number, max:
     localStorage.setItem(`moire.${key}`, String(value));
   }, [key, value]);
   return [value, setValue] as const;
+}
+
+// Updates start from what's stored, so a change made in another window isn't lost.
+export function useShared<T>(key: string, read: (saved: string | null) => T) {
+  const [value, setValue] = useState(() => read(localStorage.getItem(`moire.${key}`)));
+  const update = useCallback(
+    (change: (current: T) => T) => {
+      const next = change(read(localStorage.getItem(`moire.${key}`)));
+      localStorage.setItem(`moire.${key}`, JSON.stringify(next));
+      setValue(next);
+    },
+    [key, read],
+  );
+  useEffect(() => {
+    const changed = (e: StorageEvent) => {
+      if (e.key === `moire.${key}`) setValue(read(e.newValue));
+    };
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, [key, read]);
+  return [value, update] as const;
+}
+
+type Pins = Record<string, string[]>;
+const NO_PINS: string[] = [];
+
+function readPins(saved: string | null): Pins {
+  try {
+    const pins = JSON.parse(saved ?? "{}") as unknown;
+    return pins && typeof pins === "object" && !Array.isArray(pins) ? (pins as Pins) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function usePins(repo: string | null) {
+  const [all, update] = useShared("pins", readPins);
+  const pins = (repo && all[repo]) || NO_PINS;
+  const setPinned = useCallback(
+    (path: string, on: boolean) => {
+      if (!repo) return;
+      update(({ [repo]: current = [], ...others }) => {
+        const next = on ? (current.includes(path) ? current : [...current, path]) : current.filter((p) => p !== path);
+        return next.length ? { ...others, [repo]: next } : others;
+      });
+    },
+    [repo, update],
+  );
+  return [pins, setPinned] as const;
 }

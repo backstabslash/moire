@@ -1,7 +1,7 @@
 import { chmodSync, renameSync, symlinkSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness, lines, writeIn } from "./harness";
+import { appearance, harness, lines, writeIn } from "./harness";
 
 const { commitAll, initRepo, launch, shot, shots } = harness();
 let repo: string;
@@ -41,7 +41,7 @@ test.beforeAll(async () => {
   write("src/other/index.ts", 'export const a = 2;\nexport const frame = "#1f252c";\n');
   write("web/app.css", ".a {\n  color: #bf3957;\n}\n");
 
-  ({ page } = await launch(repo, { prefs: { theme: "light" } }));
+  ({ page } = await launch(repo, { prefs: { appearance: appearance("light") } }));
   await expect(page.locator(".file")).toHaveCount(9);
 });
 

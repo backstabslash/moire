@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness, staged } from "./harness";
+import { appearance, harness, staged } from "./harness";
 
 const { commitAll, idle, initRepo, launch, shot } = harness();
 let repo: string;
@@ -12,7 +12,7 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
   commitAll("init");
   writeFileSync(join(repo, "a.ts"), "export const a = 2;\n");
-  ({ page } = await launch(repo, { prefs: { layout: "split", theme: "light" } }));
+  ({ page } = await launch(repo, { prefs: { layout: "split", appearance: appearance("light") } }));
   await expect(page.locator(".hunk-head").first()).toBeVisible();
 });
 

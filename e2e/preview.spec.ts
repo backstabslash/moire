@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness, png } from "./harness";
+import { appearance, harness, png } from "./harness";
 
 const { commitAll, initRepo, launch, open, shot, tmp } = harness();
 let repo: string;
@@ -31,7 +31,7 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "plan.md"), plan("write the **e2e** test", ""));
   writeFileSync(join(repo, "a.ts"), "export const a = 2;\n");
 
-  ({ page } = await launch(repo, { prefs: { theme: "dark", markdownView: "changes" } }));
+  ({ page } = await launch(repo, { prefs: { appearance: appearance("dark"), markdownView: "changes" } }));
   await expect(page.locator(".file")).toHaveCount(4);
 });
 

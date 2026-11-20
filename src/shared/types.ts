@@ -33,6 +33,7 @@ export interface RepoInfo {
   head: string | null;
   state?: RepoState;
   folder?: boolean;
+  commonDir?: string;
 }
 
 export type FileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked" | "conflicted" | "unchanged";
@@ -95,6 +96,7 @@ export interface FileContents {
   b: string | null;
   hidden: boolean;
   binary?: boolean;
+  missing?: string;
 }
 
 export interface BlobSize {

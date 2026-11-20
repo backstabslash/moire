@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
-import { harness, lines } from "./harness";
+import { appearance, harness, lines } from "./harness";
 
 const { clipboard, commitAll, git, initRepo, launch, open, shots } = harness();
 let repo: string;
@@ -24,7 +24,7 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "a.ts"), lines(edited));
   writeFileSync(join(repo, "long.ts"), long);
 
-  ({ app, page } = await launch(repo, { prefs: { theme: "light" } }));
+  ({ app, page } = await launch(repo, { prefs: { appearance: appearance("light") } }));
   await expect(page.locator(".file")).toHaveCount(2);
   await expect(page.locator(".hunk-head")).toHaveCount(2);
 });

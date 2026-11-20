@@ -47,6 +47,8 @@ export const writeCommitNotes = (repo: string, sha: string, notes: unknown) => {
 
 export const staged = (repo: string) => gitIn(repo)("diff", "--cached", "--name-only").trim().split("\n").filter(Boolean);
 
+export const appearance = (mode: "light" | "dark" | "system") => JSON.stringify({ mode, light: "light", dark: "dark", cvd: false });
+
 export const lines = (list: string[]) => list.join("\n") + "\n";
 
 export const numbered = (length: number) => {

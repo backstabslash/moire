@@ -101,6 +101,15 @@ describe("working tree modes", () => {
       b: "fresh\nno newline",
       hidden: false,
     });
+    const fresh = { path: "dir/new.txt", status: "unchanged" as const };
+    expect(await fileContents(r.root, { kind: "staged" }, fresh)).toEqual({ a: null, b: null, hidden: false, missing: "the index" });
+    expect(await fileContents(r.root, { kind: "unstaged" }, fresh)).toEqual({ a: null, b: "fresh\nno newline", hidden: false });
+  });
+
+  it("doesn't call a submodule missing from the index just because it can't be read", async () => {
+    const s = seed({ "a.txt": "a\n" });
+    s.git("update-index", "--add", "--cacheinfo", `160000,${s.git("rev-parse", "HEAD")},sub`);
+    expect(await fileContents(s.root, { kind: "staged" }, { path: "sub", status: "unchanged" })).toEqual({ a: null, b: null, hidden: false });
   });
 });
 
@@ -276,7 +285,7 @@ describe("unborn HEAD", () => {
   r.write("blob.bin", Buffer.from([1, 0, 2]));
 
   it("reports repo info without a head", async () => {
-    expect(await repoInfo(join(r.root))).toEqual({ root: r.root, name: basename(r.root), branch: "main", head: null });
+    expect(await repoInfo(join(r.root))).toEqual({ root: r.root, name: basename(r.root), branch: "main", head: null, commonDir: join(r.root, ".git") });
     expect(await commits(r.root, 10)).toEqual([]);
     expect((await branches(r.root)).branches).toEqual([]);
   });
@@ -898,6 +907,13 @@ describe("index lock", () => {
       expect(await bare.worktrees(r.root)).toHaveLength(2);
       expect(readFileSync(index).equals(before)).toBe(true);
     });
+  });
+
+  it("gives a worktree the same git folder as its main checkout", async () => {
+    const r = seed({ "a.txt": "a\n" });
+    const wt = join(tempDir("moire-wt-"), "wt");
+    r.git("worktree", "add", "-q", wt);
+    expect((await repoInfo(wt)).commonDir).toBe((await repoInfo(r.root)).commonDir);
   });
 
   it("follows the repo's diff.algorithm, as git diff does", async () => {

@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ElectronApplication, expect, type Page, test } from "@playwright/test";
-import { harness, lines } from "./harness";
+import { appearance, harness, lines } from "./harness";
 
 // Chromium's own copy writes straight to the system clipboard, so every test relying on it lives here, where none can overlap.
 const { clipboard, commitAll, initRepo, launch, open } = harness();
@@ -23,7 +23,7 @@ test.beforeAll(async () => {
   write("blanks.txt", "one\n\ntwo\nthree changed\n");
   write("colour.ts", 'export const a = 2;\nexport const frame = "#1f252c";\n');
 
-  ({ app, page } = await launch(repo, { prefs: { layout: "split", theme: "light" }, systemClipboard: true }));
+  ({ app, page } = await launch(repo, { prefs: { layout: "split", appearance: appearance("light") }, systemClipboard: true }));
   await page.setViewportSize({ width: 1440, height: 900 });
   await expect(page.locator(".file")).toHaveCount(3);
 });

@@ -37,7 +37,7 @@ const api = {
       ipcRenderer.off("repo:compare", handler);
     };
   },
-  openRepo: (path: string): Promise<RepoInfo> => ipcRenderer.invoke("repo:open", path),
+  openRepo: (path: string): Promise<RepoInfo | null> => ipcRenderer.invoke("repo:open", path),
   pickRepo: (from?: string): Promise<RepoInfo | null> => ipcRenderer.invoke("repo:pick", from),
   recentRepos: (): Promise<string[]> => ipcRenderer.invoke("repo:recent"),
   worktrees: (root: string): Promise<Worktree[]> => ipcRenderer.invoke("repo:worktrees", root),

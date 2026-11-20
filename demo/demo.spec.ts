@@ -276,7 +276,7 @@ async function launch(theme: string) {
   const repo = join(work, "ratelimit");
   makeDemoRepo(repo);
   const prefs = {
-    theme,
+    appearance: JSON.stringify({ mode: theme, light: "light", dark: "dark", cvd: false }),
     layout: "unified",
     scope: "changed",
     mode: "unstaged",

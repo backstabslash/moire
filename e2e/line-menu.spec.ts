@@ -1,7 +1,7 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness, staged, writeIn } from "./harness";
+import { appearance, harness, staged, writeIn } from "./harness";
 
 const { commitAll, git, idle, initRepo, launch, open, shot } = harness();
 let repo: string;
@@ -26,7 +26,7 @@ test.beforeAll(async () => {
   const lines = numbered().split("\n");
   lines.splice(59, 1);
   write("zz/shift.txt", [...Array.from({ length: 30 }, (_, i) => `new ${i + 1}`), ...lines].join("\n"));
-  ({ page } = await launch(repo, { prefs: { layout: "split", theme: "light" } }));
+  ({ page } = await launch(repo, { prefs: { layout: "split", appearance: appearance("light") } }));
   await page.setViewportSize({ width: 1440, height: 900 });
   await expect(page.locator(".hunk-head").first()).toBeVisible();
 });

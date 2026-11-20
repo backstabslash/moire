@@ -1,7 +1,7 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { harness, writeIn } from "./harness";
+import { appearance, harness, writeIn } from "./harness";
 
 const { commitAll, git, initRepo, launch, open, shot, shots } = harness();
 let repo: string;
@@ -43,7 +43,7 @@ test.beforeAll(async () => {
   write("zz/logo.bin", "\x00\x00\x02");
   rmSync(join(repo, "zz/gone.txt"));
   write("zz/shift.txt", [...Array.from({ length: 30 }, (_, i) => `new ${i + 1}`), ...numbered.filter((_, i) => i !== 59)].join("\n") + "\n");
-  ({ page } = await launch(repo, { prefs: { theme: "light" } }));
+  ({ page } = await launch(repo, { prefs: { appearance: appearance("light") } }));
   await expect(page.locator(".files .file")).toHaveCount(LISTED.length);
 });
 

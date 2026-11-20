@@ -156,6 +156,10 @@ function fixedGit(root: string, args: string[]): Promise<string | null> {
   return value;
 }
 
+async function commonDir(root: string): Promise<string> {
+  return resolvePath(root, (await fixedGit(root, ["rev-parse", "--git-common-dir"])) ?? ".git");
+}
+
 function forget(root: string): void {
   for (const key of fixed.keys()) if (key.startsWith(`${root}\0`)) fixed.delete(key);
 }
@@ -230,12 +234,13 @@ export async function repoInfo(path: string): Promise<RepoInfo> {
     folders.delete(dir);
     forget(dir);
   }
-  const [branch, head, state] = await Promise.all([
+  const [branch, head, state, common] = await Promise.all([
     tryGit(root, ["symbolic-ref", "--short", "-q", "HEAD"]),
     tryGit(root, ["rev-parse", "--short", "-q", "--verify", "HEAD"]),
     repoState(root),
+    commonDir(root),
   ]);
-  const info: RepoInfo = { root, name: basename(root), branch, head };
+  const info: RepoInfo = { root, name: basename(root), branch, head, commonDir: real(common) };
   if (state) info.state = state;
   return info;
 }
@@ -795,11 +800,7 @@ function lfsPointer(buf: Buffer): { oid: string; size: number } | null {
 }
 
 async function lfsObjectPath(root: string, oid: string): Promise<string> {
-  const [common, storage] = await Promise.all([
-    fixedGit(root, ["rev-parse", "--git-common-dir"]),
-    fixedGit(root, ["config", "--get", "--default=", "lfs.storage"]),
-  ]);
-  const dir = resolvePath(root, common ?? ".git");
+  const [dir, storage] = await Promise.all([commonDir(root), fixedGit(root, ["config", "--get", "--default=", "lfs.storage"])]);
   return join(storage ? resolvePath(dir, storage) : join(dir, "lfs"), "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
 }
 
@@ -850,17 +851,20 @@ export async function fileContents(root: string, mode: CompareMode, file: FileRe
   const { a, b } = await sides(root, mode);
   const [pathA, pathB] = sidePaths(file);
   const [bufA, bufB] = await Promise.all([pathA === null ? null : readSide(root, a, pathA), pathB === null ? null : readSide(root, b, pathB)]);
-  return toContents(bufA, bufB);
+  const contents = toContents(bufA, bufB);
+  if (file.status !== "unchanged" || bufB || b.kind === "worktree") return contents;
+  const spec = blobSpec(b, file.path);
+  if (spec && (await tryGit(root, ["rev-parse", "-q", "--verify", spec]))) return contents;
+  return { ...contents, missing: b.kind === "index" ? "the index" : b.label };
+}
+
+function blobSpec(side: SideInfo, path: string): string | null {
+  return side.kind === "index" ? `:${path}` : side.kind === "commit" ? `${side.rev}:${path}` : null;
 }
 
 export async function manyContents(root: string, mode: CompareMode, files: FileRef[]): Promise<FileContents[]> {
   const { a, b } = await sides(root, mode);
-  const spec = (side: SideInfo, path: string | null) =>
-    path === null || path.includes("\n") || side.kind === "worktree" || side.kind === "empty"
-      ? null
-      : side.kind === "index"
-        ? `:${path}`
-        : `${side.rev}:${path}`;
+  const spec = (side: SideInfo, path: string | null) => (path === null || path.includes("\n") ? null : blobSpec(side, path));
   const wanted = files.flatMap((f) => {
     const [pathA, pathB] = sidePaths(f);
     return [spec(a, pathA), spec(b, pathB)];

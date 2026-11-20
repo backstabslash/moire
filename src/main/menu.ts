@@ -128,6 +128,7 @@ export function buildMenu(): void {
         item("lastHunk"),
         item("nextFile"),
         item("prevFile"),
+        item("pin"),
         item("nextNote"),
         item("prevNote"),
         item("nextPlace"),

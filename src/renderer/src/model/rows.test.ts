@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { diffHunk } from "../../../main/test-repo";
-import type { FileDiff, Hunk } from "../../../shared/types";
+import type { FileContents, FileDiff, Hunk } from "../../../shared/types";
 import { align, buildRows, followHunk, hunkSpans, notUtf8, type Row, type Stub, withStubs } from "./rows";
 
 const opts = { layout: "split" as const, scope: "changed" as const, expanded: new Set<string>() };
@@ -399,9 +399,10 @@ describe("unchanged files from the tree", () => {
   });
 
   it("explains files it can't show", () => {
-    const note = (contents: { a: null; b: string | null; hidden: boolean }) => buildRows(unchanged, contents, opts).map((r) => r.t === "note" && r.text);
+    const note = (contents: FileContents) => buildRows(unchanged, contents, opts).map((r) => r.t === "note" && r.text);
     expect(note({ a: null, b: null, hidden: true })).toEqual(["Binary file or over 2 MB, contents not shown."]);
     expect(note({ a: null, b: null, hidden: false })).toEqual(["Can't read this file."]);
+    expect(note({ a: null, b: null, hidden: false, missing: "the index" })).toEqual(["Not in the index."]);
     expect(note({ a: null, b: "", hidden: false })).toEqual(["Empty file."]);
     const flagged = (extra: Partial<FileDiff>) =>
       buildRows({ ...unchanged, ...extra }, { a: null, b: null, hidden: true }, opts).map((r) => r.t === "note" && r.text);

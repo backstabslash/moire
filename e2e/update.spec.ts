@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { harness } from "./harness";
+import { appearance, harness } from "./harness";
 
 const { commitAll, initRepo, launchFresh, shots } = harness();
 let repo: string;
@@ -14,7 +14,7 @@ test.beforeAll(() => {
 });
 
 async function open(update: object) {
-  const launched = await launchFresh(repo, { prefs: { theme: "light" }, env: { MOIRE_UPDATE: JSON.stringify(update) } });
+  const launched = await launchFresh(repo, { prefs: { appearance: appearance("light") }, env: { MOIRE_UPDATE: JSON.stringify(update) } });
   await expect(launched.page.locator(".hunk-head")).toHaveCount(1);
   return launched;
 }

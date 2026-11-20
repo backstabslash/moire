@@ -1,7 +1,7 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { gitIn, harness, writeIn } from "./harness";
+import { appearance, gitIn, harness, writeIn } from "./harness";
 
 const { launch, shot, tmp, userData } = harness();
 let folder: string;
@@ -18,7 +18,7 @@ test.beforeAll(async () => {
   write("vendor/lib/a.txt", "vendored\n");
   gitIn(join(folder, "vendor"))("init", "-q");
 
-  ({ page } = await launch(folder, { prefs: { theme: "light" } }));
+  ({ page } = await launch(folder, { prefs: { appearance: appearance("light") } }));
   await expect(page.locator(".repo")).toContainText(basename(folder));
 });
 

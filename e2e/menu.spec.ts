@@ -35,6 +35,7 @@ test("right-clicking a file copies its paths", async () => {
   await expect(items()).toHaveText([
     "Stage file",
     "Discard file",
+    "Pin",
     "Copy relative path",
     "Copy absolute path",
     "Copy contents",
@@ -57,7 +58,7 @@ test("right-clicking a file copies its paths", async () => {
   expect(await clipboard()).toBe("site/index.html");
 
   await page.locator('[data-tip^="site/index.html"]').click({ button: "right" });
-  for (const _ of "123") await page.keyboard.press("ArrowDown");
+  for (const _ of "1234") await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   expect(await clipboard()).toBe(join(repo, "site", "index.html"));
 });

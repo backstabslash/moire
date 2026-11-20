@@ -5,7 +5,7 @@ import type { RepoInfo } from "../shared/types";
 import { DEFAULT_SIZE, restoredBounds } from "./bounds";
 import { closeDiagrams } from "./diagrams";
 import { setShellPath } from "./git";
-import { askToCompare, launchRepo, registerIpc, showRepo, windowShowing } from "./ipc";
+import { askToCompare, bringForward, launchRepo, registerIpc, showRepo, windowShowing } from "./ipc";
 import { isLaunchRequest, type LaunchRequest, launchRequest, loginPath, mergePath } from "./launch";
 import { log } from "./log";
 import { setupMenu } from "./menu";
@@ -79,9 +79,7 @@ async function openRequest(req: LaunchRequest) {
   const info = await repo.catch(() => undefined);
   const existing = info && windowShowing(info.root);
   if (!existing) return createWindow(repo, req.compare);
-  if (existing.isMinimized()) existing.restore();
-  existing.focus();
-  if (process.platform === "darwin") app.focus({ steal: true });
+  bringForward(existing);
   if (req.compare) askToCompare(existing.webContents, req.compare);
 }
 

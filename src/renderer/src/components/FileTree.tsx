@@ -27,7 +27,12 @@ export interface ListState {
   onMenu(path: string, event: MouseEvent): void;
 }
 
-export function fileRow(list: ListState, path: string, f: FileDiff | undefined, opts: { depth?: number; ignored?: boolean; suffix?: string } = {}) {
+export function fileRow(
+  list: ListState,
+  path: string,
+  f: FileDiff | undefined,
+  opts: { depth?: number; ignored?: boolean; suffix?: string; where?: string } = {},
+) {
   const name = path.split("/").pop()!;
   const isFresh = !!f && !!list.fresh?.paths.has(path);
   const isActive = path === list.active;
@@ -81,6 +86,7 @@ export function fileRow(list: ListState, path: string, f: FileDiff | undefined, 
         ) : (
           name
         )}
+        {opts.where && <span className="where">{opts.where}</span>}
       </span>
       {(list.hitCounts?.has(path) || mode) && (
         <span className="tags">
